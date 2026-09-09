@@ -113,8 +113,8 @@ void un_803205F4(void)
     HSD_JObjReqAnimAll(jobj, 251.0f);
     HSD_GObj_SetupProc(gobj, mn_8022EAE0, 0);
 
-    Player_80036E20(CKIND_GKOOPS, un_804D701C, 8);
-    Player_SetPlayerCharacter(1, CKIND_GKOOPS);
+    Player_80036E20(CKind_GKoops, un_804D701C, 8);
+    Player_SetPlayerCharacter(1, CKind_GKoops);
     Player_SetCostumeId(1, 0);
     Player_SetPlayerId(1, 0);
     Player_SetSlottype(1, 2);
@@ -136,11 +136,11 @@ void un_8032074C(HSD_GObj* gobj)
     HSD_JObjAnimAll(jobj);
     if (mn_8022F298(jobj) == 251.0F) {
         if (un_804D7030 != NULL) {
-            HSD_GObjPLink_80390228(un_804D7030);
+            HSD_GObjFree(un_804D7030);
             un_804D7030 = NULL;
         }
         if (un_804D7034 != NULL) {
-            HSD_GObjPLink_80390228(un_804D7034);
+            HSD_GObjFree(un_804D7034);
             un_804D7034 = NULL;
         }
         un_803205F4();

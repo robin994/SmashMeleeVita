@@ -1688,10 +1688,10 @@ void fn_8018E618(int arg0, f32 farg0, int arg1)
     cam = lbl_803B7CA8;
 
     while ((tmp = M2C_FIELD(HSD_GObj_Entities, HSD_GObj**, 0x6C)) != NULL) {
-        HSD_GObjPLink_80390228(tmp);
+        HSD_GObjFree(tmp);
     }
     while ((tmp = M2C_FIELD(HSD_GObj_Entities, HSD_GObj**, 0x50)) != NULL) {
-        HSD_GObjPLink_80390228(tmp);
+        HSD_GObjFree(tmp);
     }
 
     for (i = 0; i < 0x40; i++) {
@@ -2355,10 +2355,10 @@ void fn_8018F888(void)
 
 static inline int fn_8018FA24_inline0(int char_kind)
 {
-    if (char_kind < CKIND_SEAK) {
+    if (char_kind < CKind_Seak) {
         return char_kind;
     }
-    if (char_kind == CKIND_GKOOPS) {
+    if (char_kind == CKind_GKoops) {
         return 5;
     }
     return char_kind + 1;
@@ -2651,11 +2651,11 @@ void fn_80190520(f32 x, f32 y, f32 z)
 
 static inline int gm_801905F0_inline0(int c_kind)
 {
-    if (c_kind < CKIND_SEAK) {
+    if (c_kind < CKind_Seak) {
         return c_kind;
     }
-    if (c_kind == CKIND_GKOOPS) {
-        return CKIND_KOOPA;
+    if (c_kind == CKind_GKoops) {
+        return CKind_Koopa;
     }
     return c_kind + 1;
 }
@@ -2702,7 +2702,7 @@ void gm_801905F0(StartMeleeData* arg0)
     arg0->rules.timer_counts_up = false;
     arg0->rules.x4_2 = false;
     arg0->rules.x4_4 = false;
-    arg0->rules.xB = gmMainLib_8015CC58()->item_freq;
+    arg0->rules.item_freq = gmMainLib_8015CC58()->item_freq;
     arg0->rules.x2_2 = false;
     arg0->rules.x18 = 0;
     arg0->rules.game_speed = 1.0f;
@@ -2713,13 +2713,13 @@ void gm_801905F0(StartMeleeData* arg0)
     arg0->rules.x3_3 = false;
     switch (gmMainLib_8015ED30()) {
     case 1:
-        arg0->rules.xC = 0;
+        arg0->rules.sd_penalty = 0;
         break;
     case 0:
-        arg0->rules.xC = -1;
+        arg0->rules.sd_penalty = -1;
         break;
     case 2:
-        arg0->rules.xC = -2;
+        arg0->rules.sd_penalty = -2;
         break;
     }
     if (rules->pause != 0) {
@@ -2757,7 +2757,7 @@ void gm_801905F0(StartMeleeData* arg0)
             }
             arg0->players[i].cpu_kind = 4;
             arg0->players[i].cpu_level = tm->x4B8[i].x4;
-            arg0->players[i].x12 = 0;
+            arg0->players[i].damage1 = 0;
             if (gmMainLib_GetGameRules()->handicap != 0) {
                 arg0->players[i].attack_ratio = fn_8016419C(tm->x4B8[i].x5);
                 arg0->players[i].defense_ratio = fn_801641B4(tm->x4B8[i].x5);

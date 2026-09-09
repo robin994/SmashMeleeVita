@@ -155,7 +155,7 @@ static struct {
     /* 1 */ u8 x1;
     /* 2 */ u8 x2;
     /* 3 */ u8 x3;
-} lbl_803D51A0[CKIND_PLAYABLE_COUNT] = {
+} lbl_803D51A0[CKind_Playable_Count] = {
     { 0x06, 0x02, 0x05, 0x04 }, { 0x05, 0x02, 0x03, 0x04 },
     { 0x04, 0x01, 0x02, 0x03 }, { 0x04, 0x01, 0x02, 0x03 },
     { 0x06, 0x03, 0x02, 0x04 }, { 0x04, 0x01, 0x02, 0x00 },
@@ -173,222 +173,222 @@ static struct {
 
 static struct ResultAnimEntry lbl_803D53A8[0x1B] = {
     {
-        CKIND_CAPTAIN,
+        CKind_Captain,
         "GmRstMCa.dat",
     },
     {
-        CKIND_CLINK,
+        CKind_CLink,
         "GmRstMCl.dat",
     },
     {
-        CKIND_DONKEY,
+        CKind_Donkey,
         "GmRstMDk.dat",
     },
     {
-        CKIND_DRMARIO,
+        CKind_DrMario,
         "GmRstMDr.dat",
     },
     {
-        CKIND_FALCO,
+        CKind_Falco,
         "GmRstMFc.dat",
     },
     {
-        CKIND_FOX,
+        CKind_Fox,
         "GmRstMFx.dat",
     },
     {
-        CKIND_GAMEWATCH,
+        CKind_GameWatch,
         "GmRstMGw.dat",
     },
     {
-        CKIND_GANON,
+        CKind_Ganon,
         "GmRstMGn.dat",
     },
     {
-        CKIND_KIRBY,
+        CKind_Kirby,
         "GmRstMKb.dat",
     },
     {
-        CKIND_KOOPA,
+        CKind_Koopa,
         "GmRstMKp.dat",
     },
     {
-        CKIND_LINK,
+        CKind_Link,
         "GmRstMLk.dat",
     },
     {
-        CKIND_LUIGI,
+        CKind_Luigi,
         "GmRstMLg.dat",
     },
     {
-        CKIND_MARS,
+        CKind_Mars,
         "GmRstMMs.dat",
     },
     {
-        CKIND_MARIO,
+        CKind_Mario,
         "GmRstMMr.dat",
     },
     {
-        CKIND_MEWTWO,
+        CKind_Mewtwo,
         "GmRstMMt.dat",
     },
     {
-        CKIND_NESS,
+        CKind_Ness,
         "GmRstMNs.dat",
     },
     {
-        CKIND_POPONANA,
+        CKind_PopoNana,
         "GmRstMPn.dat",
     },
     {
-        CKIND_PEACH,
+        CKind_Peach,
         "GmRstMPe.dat",
     },
     {
-        CKIND_PIKACHU,
+        CKind_Pikachu,
         "GmRstMPk.dat",
     },
     {
-        CKIND_PICHU,
+        CKind_Pichu,
         "GmRstMPc.dat",
     },
     {
-        CKIND_PURIN,
+        CKind_Purin,
         "GmRstMPr.dat",
     },
     {
-        CKIND_SAMUS,
+        CKind_Samus,
         "GmRstMSs.dat",
     },
     {
-        CKIND_SEAK,
+        CKind_Seak,
         "GmRstMSk.dat",
     },
     {
-        CKIND_YOSHI,
+        CKind_Yoshi,
         "GmRstMYs.dat",
     },
     {
-        CKIND_ZELDA,
+        CKind_Zelda,
         "GmRstMZd.dat",
     },
     {
-        CKIND_EMBLEM,
+        CKind_Emblem,
         "GmRstMFe.dat",
     },
     {
-        CHKIND_NONE,
+        ChKind_None,
         NULL,
     },
 };
 
 static struct VictoryTheme ckind_victory_themes[0x1B] = {
     {
-        CKIND_CAPTAIN,
+        CKind_Captain,
         0x11,
     },
     {
-        CKIND_DONKEY,
+        CKind_Donkey,
         0xD,
     },
     {
-        CKIND_FOX,
+        CKind_Fox,
         0x10,
     },
     {
-        CKIND_GAMEWATCH,
+        CKind_GameWatch,
         0xF,
     },
     {
-        CKIND_KIRBY,
+        CKind_Kirby,
         0x14,
     },
     {
-        CKIND_KOOPA,
+        CKind_Koopa,
         0x16,
     },
     {
-        CKIND_LINK,
+        CKind_Link,
         0x15,
     },
     {
-        CKIND_LUIGI,
+        CKind_Luigi,
         0x16,
     },
     {
-        CKIND_MARIO,
+        CKind_Mario,
         0x16,
     },
     {
-        CKIND_MARS,
+        CKind_Mars,
         0xE,
     },
     {
-        CKIND_MEWTWO,
+        CKind_Mewtwo,
         0x18,
     },
     {
-        CKIND_NESS,
+        CKind_Ness,
         0x17,
     },
     {
-        CKIND_PEACH,
+        CKind_Peach,
         0x16,
     },
     {
-        CKIND_PIKACHU,
+        CKind_Pikachu,
         0x18,
     },
     {
-        CKIND_POPONANA,
+        CKind_PopoNana,
         0x13,
     },
     {
-        CKIND_PURIN,
+        CKind_Purin,
         0x18,
     },
     {
-        CKIND_SAMUS,
+        CKind_Samus,
         0x19,
     },
     {
-        CKIND_YOSHI,
+        CKind_Yoshi,
         0x1D,
     },
     {
-        CKIND_ZELDA,
+        CKind_Zelda,
         0x15,
     },
     {
-        CKIND_SEAK,
+        CKind_Seak,
         0x15,
     },
     {
-        CKIND_FALCO,
+        CKind_Falco,
         0x10,
     },
     {
-        CKIND_CLINK,
+        CKind_CLink,
         0x15,
     },
     {
-        CKIND_DRMARIO,
+        CKind_DrMario,
         0x16,
     },
     {
-        CKIND_EMBLEM,
+        CKind_Emblem,
         0xE,
     },
     {
-        CKIND_PICHU,
+        CKind_Pichu,
         0x18,
     },
     {
-        CKIND_GANON,
+        CKind_Ganon,
         0x15,
     },
     {
-        CHKIND_NONE,
+        ChKind_None,
         -1,
     },
 };
@@ -480,7 +480,7 @@ u32 fn_80160400(CharacterKind ckind)
             ckind = theme[1].ckind;
             theme++;
 
-            if (ckind == CHKIND_NONE) {
+            if (ckind == ChKind_None) {
                 return -1;
             }
         }
@@ -494,12 +494,12 @@ char* gm_80160438(s32 ckind)
 
     while (true) {
         id = entry->ckind;
-        if (id == ckind || id == CHKIND_NONE) {
+        if (id == ckind || id == ChKind_None) {
             return entry->path;
         }
         id = entry[1].ckind;
         entry++;
-        if (id == CHKIND_NONE) {
+        if (id == ChKind_None) {
             return NULL;
         }
     }
@@ -735,18 +735,18 @@ const char* gm_80160A60(int arg0)
 
     if (Player_GetPlayerSlotType(arg0) != Gm_PKind_NA) {
         ckind = Player_GetPlayerCharacter(arg0);
-        if (ckind == CKIND_ZELDA || ckind == CKIND_SEAK) {
-            if (Player_80036394(arg0) == FTKIND_SEAK) {
+        if (ckind == CKind_Zelda || ckind == CKind_Seak) {
+            if (Player_80036394(arg0) == Ft_Kind_Seak) {
                 if (lbLang_IsSavedLanguageUS()) {
-                    return lbl_803D4FDC[CKIND_SEAK];
+                    return lbl_803D4FDC[CKind_Seak];
                 } else {
-                    return lbl_803D4D74[CKIND_SEAK];
+                    return lbl_803D4D74[CKind_Seak];
                 }
             } else {
                 if (lbLang_IsSavedLanguageUS()) {
-                    return lbl_803D4FDC[CKIND_ZELDA];
+                    return lbl_803D4FDC[CKind_Zelda];
                 } else {
-                    return lbl_803D4D74[CKIND_ZELDA];
+                    return lbl_803D4D74[CKind_Zelda];
                 }
             }
         }
@@ -903,7 +903,7 @@ s32 fn_80161004(MatchEnd* match_end)
     } else {
         for (i = 0; i < 4; i++) {
             struct MatchPlayerData* p = &match_end->player_standings[i];
-            if (match_end->player_standings[i].slot_type != 3 &&
+            if (match_end->player_standings[i].pkind != 3 &&
                 (s32) p->is_big_loser > max)
             {
                 max = p->is_big_loser;
@@ -928,7 +928,7 @@ s32 fn_80161154(MatchEnd* arg0)
     if (arg0->is_teams == 1) {
         for (i = 0; i < 4; i++) {
             player = &arg0->player_standings[i];
-            if (player->slot_type != 3 &&
+            if (player->pkind != 3 &&
                 arg0->team_standings[player->team].is_big_loser == result)
             {
                 spC[i] = 1;
@@ -941,7 +941,7 @@ s32 fn_80161154(MatchEnd* arg0)
     } else {
         for (i = 0; i < 4; i++) {
             player = &arg0->player_standings[i];
-            if (player->slot_type != 3 && player->is_big_loser == result) {
+            if (player->pkind != 3 && player->is_big_loser == result) {
                 if (idx != 4) {
                     cnt = 1;
                 } else {
@@ -1108,7 +1108,7 @@ static inline u32 fn_80161C90_count_players(MatchEnd* match_end)
     s32 i;
 
     for (i = 0; i < 4; i++) {
-        if (match_end->player_standings[i].slot_type != 3) {
+        if (match_end->player_standings[i].pkind != 3) {
             count += 1;
         }
     }
@@ -1200,13 +1200,13 @@ void fn_80162068(MatchEnd* match_end)
 
     for (i = 0; i < PAD_MAX_CONTROLLERS; i++) {
         pdata_i = &match_end->player_standings[i];
-        if (pdata_i->slot_type == 3) {
+        if (pdata_i->pkind == 3) {
             continue;
         }
         fd = GetPersistentFighterData(gm_CKindToSelKind(pdata_i->ckind));
         for (j = 0; j < PAD_MAX_CONTROLLERS; j++) {
             pdata_j = &match_end->player_standings[j];
-            if (i == j || pdata_j->slot_type == Gm_PKind_NA) {
+            if (i == j || pdata_j->pkind == Gm_PKind_NA) {
                 continue;
             }
             if (pdata_i->kills[j] +
@@ -1236,7 +1236,7 @@ void fn_80162170(MatchEnd* arg0)
          i++, cur = (MatchEnd*) ((MatchPlayerData*) cur + 1))
     {
         p = cur->player_standings;
-        if (p->slot_type == 3) {
+        if (p->pkind == 3) {
             continue;
         }
         if (p->x4 == 0x78) {
@@ -1246,7 +1246,7 @@ void fn_80162170(MatchEnd* arg0)
             struct NameTagData* nt = GetPersistentNameData(p->x4);
             for (j = 0; j < 4; j++) {
                 q = &arg0->player_standings[j];
-                if (i != j && q->slot_type != 3) {
+                if (i != j && q->pkind != 3) {
                     u8 ock = q->x4;
                     if (ock != 0x78) {
                         s32 v = p->kills[j] + nt->vs_kos[ock];
@@ -1448,7 +1448,7 @@ u32 gm_80162800(MatchEnd* end)
     temp_r3 = gmMainLib_GetVsPlayContestants();
     count = 0;
     for (i = 0; i < GM_MAX_PLAYERS; i++) {
-        if (end->player_standings[i].slot_type == Gm_PKind_Human) {
+        if (end->player_standings[i].pkind == Gm_PKind_Human) {
             count++;
         }
     }
@@ -2450,42 +2450,42 @@ bool fn_80164B48(void)
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_DRMARIO]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_DrMario]), ptr))
     {
         return false;
     }
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_GANON]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_Ganon]), ptr))
     {
         return false;
     }
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_CLINK]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_CLink]), ptr))
     {
         return false;
     }
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_FALCO]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_Falco]), ptr))
     {
         return false;
     }
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_PICHU]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_Pichu]), ptr))
     {
         return false;
     }
 
     ptr = gmMainLib_GetUnlockedCharactersBitmaskPtr();
     if (!is_character_unlocked(
-            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKIND_EMBLEM]), ptr))
+            gm_SelKindToUnlockIndex(ckind_to_selkind_map[CKind_Emblem]), ptr))
     {
         return false;
     }
@@ -2616,7 +2616,7 @@ HSD_GObj* gm_80165388(u16 arg0, u8 arg1, u8 arg2, s32 arg3)
 /// frees the develop mode stress test
 void gm_801653C8(HSD_GObj* gobj)
 {
-    HSD_GObjPLink_80390228(gobj);
+    HSD_GObjFree(gobj);
 }
 
 f32 fn_801653E8(u8 arg0)
@@ -2629,7 +2629,7 @@ s32 fn_80165418(MatchEnd* match_end)
     s32 winner = 0;
     s32 i;
     for (i = 0; i < 4; i++) {
-        if (match_end->player_standings[i].slot_type != Gm_PKind_NA &&
+        if (match_end->player_standings[i].pkind != Gm_PKind_NA &&
             match_end->player_standings[i].is_small_loser == 0)
         {
             winner = i;
@@ -2662,12 +2662,12 @@ s32 fn_80165548(MatchEnd* me, s32 arg1, s32 team)
     ret = 0;
     if (me->is_teams == 1) {
         for (i = 0; i < 4; i++) {
-            if (me->player_standings[i].slot_type != 3 &&
+            if (me->player_standings[i].pkind != 3 &&
                 (s32) me->player_standings[i].team == team)
             {
                 result = i;
                 for (j = 0; j < 4; j++) {
-                    if (me->player_standings[j].slot_type != 3 &&
+                    if (me->player_standings[j].pkind != 3 &&
                         (s32) me->player_standings[j].team == team && i != j &&
                         me->player_standings[i].is_small_loser >
                             me->player_standings[j].is_small_loser)
@@ -2693,11 +2693,11 @@ u32 fn_801656A8(MatchEnd* arg0, u32 arg1)
 {
     u32 ret = 0;
 
-    if (arg0->player_standings[arg1].slot_type != 3) {
+    if (arg0->player_standings[arg1].pkind != 3) {
         s32 cnt_gt = 0;
         s32 j;
         for (j = 0; j < 6; j++) {
-            if (arg0->player_standings[j].slot_type != 3 &&
+            if (arg0->player_standings[j].pkind != 3 &&
                 (u32) arg0->player_standings[arg1].x20 >
                     (u32) arg0->player_standings[j].x20)
             {
@@ -2707,7 +2707,7 @@ u32 fn_801656A8(MatchEnd* arg0, u32 arg1)
         {
             s32 cnt_lt = 0;
             for (j = 0; j < 6; j++) {
-                if (arg0->player_standings[j].slot_type != 3 &&
+                if (arg0->player_standings[j].pkind != 3 &&
                     (u32) arg0->player_standings[arg1].x24 <
                         (u32) arg0->player_standings[j].x24)
                 {
@@ -2786,9 +2786,9 @@ s32 fn_80165AC0(MatchEnd* arg0)
 
     max_loser = 0;
     for (i = 0; i < 6; i++) {
-        if (arg0->player_standings[i].slot_type != 3) {
+        if (arg0->player_standings[i].pkind != 3) {
             for (j = 0; j < 6; j++) {
-                if (arg0->player_standings[j].slot_type != 3 && i != j &&
+                if (arg0->player_standings[j].pkind != 3 && i != j &&
                     arg0->player_standings[i].score <
                         arg0->player_standings[j].score)
                 {
@@ -2803,7 +2803,7 @@ s32 fn_80165AC0(MatchEnd* arg0)
     ((struct fn_80165AC0_loser_bits*) &arg0->loser)->hi = max_loser;
     count = 0;
     for (j = 0; j < 6; j++) {
-        if (arg0->player_standings[j].slot_type != 3 &&
+        if (arg0->player_standings[j].pkind != 3 &&
             arg0->player_standings[j].is_big_loser == 0)
         {
             arg0->winners[count] = j;
@@ -2820,11 +2820,11 @@ MatchEnd* fn_80165D60(MatchEnd* arg0)
     s32 j;
 
     for (i = 0; i < 6; i++) {
-        if (arg0->player_standings[i].slot_type != 3) {
+        if (arg0->player_standings[i].pkind != 3) {
             arg0->player_standings[i].is_small_loser =
                 arg0->player_standings[i].is_big_loser;
             for (j = 0; j < 6; j++) {
-                if (arg0->player_standings[j].slot_type != 3 && i != j &&
+                if (arg0->player_standings[j].pkind != 3 && i != j &&
                     arg0->player_standings[i].is_big_loser ==
                         arg0->player_standings[j].is_big_loser &&
                     arg0->player_standings[i].x30 <
@@ -2844,7 +2844,7 @@ void fn_80165E7C(MatchEnd* arg0)
     int new_var;
 
     for (i = 0; i < 6; i++) {
-        if (arg0->player_standings[i].slot_type != 3) {
+        if (arg0->player_standings[i].pkind != 3) {
             u8 team = arg0->player_standings[i].team;
 
             if (gm_GetCurrentGameMode() == GM_STAMINA_VS ||
@@ -2961,8 +2961,8 @@ void gm_80166378(lbl_8046B6A0_24C_t* arg0_raw)
     arg0->frame_count = gm_GetFrameCount();
     arg0->x7 = fn_8016B728();
     for (i = 0; i < 6; i++) {
-        arg0->player_standings[i].slot_type = Player_GetPlayerSlotType(i);
-        if (arg0->player_standings[i].slot_type != 3) {
+        arg0->player_standings[i].pkind = Player_GetPlayerSlotType(i);
+        if (arg0->player_standings[i].pkind != 3) {
             arg0->player_standings[i].ckind = Player_GetPlayerCharacter(i);
             arg0->player_standings[i].ftkind = Player_80036394(i);
             arg0->player_standings[i].stocks = Player_GetStocks(i);
@@ -3018,7 +3018,7 @@ void gm_80166378(lbl_8046B6A0_24C_t* arg0_raw)
             arg0->player_standings[i].xA0 = (u32) pl_80040D20(i) / 60U;
             arg0->player_standings[i].xA4 = pl_80040DB8(i);
             for (j = 0; j < 6; j++) {
-                if (arg0->player_standings[j].slot_type != 3) {
+                if (arg0->player_standings[j].pkind != 3) {
                     arg0->player_standings[i].kills[j] =
                         Player_GetKOsByPlayerIndex(i, j);
                 }
@@ -3027,10 +3027,10 @@ void gm_80166378(lbl_8046B6A0_24C_t* arg0_raw)
     }
     if (arg0->is_teams == 1) {
         for (i = 0; i < 6; i++) {
-            if (arg0->player_standings[i].slot_type != 3) {
+            if (arg0->player_standings[i].pkind != 3) {
                 s32 team_i = arg0->player_standings[i].team;
                 for (j = 0; j < 6; j++) {
-                    if (arg0->player_standings[j].slot_type != 3) {
+                    if (arg0->player_standings[j].pkind != 3) {
                         if (arg0->player_standings[j].team != team_i) {
                             if (i != j) {
                                 arg0->player_standings[i].x20 +=
@@ -3048,9 +3048,9 @@ void gm_80166378(lbl_8046B6A0_24C_t* arg0_raw)
         }
     } else {
         for (i = 0; i < 6; i++) {
-            if (arg0->player_standings[i].slot_type != 3) {
+            if (arg0->player_standings[i].pkind != 3) {
                 for (j = 0; j < 6; j++) {
-                    if (arg0->player_standings[j].slot_type != 3) {
+                    if (arg0->player_standings[j].pkind != 3) {
                         if (i != j) {
                             arg0->player_standings[i].x20 +=
                                 arg0->player_standings[i].kills[j];
@@ -3066,7 +3066,7 @@ void gm_80166378(lbl_8046B6A0_24C_t* arg0_raw)
         }
     }
     for (i = 0; i < 6; i++) {
-        if (arg0->player_standings[i].slot_type != 3) {
+        if (arg0->player_standings[i].pkind != 3) {
             arg0->player_standings[i].score = fn_8016588C(arg0_raw, i);
             arg0->player_standings[i].x30 = fn_801656A8(arg0, i);
         }
@@ -3128,22 +3128,22 @@ s32 gm_80166A98(MatchEnd* arg0, u8 arg1, s8 arg2, u8 arg3, s8 arg4, u8 arg5,
 
     for (i = 0; i < 4; i++) {
         arg0->player_standings[i].x30 += 6 - i;
-        if (arg0->player_standings[i].ckind == CHKIND_NONE) {
-            arg0->player_standings[i].slot_type = 3;
+        if (arg0->player_standings[i].ckind == ChKind_None) {
+            arg0->player_standings[i].pkind = 3;
         } else if (HSD_PadMasterStatus[(u8) i].err == 0) {
-            arg0->player_standings[i].slot_type = 0;
+            arg0->player_standings[i].pkind = 0;
         } else {
-            arg0->player_standings[i].slot_type = 1;
+            arg0->player_standings[i].pkind = 1;
         }
 
-        if (arg0->player_standings[i].ckind == CKIND_SEAK) {
-            arg0->player_standings[i].ckind = CKIND_ZELDA;
-            arg0->player_standings[i].ftkind = FTKIND_SEAK;
+        if (arg0->player_standings[i].ckind == CKind_Seak) {
+            arg0->player_standings[i].ckind = CKind_Zelda;
+            arg0->player_standings[i].ftkind = Ft_Kind_Seak;
         }
     }
 
-    arg0->player_standings[4].slot_type = 3;
-    arg0->player_standings[5].slot_type = 3;
+    arg0->player_standings[4].pkind = 3;
+    arg0->player_standings[5].pkind = 3;
     fn_80165AC0(arg0);
     fn_80165D60(arg0);
     fn_80165E7C(arg0);
@@ -3171,7 +3171,7 @@ void gm_80166CCC(MatchEnd* arg0, MatchEnd* arg1)
     }
     if (arg1->n_winners > 1) {
         for (i = 0; i < 6; i++) {
-            if (arg1->player_standings[i].slot_type != 3) {
+            if (arg1->player_standings[i].pkind != 3) {
                 arg1->player_standings[i].is_big_loser =
                     arg0->player_standings[i].is_big_loser +
                     arg1->player_standings[i].is_small_loser;
@@ -3188,18 +3188,18 @@ void gm_80166CCC(MatchEnd* arg0, MatchEnd* arg1)
         }
     }
     for (i = 0; i < 6; i++) {
-        if (arg1->player_standings[i].slot_type != 3) {
+        if (arg1->player_standings[i].pkind != 3) {
             player_count += 1;
         }
     }
     if (arg0->n_winners > 1) {
         for (i = 0; i < 6; i++) {
-            if (arg0->player_standings[i].slot_type != 3) {
+            if (arg0->player_standings[i].pkind != 3) {
                 arg0->player_standings[i].ftkind =
                     arg1->player_standings[i].ftkind;
                 arg0->player_standings[i].xE += arg1->player_standings[i].xE;
                 if (arg0->player_standings[i].is_big_loser == 0) {
-                    if (arg1->player_standings[i].slot_type == 3) {
+                    if (arg1->player_standings[i].pkind == 3) {
                         arg0->player_standings[i].is_big_loser += player_count;
                         arg0->player_standings[i].is_small_loser +=
                             player_count;
@@ -3276,12 +3276,12 @@ void fn_8016719C(s32 slot, s32 subchar)
 {
     Vec3 respawn_pos;
     Vec3 offset;
-    lbl_8046B6A0_t* match_info;
+    VsSceneController* match_info;
     s32 var_r30;
     StKind stkind;
     struct fn_8016719C_xC_bits* temp_r4;
 
-    match_info = gm_16AE_GetUnkData_1();
+    match_info = gmVs_GetController_1();
     stkind = gm_GetStKind();
     if (Stage_80224DC8(stkind) != 0) {
         var_r30 = Ground_801C5774();
@@ -3307,13 +3307,11 @@ void fn_8016719C(s32 slot, s32 subchar)
     respawn_pos.y = Stage_GetCamBoundsTopOffset();
     Player_80032768(slot, &respawn_pos);
     Player_SetFacingDirection(slot, respawn_pos.x >= 0.0f ? -1.0f : 1.0f);
-    Player_SetHPByIndex(slot, subchar, match_info->FighterMatchInfo[slot].x6);
+    Player_SetHPByIndex(slot, subchar, match_info->fighters[slot].x6);
     Player_80032070(slot, subchar);
     if (subchar != 1) {
         ifStatus_802F6508(slot);
-        temp_r4 =
-            (struct fn_8016719C_xC_bits*) &match_info->FighterMatchInfo[slot]
-                .xC;
+        temp_r4 = (struct fn_8016719C_xC_bits*) &match_info->fighters[slot].xC;
         if (temp_r4->b0) {
             temp_r4->b0 = true;
             Camera_800310E8();
@@ -3390,22 +3388,22 @@ void gm_801674C4(s8 arg0, u8 arg1, s8 arg2, s8 arg3, GmRouteCallback arg4)
 
 void fn_8016758C(void)
 {
-    lbl_8046B6A0_t* mi = gm_16AE_GetUnkData_1();
+    VsSceneController* mi = gmVs_GetController_1();
     int i;
 
-    for (i = 0; i < ARRAY_SIZE(mi->FighterMatchInfo); i++) {
-        if (mi->FighterMatchInfo[i].x8 != 0) {
-            mi->FighterMatchInfo[i].x8--;
+    for (i = 0; i < ARRAY_SIZE(mi->fighters); i++) {
+        if (mi->fighters[i].x8 != 0) {
+            mi->fighters[i].x8--;
         }
     }
 }
 
 static inline int get_idx(void)
 {
-    lbl_8046B6A0_t* info = gm_16AE_GetUnkData_1();
+    VsSceneController* info = gmVs_GetController_1();
     int i;
-    for (i = 0; i < ARRAY_SIZE(info->FighterMatchInfo); i++) {
-        if (info->FighterMatchInfo[i].x8 == 0) {
+    for (i = 0; i < ARRAY_SIZE(info->fighters); i++) {
+        if (info->fighters[i].x8 == 0) {
             return i;
         }
     }
@@ -3436,10 +3434,10 @@ s32 fn_80167638(s32 arg0, Vec3* arg1, Vec3* arg2)
             arg2->y = 0.0f;
         }
         {
-            lbl_8046B6A0_t* info = gm_16AE_GetUnkData_1();
+            VsSceneController* info = gmVs_GetController_1();
             PAD_STACK(8);
-            info->FighterMatchInfo[idx].x8 = 0x90;
-            info->FighterMatchInfo[idx].x9 = chr;
+            info->fighters[idx].x8 = 0x90;
+            info->fighters[idx].x9 = chr;
         }
     }
     return tmp;
@@ -3492,12 +3490,12 @@ void gm_801678F8(int port, int arg1, int arg2)
 void gm_SetupPlayerDefaults(struct PlayerInitData* player)
 {
     memzero(player, sizeof(*player));
-    player->ckind = CHKIND_NONE;
+    player->ckind = ChKind_None;
     player->slot_type = Gm_PKind_NA;
     player->stocks = 0;
     player->color = 0;
     player->slot = 0;
-    player->x5 = -1;
+    player->spawn_pos = -1;
     player->spawn_dir = 0;
     player->xB = 0;
     player->sub_color = 0;
@@ -3508,7 +3506,7 @@ void gm_SetupPlayerDefaults(struct PlayerInitData* player)
     player->xC_b1 = true;
     player->cpu_kind = 4;
     player->cpu_level = 0;
-    player->x12 = 0;
+    player->damage1 = 0;
     player->hp = 0;
     player->attack_ratio = 1.0F;
     player->defense_ratio = 1.0F;
@@ -3528,8 +3526,8 @@ void gm_SetupRulesDefaults(struct StartMeleeRules* rules)
     memzero(rules, sizeof(*rules));
     rules->x0_3 = 4;
 
-    rules->xC = 0;
-    rules->xB = 2;
+    rules->sd_penalty = 0;
+    rules->item_freq = 2;
 
     rules->x20 = -1;
     rules->x28 = 0;
@@ -3641,7 +3639,7 @@ void gm_80167BC8(VsModeData* vs_data)
 
     vs_data->start.rules.friendly_fire = (rules->friendly_fire & 1);
     vs_data->start.rules.x30 = 0.1f * rules->damage_ratio;
-    vs_data->start.rules.xB = (s8) prefs->item_freq;
+    vs_data->start.rules.item_freq = (s8) prefs->item_freq;
     prefs = gmMainLib_8015CC58();
     i = 0;
     do {
@@ -3658,13 +3656,13 @@ void gm_80167BC8(VsModeData* vs_data)
 
     switch (gmMainLib_8015ED30()) {
     case 1:
-        vs_data->start.rules.xC = 0;
+        vs_data->start.rules.sd_penalty = 0;
         break;
     case 0:
-        vs_data->start.rules.xC = -1;
+        vs_data->start.rules.sd_penalty = -1;
         break;
     case 2:
-        vs_data->start.rules.xC = -2;
+        vs_data->start.rules.sd_penalty = -2;
         break;
     }
 
@@ -3790,7 +3788,7 @@ void gm_80168638(MatchEnd* arg0)
         }
         fn_80169000(arg0, spC);
         for (i = 0; i < 4; i++) {
-            if (arg0->player_standings[i].slot_type != 3) {
+            if (arg0->player_standings[i].pkind != 3) {
                 temp_r3 = gmMainLib_8015CE44(i, arg0->player_standings[i].x4);
                 if (temp_r3 != NULL) {
                     *temp_r3 = (s8) spC[i];
@@ -3810,7 +3808,7 @@ void gm_80168710(MatchEnd* arg0, VsModeData* arg1)
     best = -1;
     memzero(buf, sizeof(buf));
     for (j = 0; j < 4; j++) {
-        if (arg0->player_standings[j].slot_type == 0) {
+        if (arg0->player_standings[j].pkind == 0) {
             if ((s32) arg0->player_standings[j].is_big_loser > best) {
                 best = arg0->player_standings[j].is_big_loser;
             }
@@ -3818,7 +3816,7 @@ void gm_80168710(MatchEnd* arg0, VsModeData* arg1)
     }
     count = 0;
     for (j = 0; j < 4; j++) {
-        if (arg0->player_standings[j].slot_type == 0 &&
+        if (arg0->player_standings[j].pkind == 0 &&
             (s32) arg0->player_standings[j].is_big_loser == best)
         {
             buf[count++] = j;
@@ -3837,7 +3835,7 @@ s32 gm_801688AC(MatchEnd* arg0)
     u32 sum = 0;
     struct MatchPlayerData* p = arg0->player_standings;
     for (i = 0; i < GM_MAX_PLAYERS; i++) {
-        if (arg0->player_standings[i].slot_type == 0) {
+        if (arg0->player_standings[i].pkind == 0) {
             sum += arg0->player_standings[i].xE;
         }
     }
@@ -3846,7 +3844,7 @@ s32 gm_801688AC(MatchEnd* arg0)
 }
 int gm_80168940(MatchEnd* match_end)
 {
-    if (match_end->player_standings[0].slot_type == 0) {
+    if (match_end->player_standings[0].pkind == 0) {
         return match_end->player_standings[0].xE;
     }
     return 0;
@@ -3902,29 +3900,29 @@ void fn_80168A6C(void* arg0, void* arg1, s32 idx)
 f32 gm_80168B34(CharacterKind ckind, int arg1, int arg2)
 {
     int base;
-    if (ckind == CKIND_GKOOPS) {
+    if (ckind == CKind_GKoops) {
         return 58.0F;
     }
-    if (ckind == CKIND_BOY || ckind == CKIND_GIRL) {
+    if (ckind == CKind_Boy || ckind == CKind_Girl) {
         return 26.0F;
     }
-    if (ckind == CKIND_MASTERH) {
+    if (ckind == CKind_MasterH) {
         return 28.0F;
     }
-    if (ckind == CKIND_CREZYH) {
+    if (ckind == CKind_CrezyH) {
         return 27.0F;
     }
-    if (ckind == CKIND_ZELDA || ckind == CKIND_SEAK) {
+    if (ckind == CKind_Zelda || ckind == CKind_Seak) {
         if (arg1 == 7) {
             base = 0x19;
         } else {
             base = 0x12;
         }
-    } else if (ckind == CHKIND_SANDBAG) {
+    } else if (ckind == ChKind_Sandbag) {
         return 59.0F;
-    } else if (ckind == CHKIND_POPO) {
+    } else if (ckind == ChKind_Popo) {
         base = 0xE;
-    } else if (ckind > CKIND_SEAK) {
+    } else if (ckind > CKind_Seak) {
         base = ckind - 1;
     }
     return base + arg2 * 30;
@@ -4095,7 +4093,7 @@ void fn_80169000(MatchEnd* arg0, u8* arg1)
 
     count = 0;
     for (i = 0; i < 4; i++) {
-        if (p->player_standings[i].slot_type != 3) {
+        if (p->player_standings[i].pkind != 3) {
             count += 1;
             positions[p->player_standings[i].is_small_loser] = i;
         }

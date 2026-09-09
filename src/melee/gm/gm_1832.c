@@ -742,7 +742,7 @@ void fn_801857C4(HSD_GObj* arg0)
     s32 i;
 
     if (lbl_804735E8.xE1 != 0) {
-        HSD_GObjPLink_80390228(lbl_804D65F0);
+        HSD_GObjFree(lbl_804D65F0);
         img_idx = (u8*) lbl_804735E8.x40;
         i = 0;
         delay = 1;
@@ -769,7 +769,7 @@ void fn_801857C4(HSD_GObj* arg0)
             delay += 8;
             sobj->x40 |= 9;
         }
-        HSD_GObjPLink_80390228(arg0);
+        HSD_GObjFree(arg0);
     }
 }
 
@@ -867,17 +867,17 @@ void fn_80185D64(void)
 
     for (i = 0; i < lbl_8047368C.xEF; i++) {
         chr = lbl_8047368C.xF1[i];
-        if (chr != CHKIND_MAX) {
+        if (chr != ChKind_Max) {
             Player_80036E20(chr, lbl_804D65F4, 1);
         }
     }
 
     for (i = 0; i < lbl_8047368C.xF0; i++) {
-        if (lbl_8047368C.xF4[i] == CKIND_GKOOPS) {
-            lbl_8047368C.xF4[i] = CKIND_KOOPA;
+        if (lbl_8047368C.xF4[i] == CKind_GKoops) {
+            lbl_8047368C.xF4[i] = CKind_Koopa;
         }
         chr = lbl_8047368C.xF4[i];
-        if (chr != CHKIND_MAX) {
+        if (chr != ChKind_Max) {
             Player_80036E20(chr, lbl_804D65F4, 1);
         }
     }

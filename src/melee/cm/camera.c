@@ -9,6 +9,7 @@
 #include <placeholder.h>
 
 #include "forward.h"
+#include "sysdolphin/baselib/gobjplink.h"
 #include "types.h"
 #include <dolphin/mtx.h>
 #include <dolphin/pad.h>
@@ -38,7 +39,6 @@
 #include <sysdolphin/baselib/gobj.h>
 #include <sysdolphin/baselib/gobjgxlink.h>
 #include <sysdolphin/baselib/gobjobject.h>
-#include <sysdolphin/baselib/gobjplink.h>
 #include <sysdolphin/baselib/gobjproc.h>
 #include <sysdolphin/baselib/lobj.h>
 #include <sysdolphin/baselib/memory.h>
@@ -929,7 +929,7 @@ void Camera_ApplyQuake(CameraBounds* bounds, CameraTransformState* state)
     input_x *= 10.0f;
     input_y *= 10.0f;
 
-    if (gm_8016B41C() != 0) {
+    if (gm_IsCurrently1PMode_inline() != 0) {
         input_x *= cm_803BCCA0.xE8;
         input_y *= cm_803BCCA0.xE8;
     }
@@ -994,7 +994,7 @@ void Camera_UpdateQuakes(CameraBounds* bounds)
     if ((quakes_remaining != -1) && (game_camera.quake_gobj != NULL) &&
         (game_camera.quake_frames_left[QuakeKind_Loop] == 0))
     {
-        HSD_GObjPLink_80390228(game_camera.quake_gobj);
+        HSD_GObjFree(game_camera.quake_gobj);
         game_camera.quake_gobj = 0;
     }
 }
@@ -1391,7 +1391,7 @@ void Camera_8002B0E0(void)
     f32 var_f2;
     PAD_STACK(8);
 
-    if ((gm_8016B41C() != 0) && (game_camera.x2C0 > 0.0f)) {
+    if ((gm_IsCurrently1PMode_inline() != 0) && (game_camera.x2C0 > 0.0f)) {
         {
             s32 idx = Player_GetPlayerId(0) & 0xFF;
             var_f1 = HSD_PadCopyStatus[idx].nml_subStickY;
@@ -1441,7 +1441,7 @@ void Camera_8002B1F8(CameraTransformState* transform)
           (Camera_8002928C(subject) != 0) &&
           (Camera_80029124(&subject->bone_pos, 0) == CAM_BOUNDS_INSIDE) &&
           !ftLib_8008732C(temp_r3)) ||
-         ((Player_GetPlayerCharacter(1) == CHKIND_SANDBAG) &&
+         ((Player_GetPlayerCharacter(1) == ChKind_Sandbag) &&
           (temp_r3_2 = Player_GetEntity(1), ((temp_r3_2 == NULL) == 0)) &&
           (subject = ftLib_80086B74(temp_r3_2), ((subject == NULL) == 0)) &&
           (Camera_8002928C(subject) != 0) &&

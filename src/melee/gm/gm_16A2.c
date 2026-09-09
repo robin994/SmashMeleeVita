@@ -62,8 +62,8 @@ bool gm_801693BC(int arg0)
         return true;
     }
     ckind = Player_GetPlayerCharacter(arg0);
-    ckind -= CKIND_BOY;
-    if (ckind <= CKIND_GIRL - CKIND_BOY) {
+    ckind -= CKind_Boy;
+    if (ckind <= CKind_Girl - CKind_Boy) {
         return true;
     }
     return false;
@@ -253,7 +253,7 @@ void fn_80169900(u8 arg0, struct lbl_8046B488_t* arg1, s8* arg2, s8* arg3)
             } else {
                 var_r27 = 5;
                 if (HSD_Randi(2) != 0) {
-                    if (arg1->x1 != CHKIND_NONE &&
+                    if (arg1->x1 != ChKind_None &&
                         gm_IsCKindUnlocked(arg1->x1))
                     {
                         arg2[var_r28] = arg1->x1;
@@ -261,7 +261,7 @@ void fn_80169900(u8 arg0, struct lbl_8046B488_t* arg1, s8* arg2, s8* arg3)
                         arg2[var_r28] = arg1->x0;
                     }
                 } else {
-                    if (arg1->x2 != CHKIND_NONE &&
+                    if (arg1->x2 != ChKind_None &&
                         gm_IsCKindUnlocked(arg1->x2))
                     {
                         arg2[var_r28] = arg1->x2;
@@ -298,7 +298,7 @@ void fn_80169A84(u8 arg0, s8* arg1, s8* arg2)
             }
             i += 1;
             p += 1;
-        } while (i < CKIND_PLAYABLE_COUNT);
+        } while (i < CKind_Playable_Count);
 
         i = 0;
         p = list;
@@ -311,7 +311,7 @@ void fn_80169A84(u8 arg0, s8* arg1, s8* arg2)
             q[0x1C0] = (u8) *p;
             *p = tmp;
             p += 1;
-        } while (i < CKIND_PLAYABLE_COUNT);
+        } while (i < CKind_Playable_Count);
 
         {
             s32 j;
@@ -521,7 +521,7 @@ void fn_8016A09C(void)
     PAD_STACK(4);
     var_r29 = 0;
 
-    gm_16AE_GetUnkData_1();
+    gmVs_GetController_1();
     lbl_8046B488.unk_10_b1 = 1;
     lbl_8046B488.unk_10_b0 = 0;
 
@@ -548,7 +548,7 @@ void gm_8016A164(void)
 {
     int i;
     struct lbl_8046B488_t* gp = gm_1601_GetUnkData();
-    lbl_8046B6A0_t* match_info = gm_16AE_GetUnkData_1();
+    VsSceneController* match_info = gmVs_GetController_1();
     PAD_STACK(4);
     if (gp == 0) {
         if (match_info == 0) {
@@ -707,7 +707,7 @@ void fn_8016A46C(void)
 
 void fn_8016A488(int arg0)
 {
-    if (gm_16AE_GetUnkData_1()->hud_enabled == true) {
+    if (gmVs_GetController_1()->hud_enabled == true) {
         Player_80031848(arg0);
     }
 }
@@ -852,7 +852,7 @@ void fn_8016A4C8(void)
                 } else {
                     Player_SetMoreFlagsBit5(spawn_slot, 0);
                 }
-                if (Player_GetPlayerCharacter(spawn_slot) == CKIND_KIRBY &&
+                if (Player_GetPlayerCharacter(spawn_slot) == CKind_Kirby &&
                     gp->xE != 0)
                 {
                     int tmp = gp->x124[gm_80169384()];
@@ -905,7 +905,7 @@ void gm_8016A92C(StartMeleeRules* arg0)
 
 bool gm_8016A944(void)
 {
-    if (gm_GetRules()->x58 != NULL) {
+    if (gm_GetStartMeleeRules()->x58 != NULL) {
         return true;
     }
     return false;
@@ -966,7 +966,7 @@ bool gm_8016AC44(s8 ckind, s8 costume_id)
     s32 idx;
     s32 i;
 
-    if ((gm_GetRules()->x58 != NULL ? 1 : 0) == 1) {
+    if ((gm_GetStartMeleeRules()->x58 != NULL ? 1 : 0) == 1) {
         struct lbl_8046B668_t* ptr = &lbl_8046B668;
         idx = -1;
         for (i = 0; i < 27; i++) {
