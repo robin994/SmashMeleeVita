@@ -6,8 +6,9 @@ textures on ARM and renders the static `MenMainBack` geometry through its origin
 This is still a diagnostic scene/browser, not the original menu loop.
 Upstream history and source provenance are preserved. Port changes are currently local.
 
-v1.5 runs original HSD component initialization with limited VI/GX boot adapters and original
-HSD heap/object allocation. It passes ARM tests; physical Vita validation is pending.
+v2.6 executes original GM_BOOT selection and GS_MEMCARD OnEnter with native camera/GObj
+initialization. ARM checks pass; physical Vita validation is pending. The scene OnFrame,
+opening movie and title screen still do not run. Audio initialization remains partial.
 
 See [PORTING_STATUS.md](PORTING_STATUS.md) for verified results and remaining work.
 Original GameCube build instructions remain in [.github/README.md](.github/README.md).
@@ -30,19 +31,19 @@ Requirements: VitaSDK with vita2d, CMake, Make, and Python 3.
 
 ```sh
 make -f Makefile.vita
-make -f Makefile.vita assets
+make -f Makefile.vita boot-assets
 ```
 
-1. Install `build/vita/SmashMeleeVita-assets.vpk` with VitaShell (title ID `SMEL00001`, version 00.08).
-2. Extract `build/vita/SmashMeleeVita-menu-assets.zip` into **ux0:data/**. The result must be
-   `ux0:data/SmashMeleeVita/files/MnMaAll.usd`.
-3. Launch Melee Vita Assets. It starts on the static `MenMainBack` scene using
+1. Install `build/vita/SmashMeleeVita-assets.vpk` with VitaShell (title ID `SMEL00001`, version 00.18).
+2. Extract `build/vita/SmashMeleeVita-boot-assets.zip` into **ux0:data/**. This supplies eight original archives under
+   `ux0:data/SmashMeleeVita/files/`. The previous menu-only ZIP is insufficient.
+3. Launch Melee Vita Runtime. It starts on the static `MenMainBack` scene using
    `ScMenMain_cam_int1_camera`; Square toggles the texture browser, L/R changes texture pages,
    Triangle toggles diagnostics and SELECT+START exits.
 4. Retrieve `ux0:data/SmashMeleeVita/runtime.log` after the run. Each launch replaces the log.
 
 The VPK contains program code only. The local data ZIP contains a hash-verified copy of the
-user's menu archive, not preconverted images. Data decoding takes place on Vita at runtime.
+user's menu and boot archives, not preconverted images. Data decoding takes place on Vita at runtime.
 Only 12 textures are allocated at once; page changes wait for rendering before freeing them.
 A missing/corrupt archive produces an error screen and a log marker.
 

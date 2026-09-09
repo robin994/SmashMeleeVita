@@ -1,7 +1,7 @@
 VITASDK ?= /usr/local/vitasdk
 export VITASDK
 BUILD_DIR ?= build/vita
-.PHONY: all configure audit asset-check arm-check assets
+.PHONY: all configure audit asset-check arm-check assets boot-assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
@@ -15,3 +15,6 @@ arm-check:
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_arm.py --assets orig/GALE01/files/MnMaAll.usd
 assets:
 	python3 vita/tools/prepare_assets.py --output "$(BUILD_DIR)/SmashMeleeVita-menu-assets.zip"
+
+boot-assets:
+	python3 vita/tools/prepare_assets.py --boot --output "$(BUILD_DIR)/SmashMeleeVita-boot-assets.zip"

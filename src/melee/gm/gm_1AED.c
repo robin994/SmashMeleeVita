@@ -47,6 +47,72 @@ static int gm_803DD550_us[] = {
 
 static struct enterData gm_80480DA8;
 
+#ifdef MELEE_VITA_BOOT_PROBE
+extern void* gm_VitaBootGetEnterData(void);
+#include <melee/lb/lbheap.h>
+#include <sysdolphin/baselib/gobj.h>
+#include <sysdolphin/baselib/sislib.h>
+#include <sysdolphin/baselib/cobj.h>
+#include <sysdolphin/baselib/initialize.h>
+#include <dolphin/os.h>
+#include <dolphin/dvd.h>
+
+int gm_VitaMemCardSceneEnterProbe(u32 out[8])
+{
+    if (out == NULL) {
+        return -1;
+    }
+    out[0] = 0;
+    const char* files[] = { "LbMcGame.usd", "NtMemAc.usd", "NtMsgWin.dat", "SdMsgBox.usd" };
+    for (unsigned i=0; i<sizeof(files)/sizeof(files[0]); ++i) {
+        if (DVDConvertPathToEntrynum(files[i]) < 0) {
+            OSReport("GS_MEMCARD_ASSET_MISSING %s\n", files[i]);
+            return -10;
+        }
+    }
+    /* Scene infrastructure normally established by the scene manager. */
+    OSReport("GS_MEMCARD_BEGIN HEAP\n");
+    lbHeap_80015900();
+    out[0] = 1;
+    /* preloadState uses 0x4800 for GS_MEMCARD after replacing the main heap. */
+    OSReport("GS_MEMCARD_BEGIN SIS_GOBJ\n");
+    HSD_SisLib_803A6048(0x4800);
+    lb_8001C5A4();
+    lb_8001D1F4();
+    HSD_GObjLibInitDataType init = { 0 };
+    HSD_GObj_803912E0(&init);
+    init.gproc_pri_max = 0x18;
+    HSD_GObj_80391304(&init);
+    out[0] = 3;
+    OSReport("GS_MEMCARD_BEGIN ON_ENTER\n");
+    gm_Scene_MemCard_OnEnter(gm_VitaBootGetEnterData());
+    out[0] = 7;
+    HSD_GObj** entities = (HSD_GObj**)HSD_GObj_Entities;
+    HSD_GObj* camera = entities[21];
+    if (!camera || camera->classifier != 20 || !camera->hsd_obj) return -2;
+    HSD_CObj* cobj = camera->hsd_obj;
+    HSD_CObjSetupViewingMtx(cobj);
+    unsigned count = 0;
+    for (unsigned i=0; i<=HSD_GObjLibInitData.p_link_max; ++i)
+        for (HSD_GObj* g=entities[i]; g; g=g->next) {
+            if (++count > 64) return -3;
+        }
+    if (count != 2 || !entities[17] || !entities[17]->proc) return -4;
+    /* Executes the registered original message-object process. This is not
+     * gm_Scene_MemCard_OnFrame or the scene-manager main loop. */
+    HSD_GObj_80390CFC();
+    out[1] = count;
+    out[2] = cobj->projection_type;
+    out[3] = (u32)cobj->viewport.xmax;
+    out[4] = (u32)cobj->viewport.ymax;
+    out[5] = OSCheckHeap(HSD_GetHeap());
+    out[6] = gm_80480DA8.unk14;
+    out[7] = gm_80480DA8.unk8.unk4;
+    OSReport("GS_MEMCARD_BEGIN COMPLETE\n");
+    return 0;
+}
+#endif
+
 void gm_801AEE6C(int arg0, int arg1, int arg2)
 {
     float scale = 1.12F;

@@ -13,7 +13,12 @@ add_library(melee_assets STATIC hsd_data.c hsd_anim.c hsd_scene.c hsd_matanim.c 
 target_include_directories(melee_assets PRIVATE ../src ../extern/dolphin/include)
 target_compile_options(melee_assets PRIVATE -Wall -Wextra -Werror -O2 -fno-short-enums)
 add_library(melee_hsd_runtime STATIC
-  hsd_runtime_platform.c hsd_runtime_probe.c gx_capture_vita.c
+  hsd_runtime_platform.c hsd_runtime_probe.c gx_capture_vita.c mtx_vita.c
+  ../extern/dolphin/src/dolphin/mtx/mtx44.c
+  ../src/sysdolphin/baselib/wobj.c
+  ../src/sysdolphin/baselib/spline.c
+  ../src/sysdolphin/baselib/bytecode.c
+  ../src/sysdolphin/baselib/util.c
   ../src/sysdolphin/baselib/memory.c
   ../src/sysdolphin/baselib/objalloc.c
   ../src/sysdolphin/baselib/class.c
@@ -26,6 +31,14 @@ add_library(melee_hsd_runtime STATIC
   ../src/sysdolphin/baselib/tev.c
   ../src/sysdolphin/baselib/lobj.c
   ../src/sysdolphin/baselib/list.c
+  ../src/sysdolphin/baselib/gobj.c
+  ../src/sysdolphin/baselib/gobjinit.c
+  ../src/sysdolphin/baselib/gobjplink.c
+  ../src/sysdolphin/baselib/gobjgxlink.c
+  ../src/sysdolphin/baselib/gobjobject.c
+  ../src/sysdolphin/baselib/gobjproc.c
+  ../src/sysdolphin/baselib/gobjuserdata.c
+  ../src/sysdolphin/baselib/cobj.c
   ../src/sysdolphin/baselib/controller.c
   ../src/sysdolphin/baselib/rumble.c
   ../src/sysdolphin/baselib/aobj.c
@@ -50,11 +63,14 @@ target_compile_definitions(melee_hsd_runtime PRIVATE MELEE_VITA_PLATFORM=1 MELEE
 target_compile_options(melee_hsd_runtime PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
 
 add_library(melee_game_boot STATIC
-  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c gmopening_state_vita.c
+  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c gmopening_state_vita.c scene_archive_vita.c
   ../src/melee/gm/gmmain.c
   ../src/melee/gm/gm_1A3F.c
   ../src/melee/gm/gmboot.c
+  ../src/melee/gm/gm_1AED.c
+  ../src/melee/gm/gm_1ADD.c
   ../src/melee/db/dbinit.c
+  ../src/melee/lb/lb_00B0.c
   ../src/melee/lb/lb_0195.c
   ../src/melee/lb/lbmemory.c
   ../src/melee/lb/lbheap.c
@@ -85,4 +101,4 @@ target_link_libraries(melee_vita melee_assets melee_game_boot melee_hsd_runtime 
   SceSysmodule_stub ScePgf_stub SceCommonDialog_stub SceAppMgr_stub SceTouch_stub m)
 vita_create_self(eboot.bin melee_vita UNSAFE)
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 00.17 NAME "Melee Vita Runtime")
+  VERSION 00.18 NAME "Melee Vita Runtime")

@@ -23,6 +23,19 @@ void HSD_Panic(char *file, u32 line, char *message)
     abort();
 }
 
+void OSPanic(char *file, int line, char *format, ...)
+{
+    FILE *stream = runtime_log ? runtime_log : stderr;
+    fprintf(stream, "OS_PANIC %s:%d: ", file ? file : "?", line);
+    va_list args;
+    va_start(args, format);
+    vfprintf(stream, format ? format : "", args);
+    va_end(args);
+    fputc('\n', stream);
+    if (runtime_log) fflush(runtime_log);
+    abort();
+}
+
 void __wrap___assert(char *file, u32 line, char *expression)
 {
     HSD_Panic(file, line, expression);
@@ -50,3 +63,8 @@ void HSD_LogInit(void)
     setvbuf(stderr, NULL, _IONBF, 0);
     if (runtime_log) { fprintf(runtime_log, "HSD_LOG_INIT_PASS backend=newlib\n"); fflush(runtime_log); }
 }
+
+/* Original hsd_3A76.c archive bridge, isolated from the text renderer. */
+#include <melee/lb/lbarchive.h>
+HSD_Archive* HSD_SisLib_803A945C(char* path)
+{ return lbArchive_LoadArchive(path); }

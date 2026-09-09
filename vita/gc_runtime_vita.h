@@ -65,6 +65,12 @@ enum {
 /* Executes the actual gmboot.c bootOnLoad callback on a bounded state object
  * and stops before the GS_MEMCARD scene is entered. */
 int gm_VitaBootStateProbe(uint32_t out[MV_GM_BOOT_SMOKE_STAT_COUNT]);
+void* gm_VitaBootGetEnterData(void);
+
+enum {
+    MV_GM_MEMCARD_ENTERED = 7u,
+};
+int gm_VitaMemCardSceneEnterProbe(uint32_t out[8]);
 
 enum {
     MV_LBFILE_SIZE = 0,

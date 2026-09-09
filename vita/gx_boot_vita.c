@@ -169,3 +169,33 @@ int mv_gx_misc_validate(uint32_t out[2])
     out[1] = dl_save_context;
     return 0;
 }
+
+/* Camera state is retained for scene initialization. The diagnostic replay
+ * still uses its own camera; this is not a general scene-rendering backend. */
+static struct {
+    float viewport[6], projection[4][4];
+    u32 scissor[4], field;
+    GXProjectionType projection_type;
+} camera_state;
+void GXSetViewport(f32 x, f32 y, f32 w, f32 h, f32 n, f32 f)
+{
+    camera_state.viewport[0]=x; camera_state.viewport[1]=y;
+    camera_state.viewport[2]=w; camera_state.viewport[3]=h;
+    camera_state.viewport[4]=n; camera_state.viewport[5]=f;
+}
+void GXSetViewportJitter(f32 x, f32 y, f32 w, f32 h, f32 n, f32 f, u32 field)
+{
+    camera_state.field=field;
+    GXSetViewport(x, y - (field == 0 ? 0.5f : 0.0f), w, h, n, f);
+}
+void GXSetScissor(u32 x, u32 y, u32 w, u32 h)
+{
+    camera_state.scissor[0]=x; camera_state.scissor[1]=y;
+    camera_state.scissor[2]=w; camera_state.scissor[3]=h;
+}
+void GXSetProjection(f32 matrix[4][4], GXProjectionType type)
+{
+    memcpy(camera_state.projection, matrix, sizeof(camera_state.projection));
+    camera_state.projection_type=type;
+}
+u32 VIGetNextField(void) { return (retraces + 1) & 1; }

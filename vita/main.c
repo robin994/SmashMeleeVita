@@ -24,7 +24,7 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GX_PE v2.5\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GS_MEMCARD v2.6\n"); fflush(log); }
     mv_runtime_set_log(log);
     /* Independent known-answer vectors for upstream HSD_Rand, seed = 1. */
     const u32 expected[] = {41, 51235, 6334, 59268, 51937};
@@ -199,8 +199,29 @@ int main(void)
         }
         fflush(log);
     }
+    uint32_t memcard_enter[8] = {0};
+    int memcard_enter_result = gm_mode_boot_result ? -100 :
+                               gm_VitaMemCardSceneEnterProbe(memcard_enter);
+    if (log) {
+        if (!memcard_enter_result) {
+            fprintf(log,
+                    "GS_MEMCARD_ENTER_PASS source=gm_1AED.c stages=%lu "
+                    "assets=LbMcGame,NtMemAc,NtMsgWin,SdMsgBox "
+                    "gobjs=%lu projection=%lu viewport=%lux%lu heap_free=%lu state=%lu next=%lu "
+                    "stop=before_GS_MEMCARD_on_frame\n",
+                    (unsigned long)memcard_enter[0], (unsigned long)memcard_enter[1],
+                    (unsigned long)memcard_enter[2], (unsigned long)memcard_enter[3],
+                    (unsigned long)memcard_enter[4], (unsigned long)memcard_enter[5],
+                    (unsigned long)memcard_enter[6], (unsigned long)memcard_enter[7]);
+        } else {
+            fprintf(log, "GS_MEMCARD_ENTER_FAIL code=%d stage=%08lx\n",
+                    memcard_enter_result, (unsigned long)memcard_enter[0]);
+        }
+        fflush(log);
+    }
     if (hsd_init_result || gm_post_result || gx_misc_result || audio_result || ax_result ||
-        video_result || post_audio_result || services_result || gm_mode_boot_result) {
+        video_result || post_audio_result || services_result || gm_mode_boot_result ||
+        memcard_enter_result) {
         if (log) { fprintf(log, "BOOT_STOP initialization_failed\n"); fflush(log); }
         mv_runtime_set_log(NULL);
         if (log) fclose(log);

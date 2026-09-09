@@ -368,7 +368,7 @@ static void draw_scene(const MvViewer *v, vita2d_pgf *font)
 static void draw_gx_replay(MvViewer *v, vita2d_pgf *font)
 {
     const unsigned white = RGBA8(235, 240, 245, 255);
-    vita2d_pgf_draw_text(font, 28, 38, white, 1.3f, "Melee Vita v2.5 - GX PE blend + culling");
+    vita2d_pgf_draw_text(font, 28, 38, white, 1.3f, "Melee Vita v2.6 - GS_MEMCARD entry / GX preview");
     vita2d_pgf_draw_textf(font, 28, 70, white, 0.82f,
         "%u/%u commands | %u/%u triangles | %u textures | GX replay: %s",
         (unsigned)v->gx_replay_stats.supported_commands,

@@ -1,4 +1,10 @@
 #include "lbarchive.h"
+#ifdef MELEE_VITA_BOOT_PROBE
+extern void mv_boot_archive_prepare(HSD_Archive*, const char*);
+#define PREPARE_SCENE(a, f) mv_boot_archive_prepare(a, f)
+#else
+#define PREPARE_SCENE(a, f) ((void)0)
+#endif
 
 #include <stdarg.h>
 #include <string.h>
@@ -65,6 +71,7 @@ static inline HSD_Archive* lbArchive_LoadArchive_inline(const char* filename)
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
     lbArchive_InitializeDAT(archive, data, length);
+    PREPARE_SCENE(archive, filename);
     return archive;
 }
 
@@ -118,6 +125,7 @@ HSD_Archive* lbArchive_LoadSymbols(const char* filename, void* symbols, ...)
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
     lbArchive_InitializeDAT(archive, data, length);
+    PREPARE_SCENE(archive, filename);
     lbArchive_vLoadSectionsFatal(archive, symbols, sections);
 
     va_end(sections);
@@ -138,6 +146,7 @@ HSD_Archive* lbArchive_80016DBC(const char* filename, void* symbols, ...)
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
     lbArchive_InitializeDAT(archive, data, length);
+    PREPARE_SCENE(archive, filename);
     lbArchive_vLoadSections(archive, symbols, sections);
 
     va_end(sections);

@@ -1,4 +1,75 @@
-# Porting status — 2026-09-09, v2.5 GX PE blend/culling milestone
+# Porting status — 2026-09-09, v2.6 GS_MEMCARD entry (ARM tested; Vita pending)
+
+## Current development assessment
+
+The former dirty GS_MEMCARD entry attempt did not link. It now links and ARM tests execute
+original gm_Scene_MemCard_OnEnter successfully, loading LbMcGame, NtMemAc, NtMsgWin and
+SdMsgBox through the port DVD backend. New code supplies scalar SDK matrix/vector functions,
+original CObj/WObj runtime, scene heap/GObj setup and typed NtMsgWin camera scalar conversion.
+The SIS arena must be recreated after the main heap reset; this fixes an observed ARM panic.
+All prior ARM renderer/texture tests pass after the new scene entry.
+
+This remains a bounded entry test. The original scene manager, GS_MEMCARD OnFrame, opening movie
+and title screen are not running. The diagnostic renderer is preserved. Existing AXDriver/Synth
+initialization is a partial boot adapter with no audible mixer/output; aux effects/bank setup is
+still bypassed. Later gmmain probes do not imply that this earlier audio gap has been completed.
+
+The current build/vita/runtime.log starts with WiiCompiled, not Melee. It is unrelated evidence
+and has not been overwritten or accepted as a new Melee hardware run. v2.5 hardware results below
+are historical records from the existing status, not reconfirmed by this log.
+
+OnFrame dependency audit: build/vita/boot-frontier/memcard-frame-undefined.txt lists reachable
+missing CARD async services, GX text/TEV drawing and further runtime/game dependencies. Do not
+replace them with success stubs to claim game boot. v2.6 package/hardware results follow.
+
+## v2.6 validation and installation
+
+- Build exit 0: build/vita/build-v2.6.log. ARM EABI enum warnings remain.
+- ARM and asset checks exit 0: build/vita/checks-v2.6.log. 861 archives pass, 33 are
+  classified nonstandard; all 357 menu textures and previous GX replay tests pass.
+- Additional independent original-disc camera test passes: build/vita/arm-camera-v2.6.log.
+  Eye=(0,0,64), projection=perspective, viewport=640x480; view matrix and near/far match.
+- Scene entry stats: stages=7, GObjs=2, main heap free=18839168, state=0,
+  selected next mode=24 (GM_OPENING_MV). Selecting this ID does not enter/play the movie.
+- One original message GObj process executes. Original GS_MEMCARD OnFrame does not execute.
+- Package CRC, eboot byte parity and all eight data-file manifest hashes pass.
+- No v2.6 physical-Vita result is available. Current checkout HEAD is 0b6cda51e;
+  pre-existing dirty work was preserved, and no commit/push was performed in this run.
+
+Install build/vita/SmashMeleeVita-v2.6.vpk (SMEL00001, version 00.18), and extract
+build/vita/SmashMeleeVita-boot-assets.zip under ux0:data/. This ZIP includes the previous
+MnMaAll.usd plus seven boot archives covering both supplied locales. The previous menu-only
+ZIP is insufficient. Missing required files log GS_MEMCARD_ASSET_MISSING and stop entry.
+
+Expected fresh log markers: MELEE_VITA_GS_MEMCARD v2.6; GS_MEMCARD_BEGIN HEAP,
+SIS_GOBJ, ON_ENTER; GS_MEMCARD_CAMERA_NATIVE_PASS; GS_MEMCARD_BEGIN COMPLETE;
+GS_MEMCARD_ENTER_PASS stages=7 gobjs=2 projection=1 viewport=640x480 state=0 next=24
+(with heap_free between the viewport/state fields); then existing GX replay/PRESENT_120 markers.
+The screen remains explicitly labelled GX preview. It is not the original memory-card UI.
+Retrieve ux0:data/SmashMeleeVita/runtime.log after launch. SELECT+START exits.
+
+- `build/vita/SmashMeleeVita-v2.6.vpk`: 180674 bytes; SHA-256 `4cc36e89d24e2fbf805cd4d314bfe6dcbfc558841e38b518a028d099b5f48fd6`.
+- `build/vita/SmashMeleeVita-boot-assets.zip`: 592391 bytes; SHA-256 `dc5438711f882cc2e77e520b35b3d6a53c9f5a310072e4753241a97e93bfc8db`.
+- `build/vita/melee_vita`: 1209744 bytes; SHA-256 `2d077b89f3b0d68f140eaf6b5b7355b61f81173dcfa87b721224e33f386f1bb1`.
+- `build/vita/eboot.bin`: 184215 bytes; SHA-256 `35b16204dba9d94ccc11751f439e4d81c335d8f0ee905921201321b514dc4f80`.
+
+## Remaining phases toward actual game boot
+
+1. Physical Vita validation of the new heap reset, archives, camera and GObj entry.
+2. Complete GS_MEMCARD OnFrame dependencies and native typed message model/animation/SIS
+   consumption, then its actual scene scheduler/render callbacks and memory-card behavior.
+3. Close the earlier audio gap: AX effects/banks, decoding/mixing and Vita audio output.
+   Current AX control state alone cannot produce sound.
+4. Execute original scene exit/GM_BOOT transition, opening movie path (THP dependencies),
+   title state and its real per-frame rendering/input. General GX drawing remains incomplete.
+5. Validate visible title/menu and responsive input on real Vita with a fresh matching log.
+   That establishes actual game boot; match/gameplay is a subsequent milestone.
+
+The partial-link audit has 226 unresolved entries including libc/platform functions normally
+supplied by other link inputs. This is an audit inventory, not 226 independent missing features.
+Immediate unimplemented groups include CARD async operations and general GX text/TEV submission.
+
+## Previous recorded milestones (historical)
 
 Last hardware-verified renderer milestone: **v2.5**. Physical Vita now executes all 96/96 captured
 `MenMainBack` draw commands / 324/324 source triangles including the command-7 two-TObj offscreen GXM
@@ -333,7 +404,7 @@ Remaining compile groups include int/bool callback mismatches, PowerPC assembly/
 MSL/newlib FILE/va_list/setjmp differences, and DOL-generated font includes. Those includes can
 now be extracted from the verified DOL; they have not yet been generated by this milestone.
 
-## Next implementation work
+## Historical next-work list (superseded by v2.6 phases above)
 
 1. v2.4 and v2.5 are now hardware-proven. Treat MenMainBack frame-0 texture/material/PE coverage as
    closed for this diagnostic milestone; do not spend further iterations on the viewer unless a later
@@ -351,7 +422,7 @@ now be extracted from the verified DOL; they have not yet been generated by this
    initializers. The first meaningful "game boot" milestone is entering `GM_BOOT` through the original
    `runGameMode()` state machine, not showing another manually loaded menu asset.
 
-## Next real-Vita check
+## Historical v2.5 real-Vita check
 
 The v2.5 physical-Vita check is complete. Hardware evidence includes:
 
@@ -394,7 +465,7 @@ GX layout/channel behavior and GameCube-specific CMPR interpolation were cross-c
 [Dolphin TextureDecoder](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/VideoCommon/TextureDecoder_Generic.cpp)
 and its [DXTBlend utility](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/VideoCommon/TextureDecoder_Util.h).
 
-## Current artifacts
+## Historical v2.5 artifacts
 
 - `build/vita/SmashMeleeVita-v2.5.vpk`: 133,129 bytes; SHA-256 `f53d8807b5134a809705cdc6cdf1d33d64334e4f811aceaa237ca97a73df2ed7`.
 - `build/vita/SmashMeleeVita-assets.vpk`: current v2.5 payload.

@@ -32,6 +32,11 @@ static struct loadData load_data;
 static struct leaveData leave_data;
 
 #ifdef MELEE_VITA_BOOT_PROBE
+void* gm_VitaBootGetEnterData(void)
+{
+    return &load_data;
+}
+
 int gm_VitaBootStateProbe(u32 out[4])
 {
     GameModeState state = { 0 };
