@@ -628,6 +628,11 @@ static inline HSD_JObj* JObjLoadJointSub(HSD_Joint* joint, HSD_JObj* parent)
 
 s32 JObjLoad(HSD_JObj* jobj, HSD_Joint* joint, HSD_JObj* parent)
 {
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    if (joint->flags & (JOBJ_INSTANCE | JOBJ_SPLINE | JOBJ_PTCL)) {
+        HSD_Panic(__FILE__, __LINE__, "load-only JObj requires rigid tree\n");
+    }
+#endif
     if (!(joint->flags & JOBJ_INSTANCE)) {
         jobj->child = JObjLoadJointSub(joint->child, jobj);
     }
@@ -688,12 +693,18 @@ void HSD_JObjResolveRefs(HSD_JObj* jobj, HSD_Joint* joint)
     }
 
     HSD_RObjResolveRefsAll(jobj->robj, joint->robjdesc);
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    if (jobj->flags & JOBJ_INSTANCE) {
+        HSD_Panic(__FILE__, __LINE__, "load-only JObj instance refs unsupported\n");
+    }
+#else
     if (!!(jobj->flags & JOBJ_INSTANCE)) {
         HSD_JObjUnref(jobj->child);
         jobj->child = HSD_IDGetDataFromTable(NULL, (u32) joint->child, NULL);
         HSD_ASSERT(1108, jobj->child);
         HSD_JObjRef(jobj->child);
     }
+#endif
     if (union_type_dobj(jobj)) {
         HSD_DObjResolveRefsAll(jobj->u.dobj, joint->u.dobjdesc);
     }
@@ -1560,6 +1571,12 @@ void JObjInfoInit(void)
     hsdInitClassInfo(HSD_CLASS_INFO(&hsdJObj), HSD_CLASS_INFO(&hsdObj),
                      "sysdolphin_base_library", "hsd_jobj",
                      sizeof(HSD_JObjInfo), sizeof(HSD_JObj));
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    /* Vita bootstrap phase: construct the authentic runtime object graph
+       before the GX/display backend is linked. Do not install renderer,
+       animation or destruction callbacks that this phase cannot execute. */
+    HSD_JOBJ_INFO(&hsdJObj)->load = JObjLoad;
+#else
     HSD_CLASS_INFO(&hsdJObj)->init = JObjInit;
     HSD_CLASS_INFO(&hsdJObj)->release = JObjRelease;
     HSD_CLASS_INFO(&hsdJObj)->amnesia = JObjAmnesia;
@@ -1568,6 +1585,7 @@ void JObjInfoInit(void)
     HSD_JOBJ_INFO(&hsdJObj)->disp = HSD_JObjDispSub;
     HSD_JOBJ_INFO(&hsdJObj)->load = JObjLoad;
     HSD_JOBJ_INFO(&hsdJObj)->release_child = JObjReleaseChild;
+#endif
 }
 
 #ifdef MUST_MATCH

@@ -27,7 +27,9 @@ static void lbFile_8001615C(int dcreq, int args, void* buf, bool cancelflag)
 #endif
 static bool discIsDone(void)
 {
+#ifndef MELEE_VITA_SYNC_DVD
     lb_800195D0();
+#endif
     return cancel;
 }
 #ifdef __MWERKS__

@@ -26,6 +26,13 @@ void* AXDriverAlloc(size_t size)
 
 void AXDriverFree(void* ptr) {}
 
+#ifdef MELEE_VITA_BOOT_PROBE
+static void* AXDriverAllocHook(unsigned long size)
+{
+    return AXDriverAlloc((size_t) size);
+}
+#endif
+
 void AXDriverUnlink(HSD_SM* v, HSD_SM** head)
 {
     HSD_SM* p;
@@ -1168,7 +1175,11 @@ void AXDriver_8038E498(int voices, int priority, int sample_rate,
     AXDriver_804D77D4 = NULL;
     axfxmaxsize = 0;
     AXDriverSetupAux(1, AXDRIVER_AUX_OFF, NULL);
+#ifdef MELEE_VITA_BOOT_PROBE
+    AXFXSetHooks(AXDriverAllocHook, AXDriverFree);
+#else
     AXFXSetHooks(AXDriverAlloc, AXDriverFree);
+#endif
 }
 
 int AXDriver_8038E5D4(void)

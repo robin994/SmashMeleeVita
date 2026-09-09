@@ -586,10 +586,14 @@ void HSD_RObjResolveRefs(HSD_RObj* robj, HSD_RObjDesc* desc)
 
 void HSD_RObjResolveRefsAll(HSD_RObj* robj, HSD_RObjDesc* desc)
 {
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    if (robj || desc) HSD_Panic(__FILE__, __LINE__, "RObj refs require a native adapter");
+#else
     for (; robj != NULL && desc != NULL; robj = robj->next, desc = desc->next)
     {
         HSD_RObjResolveRefs(robj, desc);
     }
+#endif
 }
 
 static void bcexpLoadDesc(HSD_Exp* exp, HSD_ByteCodeExpDesc* desc);
@@ -597,6 +601,10 @@ static void expLoadDesc(HSD_Exp* exp, HSD_ExpDesc* desc);
 
 HSD_RObj* HSD_RObjLoadDesc(HSD_RObjDesc* robjdesc)
 {
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    if (robjdesc) HSD_Panic(__FILE__, __LINE__, "RObj requires a native adapter");
+    return NULL;
+#else
     HSD_RObj* robj;
 
     if (robjdesc != NULL) {
@@ -639,6 +647,7 @@ HSD_RObj* HSD_RObjLoadDesc(HSD_RObjDesc* robjdesc)
         return robj;
     }
     return NULL;
+#endif
 }
 
 void HSD_RObjRemove(HSD_RObj* robj)

@@ -42,4 +42,12 @@ void HSD_Init_803755A8(void);
 void HSD_ObjDumpStat(void);
 bool HSD_SetInitParameter(HSD_InitParam param, ...);
 
+#ifdef MELEE_VITA_INIT_PROBE
+/* Runs original HSD_InitComponent with Vita boot-state VI/GX adapters.
+ * General GX rendering and subsequent game initialization are not implemented.
+ * out: main heap handle/free, audio heap free, next-arena bytes, physical
+ * memory and a stage bitmask. */
+int HSD_InitComponentVitaProbe(u32 out[6]);
+#endif
+
 #endif

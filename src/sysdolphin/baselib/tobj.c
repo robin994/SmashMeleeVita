@@ -1617,10 +1617,14 @@ static void TObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_tobj",
                      sizeof(HSD_TObjInfo), sizeof(HSD_TObj));
 
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    HSD_TOBJ_INFO(&hsdTObj)->load = TObjLoad;
+#else
     HSD_CLASS_INFO(&hsdTObj)->release = TObjRelease;
     HSD_CLASS_INFO(&hsdTObj)->amnesia = TObjAmnesia;
     HSD_TOBJ_INFO(&hsdTObj)->load = TObjLoad;
     HSD_TOBJ_INFO(&hsdTObj)->make_texp = TObjMakeTExp;
 
     hsdTObj.make_mtx = MakeTextureMtx;
+#endif
 }

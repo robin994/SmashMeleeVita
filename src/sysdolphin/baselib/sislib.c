@@ -1,6 +1,8 @@
 #include "sislib.h"
 
+#ifdef MWERKS_GEKKO
 #include <printf.h> // IWYU pragma: keep
+#endif
 #include <stdio.h>
 
 #include "cobj.h"

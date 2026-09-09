@@ -180,7 +180,9 @@ HSD_MObj* HSD_MObjLoadDesc(HSD_MObjDesc* mobjdesc)
         }
 
         HSD_MOBJ_METHOD(mobj)->load(mobj, mobjdesc);
+#ifndef MELEE_VITA_HSD_LOAD_ONLY
         HSD_MObjCompileTev(mobj);
+#endif
 
         return mobj;
     } else {
@@ -581,6 +583,9 @@ static void MObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_mobj",
                      sizeof(HSD_MObjInfo), sizeof(HSD_MObj));
 
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    HSD_MOBJ_INFO(&hsdMObj)->load = MObjLoad;
+#else
     HSD_CLASS_INFO(&hsdMObj)->release = MObjRelease;
     HSD_CLASS_INFO(&hsdMObj)->amnesia = MObjAmnesia;
     HSD_MOBJ_INFO(&hsdMObj)->setup = HSD_MObjSetup;
@@ -588,4 +593,5 @@ static void MObjInfoInit(void)
     HSD_MOBJ_INFO(&hsdMObj)->load = MObjLoad;
     HSD_MOBJ_INFO(&hsdMObj)->make_texp = MObjMakeTExp;
     HSD_MOBJ_INFO(&hsdMObj)->setup_tev = MObjSetupTev;
+#endif
 }

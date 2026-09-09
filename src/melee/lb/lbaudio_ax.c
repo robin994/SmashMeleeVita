@@ -27,6 +27,11 @@
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/synth.h>
 
+#ifdef MELEE_VITA_AUDIO_BOOT_PROBE
+extern void mv_audio_boot_record(u32 bank_base, u32 bank_common,
+                                 u32 bank_priority, u32 bank_total);
+#endif
+
 #define GET_SOUND(x) ((lbAudioAx_UserData*) HSD_GObjGetUserData(x))
 
 #define GOBJ_TYPE_AUDIO_AX 0x3E
@@ -2091,9 +2096,11 @@ void lbAudioAx_8002838C(void)
 {
     static u32 ar_stack[0x10];
 
+#ifndef MELEE_VITA_AUDIO_BOOT_PROBE
     struct AXFX_REVERBSTD rvbStd;
     struct AXFX_DELAY delay;
     int i;
+#endif
 
     ARInit(ar_stack, ARRAY_SIZE(ar_stack));
     ARQInit();
@@ -2119,6 +2126,15 @@ void lbAudioAx_8002838C(void)
     lbl_804D6438 = lbl_804D643C + lbl_804D6440 + lbl_804D6444;
     lbl_804D3870 = lbl_804D6438;
 
+#ifdef MELEE_VITA_AUDIO_BOOT_PROBE
+    /* Promote the next original boundary as a real dependency: AXDriver owns
+       HSD_SynthInit and callback registration. Aux effects/bank loads remain
+       a later fail-closed boundary until the core mixer is validated. */
+    AXDriver_8038E498(AX_MAX_VOICES, 0, 0x40, lbl_804D3870);
+    mv_audio_boot_record(lbl_804D643C, lbl_804D6440, lbl_804D6444,
+                         lbl_804D6438);
+    return;
+#else
     AXDriver_8038E498(AX_MAX_VOICES, 0, 0x40, lbl_804D3870);
 
     {
@@ -2151,6 +2167,7 @@ void lbAudioAx_8002838C(void)
     lbl_804D6448 = 0;
     lbl_804D644C = 0;
     lbl_804D6450 = 0;
+#endif
 }
 
 void lbAudioAx_80028690(void)

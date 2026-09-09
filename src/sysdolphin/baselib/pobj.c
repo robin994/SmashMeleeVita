@@ -285,6 +285,15 @@ static s32 PObjLoad(HSD_PObj* pobj, HSD_PObjDesc* desc)
     pobj->flags = desc->flags;
     pobj->n_display = desc->n_display;
     pobj->display = desc->display;
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    /* The bootstrap converter only accepts rigid POBJ_SKIN descriptors with
+       no joint reference. Reject richer runtime types here as well so this
+       target cannot silently construct incomplete envelope/shape objects. */
+    if (pobj_type(pobj) != POBJ_SKIN || desc->u.joint != NULL) {
+        HSD_Panic(__FILE__, __LINE__, "load-only PObj requires rigid skin\n");
+    }
+    pobj->u.jobj = NULL;
+#else
     switch (pobj_type(pobj)) {
     case POBJ_SHAPEANIM:
         pobj->u.shape_set = loadShapeSetDesc(desc->u.shape_set);
@@ -300,6 +309,7 @@ static s32 PObjLoad(HSD_PObj* pobj, HSD_PObjDesc* desc)
     default:
         HSD_Panic(__FILE__, 580, "pobj: unexected type.\n");
     }
+#endif
 
     // _HSD_NeedCacheInvalidate(HSD_CACHE_VTX); // NOTE: This does not exist in
     // Melee's sysdolphin, but is a potential optimization
@@ -398,6 +408,11 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
         return;
     }
 
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    if (pobj_type(pobj) != POBJ_SKIN || pdesc->u.joint != NULL) {
+        HSD_Panic(__FILE__, __LINE__, "load-only PObj refs require rigid skin\n");
+    }
+#else
     switch (pobj_type(pobj)) {
     case POBJ_ENVELOPE:
         resolveEnvelope(pobj->u.envelope_list, pdesc->u.envelope_p);
@@ -416,6 +431,7 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
     default:
         break;
     }
+#endif
 }
 
 void HSD_PObjResolveRefsAll(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
@@ -1225,6 +1241,34 @@ static void PObjDispSimplePrimitive(HSD_PObj* pobj, u32 rendermode)
     GXCallDisplayList(pobj->display, pobj->n_display << 5);
 }
 
+#ifdef MELEE_VITA_HSD_GX_CAPTURE
+int HSD_PObjCaptureRigid(HSD_PObj* pobj, Mtx pmtx)
+{
+    if (pobj == NULL || pmtx == NULL || pobj_type(pobj) != POBJ_SKIN ||
+        pobj->u.jobj != NULL)
+    {
+        return -1;
+    }
+    switch (pobj->flags & (POBJ_CULLFRONT | POBJ_CULLBACK)) {
+    case 0:
+        GXSetCullMode(GX_CULL_NONE);
+        break;
+    case POBJ_CULLFRONT:
+        GXSetCullMode(GX_CULL_FRONT);
+        break;
+    case POBJ_CULLBACK:
+        GXSetCullMode(GX_CULL_BACK);
+        break;
+    case POBJ_CULLFRONT | POBJ_CULLBACK:
+        return 0;
+    }
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXLoadPosMtxImm(pmtx, GX_PNMTX0);
+    PObjDispSimplePrimitive(pobj, 0);
+    return 0;
+}
+#endif
+
 static void PObjDispShapeAnim(HSD_PObj* pobj, u32 rendermode)
 {
     setupShapeAnimArrayDesc(pobj->verts);
@@ -1299,9 +1343,13 @@ static void PObjInfoInit(void)
     hsdInitClassInfo(HSD_CLASS_INFO(&hsdPObj), HSD_CLASS_INFO(&hsdClass),
                      "sysdolphin_base_library", "hsd_pobj",
                      sizeof(HSD_PObjInfo), sizeof(HSD_PObj));
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    HSD_POBJ_INFO(&hsdPObj)->load = PObjLoad;
+#else
     HSD_CLASS_INFO(&hsdPObj)->release = PObjRelease;
     HSD_CLASS_INFO(&hsdPObj)->amnesia = PObjAmnesia;
     HSD_POBJ_INFO(&hsdPObj)->disp = HSD_PObjDisp;
     HSD_POBJ_INFO(&hsdPObj)->setup_mtx = PObjSetupMtx;
     HSD_POBJ_INFO(&hsdPObj)->load = PObjLoad;
+#endif
 }

@@ -60,7 +60,10 @@ u32 OSGetConsoleSimulatedMemSize(void);
 #define OS_BASE_CACHED (OS_CACHED_REGION_PREFIX << 16)
 #define OS_BASE_UNCACHED (OS_UNCACHED_REGION_PREFIX << 16)
 
-#if defined(__MWERKS__) && !defined(M2CTX)
+#if defined(MELEE_VITA_PLATFORM)
+extern u32 __OSBusClock;
+extern u32 __OSCoreClock;
+#elif defined(__MWERKS__) && !defined(M2CTX)
 u32 __OSPhysicalMemSize : (OS_BASE_CACHED | 0x0028);
 volatile int __OSTVMode : (OS_BASE_CACHED | 0x00CC);
 OSThread* __gUnkThread1 : (OS_BASE_CACHED | 0x00D8);

@@ -60,6 +60,7 @@ void db_GetGameLaunchButtonState(void)
     }
 }
 
+#ifndef MELEE_VITA_BOOT_PROBE
 void db_Setup(void)
 {
     int i;
@@ -254,3 +255,4 @@ void db_RunEveryFrame(void)
         fn_Check5xSpeed(i);
     }
 }
+#endif

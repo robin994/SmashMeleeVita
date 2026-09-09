@@ -124,9 +124,137 @@ static void init_spr_unk(void)
 
 #ifdef __GNUC__
 /// stub function auto-called from main to set up EABI environment
+#ifndef MELEE_VITA_BOOT_PROBE
 void __eabi(void) {}
 #endif
+#endif
 
+#ifdef MELEE_VITA_BOOT_PROBE
+/*
+ * PS Vita bring-up entry that deliberately executes the original gmmain.c
+ * boot prefix with native platform adapters.  It stops before HSD/GX setup:
+ * those services are promoted only when their Vita implementations have been
+ * validated.  Keeping this function in gmmain.c makes the ordering and debug
+ * level logic identical to the game instead of duplicating it in the viewer.
+ *
+ * out[0] = launch pad state
+ * out[1] = resolved DbLevel
+ * out[2] = develop.ini present
+ * out[3] = arena bytes after the original 48 MiB reservation rule
+ * out[4] = seed/tick selected by the original boot
+ * out[5] = simulated console memory bytes
+ */
+int gmMain_VitaBootProbe(u32 out[6])
+{
+    if (out == NULL) {
+        return -1;
+    }
+
+    OSInit();
+    VIInit();
+    DVDInit();
+    PADInit();
+    CARDInit();
+    OSInitAlarm();
+    db_GetGameLaunchButtonState();
+    gmMain_8015FDA4();
+
+    if (OSGetConsoleSimulatedMemSize() / (1024 * 1024) == 48) {
+        if (OSAllocFromArenaHi(0x01800000, 4) == NULL) {
+            return -2;
+        }
+    }
+    arena_size = (intptr_t) OSGetArenaHi() - (intptr_t) OSGetArenaLo();
+    *seed_ptr = OSGetTick();
+
+    out[0] = db_gameLaunchButtonState;
+    out[1] = (u32) DbLevel;
+    out[2] = db_804D6B20 ? 1 : 0;
+    out[3] = arena_size;
+    out[4] = *seed_ptr;
+    out[5] = OSGetConsoleSimulatedMemSize();
+    return 0;
+}
+
+int gmMain_VitaPostHsdProbe(u32 out[1])
+{
+    if (out == NULL) {
+        return -1;
+    }
+    GXSetMisc(GX_MT_XF_FLUSH, 8);
+    *seed_ptr = OSGetTick();
+    lbAudioAx_8002838C();
+    out[0] = *seed_ptr;
+    return 0;
+}
+
+int gmMain_VitaPostAudioProbe(u32 out[1])
+{
+    u32 stages = 0;
+    if (out == NULL) {
+        return -1;
+    }
+
+    lb_80019AAC(&gmMain_8015FD24);
+    stages |= 1u << 0;
+    HSD_VISetUserPostRetraceCallback(&gmMain_8015FDA0);
+    HSD_VISetUserGXDrawDoneCallback(&HSD_VIDrawDoneXFB);
+    stages |= 1u << 1;
+    HSD_VISetBlack(0);
+    stages |= 1u << 2;
+    lbMemory_8001564C();
+    stages |= 1u << 3;
+    lbHeap_80015F3C();
+    stages |= 1u << 4;
+    lbDvd_80018F68();
+    stages |= 1u << 5;
+    lbArq_80014D2C();
+    stages |= 1u << 6;
+
+    out[0] = stages;
+    return 0;
+}
+
+int gmMain_VitaServicesProbe(u32 out[1])
+{
+    u32 stages = 0;
+    if (out == NULL) {
+        return -1;
+    }
+
+    lb_8001C5BC();
+    stages |= 1u << 0;
+    out[0] = stages;
+    lb_8001D21C();
+    stages |= 1u << 1;
+    out[0] = stages;
+    lbSnap_8001E290();
+    stages |= 1u << 2;
+    out[0] = stages;
+    gmMainLib_8015FCC0();
+    stages |= 1u << 3;
+    out[0] = stages;
+    lbMthp_8001F87C();
+    stages |= 1u << 4;
+    out[0] = stages;
+    HSD_SisLib_803A6048(0xC000);
+    stages |= 1u << 5;
+
+    out[0] = stages;
+    return 0;
+}
+
+int gmMain_VitaFinalInitProbe(u32 out[1])
+{
+    if (out == NULL) {
+        return -1;
+    }
+    out[0] = 0;
+    gmMainLib_8015FBA4();
+    out[0] = 1;
+    return 0;
+}
+#else
 int main(void)
 {
     char* unused_format_string = "Data %lx\n";
@@ -218,3 +346,4 @@ int main(void)
     db_ClearFPUExceptions();
     gm_801A4510();
 }
+#endif

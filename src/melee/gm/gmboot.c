@@ -31,6 +31,28 @@ struct leaveData {
 static struct loadData load_data;
 static struct leaveData leave_data;
 
+#ifdef MELEE_VITA_BOOT_PROBE
+int gm_VitaBootStateProbe(u32 out[4])
+{
+    GameModeState state = { 0 };
+    if (out == NULL) {
+        return -1;
+    }
+
+    state.id = 0;
+    state.info.scene_kind = GS_MEMCARD;
+    state.info.enter_data = &load_data;
+    state.info.exit_data = &leave_data;
+    bootOnLoad(&state);
+
+    out[0] = GM_BOOT;
+    out[1] = state.info.scene_kind;
+    out[2] = load_data.mode_id;
+    out[3] = gmMainLib_8046B0F0.skip_intro ? 1 : 0;
+    return 0;
+}
+#endif
+
 GameModeState gm_Mode_Boot_States[] = {
     {
         0,

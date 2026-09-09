@@ -211,6 +211,10 @@ static void HSD_VICopyEFB2XFBHiResoAA(GXRenderModeObj* rmode)
 
 void HSD_VICopyEFB2XFBPtr(HSD_VIStatus* vi, void* buffer, HSD_RenderPass rpass)
 {
+#ifdef MELEE_VITA_INIT_PROBE
+    extern void mv_vi_boot_copy(const void*, void*, int);
+    mv_vi_boot_copy(vi, buffer, rpass);
+#else
     GXRenderModeObj* rmode = &vi->rmode;
     int n_xfb_lines;
     u16 lines;
@@ -262,6 +266,7 @@ void HSD_VICopyEFB2XFBPtr(HSD_VIStatus* vi, void* buffer, HSD_RenderPass rpass)
     }
 
     GXPixModeSync();
+#endif
 }
 
 void HSD_VIGXSetDrawDone(int arg)

@@ -342,8 +342,12 @@ static void DObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_dobj",
                      sizeof(HSD_DObjInfo), sizeof(HSD_DObj));
 
+#ifdef MELEE_VITA_HSD_LOAD_ONLY
+    HSD_DOBJ_INFO(&hsdDObj)->load = DObjLoad;
+#else
     HSD_CLASS_INFO(&hsdDObj)->release = DObjRelease;
     HSD_CLASS_INFO(&hsdDObj)->amnesia = DObjAmnesia;
     HSD_DOBJ_INFO(&hsdDObj)->disp = HSD_DObjDisp;
     HSD_DOBJ_INFO(&hsdDObj)->load = DObjLoad;
+#endif
 }

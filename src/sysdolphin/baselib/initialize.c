@@ -11,6 +11,7 @@
 #include "list.h"
 #include "lobj.h"
 #include "mtx.h"
+#include "memory.h"
 #include "objalloc.h"
 #include "random.h"
 #include "robj.h"
@@ -47,8 +48,15 @@ static int iparam_heap_max_num = 4;
 static u32 iparam_audio_heap_size = HSD_DEFAULT_AUDIO_SIZE;
 static GXColor HSD_Init_804D5E1C = { 0 };
 
+#ifdef MELEE_VITA_INIT_PROBE
+#define HSD_INIT_TRACE(stage) OSReport("HSD_COMPONENT_BEGIN " stage "\n")
+#else
+#define HSD_INIT_TRACE(stage) ((void)0)
+#endif
+
 void HSD_InitComponent(void)
 {
+    HSD_INIT_TRACE("OS");
     HSD_OSInit();
     {
         HSD_VIStatus vi_status;
@@ -64,16 +72,24 @@ void HSD_InitComponent(void)
         vi_status.update_alpha = GX_ENABLE;
         vi_status.update_z = GX_ENABLE;
 
+        HSD_INIT_TRACE("VI");
         HSD_VIInit(&vi_status, FrameBuffer[0], FrameBuffer[1], FrameBuffer[2]);
     }
 
+    HSD_INIT_TRACE("GX");
     HSD_GXInit();
+    HSD_INIT_TRACE("DVD");
     HSD_DVDInit();
+    HSD_INIT_TRACE("ID");
     HSD_IDSetup();
+    HSD_INIT_TRACE("RETRACE");
     VIWaitForRetrace();
+    HSD_INIT_TRACE("OBJECTS");
     HSD_ObjInit();
+    HSD_INIT_TRACE("LOG");
     HSD_LogInit();
     init_done = true;
+    HSD_INIT_TRACE("COMPLETE");
 }
 
 void HSD_GXSetFifoObj(GXFifoObj* fifo)
@@ -273,6 +289,78 @@ void HSD_ObjInit(void)
     HSD_ShadowInitAllocData();
     HSD_ZListInitAllocData();
 }
+
+#ifdef MELEE_VITA_INIT_PROBE
+int HSD_InitComponentVitaProbe(u32 out[6])
+{
+    enum {
+        HSD_VITA_STAGE_PARAMS = 1 << 0,
+        HSD_VITA_STAGE_OS = 1 << 1,
+        HSD_VITA_STAGE_HEAP_RW = 1 << 2,
+    };
+    u32 stages = 0;
+    void* next_lo;
+    void* next_hi;
+    void* heap_probe;
+    long heap_free_before;
+    long heap_free_during;
+    long heap_free;
+    long audio_free;
+
+    if (out == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < 6; ++i) {
+        out[i] = 0;
+    }
+
+    if (init_done) return -6;
+    if (!HSD_SetInitParameter(HSD_INIT_XFB_MAX_NUM, 2) ||
+        !HSD_SetInitParameter(HSD_INIT_FIFO_SIZE, 0x40000) ||
+        !HSD_SetInitParameter(HSD_INIT_HEAP_MAX_NUM, 4)) return -2;
+    HSD_SetInitParameter(HSD_INIT_RENDER_MODE_OBJ, &GXNtsc480IntDf);
+    stages |= HSD_VITA_STAGE_PARAMS;
+    /* Preserve the original gmmain allocation order before HSD_OSInit. */
+    HSD_AllocateXFB(2, &GXNtsc480IntDf);
+    HSD_GXSetFifoObj(GXInit(HSD_AllocateFifo(0x40000), 0x40000));
+    HSD_InitComponent();
+    if (HSD_GetHeap() < 0 || !init_done) return -3;
+    stages |= HSD_VITA_STAGE_OS;
+
+    heap_free_before = OSCheckHeap(HSD_GetHeap());
+    if (heap_free_before <= 0) {
+        return -4;
+    }
+    heap_probe = HSD_MemAlloc(64);
+    if (heap_probe == NULL) {
+        return -4;
+    }
+    heap_free_during = OSCheckHeap(HSD_GetHeap());
+    if (heap_free_during < 0 || heap_free_during >= heap_free_before) {
+        return -4;
+    }
+    HSD_Free(heap_probe);
+    heap_free = OSCheckHeap(HSD_GetHeap());
+    if (heap_free != heap_free_before) {
+        return -4;
+    }
+    stages |= HSD_VITA_STAGE_HEAP_RW;
+
+    HSD_GetNextArena(&next_lo, &next_hi);
+    audio_free = OSCheckHeap(HSD_Synth_804D6018);
+    if (heap_free < 0 || audio_free < 0 || next_hi < next_lo) {
+        return -5;
+    }
+
+    out[0] = (u32) HSD_GetHeap();
+    out[1] = (u32) heap_free;
+    out[2] = (u32) audio_free;
+    out[3] = (u32) ((uintptr_t) next_hi - (uintptr_t) next_lo);
+    out[4] = OSGetPhysicalMemSize();
+    out[5] = stages | 0x3f8; /* VI, GX boot state, DVD, ID, retrace, objects, log. */
+    return 0;
+}
+#endif
 
 #ifdef MUST_MATCH
 static char str_pix_fmt_neq_gx_pf_rgb565_z16[] = "pix_fmt != GX_PF_RGB565_Z16";
