@@ -93,7 +93,27 @@ typedef struct gmClassicSceneData {
 ASSERT_SIZE(gmClassicSceneData, 0x560);
 
 gmClassicIntroData gmClassicIntroDataBuffer;
+#ifdef MELEE_VITA_PLATFORM
+static gmClassicRuntimeData gmClassic_vita_runtime;
+#endif
 
+#ifdef MELEE_VITA_PLATFORM
+GameModeState gm_Mode_Classic_States[] = {
+    {
+        0, lbDvdPreload_3, 0, gmClassic_801B3500, NULL,
+        { GS_INTRO_EASY, &gmClassicIntroDataBuffer, &gmClassic_804D68D0 },
+    },
+    {
+        1, lbDvdPreload_3, 0, gmClassic_801B3A34, NULL,
+        { GS_VS, &gmClassic_80472AF8, &gmClassic_8047086C },
+    },
+    {
+        112, lbDvdPreload_3, 0, gmClassic_801B3DD8, gmClassic_801B3E44,
+        { GS_CSS, &gmClassic_80470708, &gmClassic_80470708 },
+    },
+    { -1 },
+};
+#else
 GameModeState gm_Mode_Classic_States[] = {
     {
         0,
@@ -398,6 +418,7 @@ GameModeState gm_Mode_Classic_States[] = {
     { -1 },
 };
 
+#endif
 static gmClassic_803DDEC8Data gmClassic_803DDEC8 = {
     {
         { 0x00, 0x00, 0, 0, 300, 0, 2 },
@@ -601,16 +622,22 @@ static gmClassicMatchupData gm_804D4328 = { { 0x053, { 0x21, 0x21, 0x21 }, 0 },
 
 static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
 {
+#ifdef MELEE_VITA_PLATFORM
+    gmClassicRuntimeData* o = &gmClassic_vita_runtime;
+    gmClassic_803DDEC8Data* matchups = &gmClassic_803DDEC8;
+#else
     gmClassicRuntimeData* o =
         (gmClassicRuntimeData*) &gmClassicIntroDataBuffer;
-    gm_803DDEC8Struct* ptr;
     gmClassicSceneData* scene_data =
         (gmClassicSceneData*) gm_Mode_Classic_States;
+    gmClassic_803DDEC8Data* matchups = &scene_data->matchups;
+#endif
+    gm_803DDEC8Struct* ptr;
 
     for (ptr = arg0; ptr->x0 != 0xD; ptr++) {
         if (ptr->x1 & 8) {
             gmClassicMatchup* result = gmClassic_801B2BA4(
-                scene_data->matchups.x2B0, o->state.order.x60, arg0);
+                matchups->x2B0, o->state.order.x60, arg0);
             if (result != NULL) {
                 ptr->xC = result;
             } else {
@@ -624,7 +651,7 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
         u8 flags = ptr->x1;
         if ((flags & 2) && !(flags & 0x20)) {
             gmClassicMatchup* result = gmClassic_801B2BA4(
-                scene_data->matchups.x26C, o->state.order.x54, arg0);
+                matchups->x26C, o->state.order.x54, arg0);
             if (result != NULL) {
                 ptr->xC = result;
             } else {
@@ -638,7 +665,7 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
         u8 flags = ptr->x1;
         if ((flags & 0x10) && !(flags & 0x20)) {
             gmClassicMatchup* result = gmClassic_801B2BA4(
-                scene_data->matchups.x1B8, o->state.order.x34, arg0);
+                matchups->x1B8, o->state.order.x34, arg0);
             if (result != NULL) {
                 ptr->xC = result;
             } else {
@@ -652,7 +679,7 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
         u8 flags = ptr->x1;
         if (flags == 0 || flags == 4) {
             gmClassicMatchup* result = gmClassic_801B2BA4(
-                scene_data->matchups.x0CC, o->state.order.x0C, arg0);
+                matchups->x0CC, o->state.order.x0C, arg0);
             if (result != NULL) {
                 ptr->xC = result;
             } else {
@@ -681,7 +708,7 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
 
     for (ptr = arg0; ptr->x0 != 0xD; ptr++) {
         if (ptr->x1 & 0x20) {
-            ptr->xC = scene_data->matchups.x0C0;
+            ptr->xC = matchups->x0C0;
             return ptr;
         }
     }
@@ -691,29 +718,52 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
 void gm_Mode_Classic_OnLoad(void)
 {
     UnkAllstarData* data;
+#ifdef MELEE_VITA_PLATFORM
+    gmClassicRuntimeData* o = &gmClassic_vita_runtime;
+    gmClassic_803DDEC8Data* matchups = &gmClassic_803DDEC8;
+    gmClassic_vita_runtime = (gmClassicRuntimeData) { 0 };
+#else
     gmClassicSceneData* scene_data =
         (gmClassicSceneData*) gm_Mode_Classic_States;
     gmClassicRuntimeData* o =
         (gmClassicRuntimeData*) &gmClassicIntroDataBuffer;
+    gmClassic_803DDEC8Data* matchups = &scene_data->matchups;
+#endif
     gm_803DDEC8Struct* entry;
     PAD_STACK(40);
 
-    for (entry = scene_data->matchups.x00; entry->x0 != 0x0D; entry++) {
+    for (entry = matchups->x00; entry->x0 != 0x0D; entry++) {
         entry->xC = NULL;
     }
 
-    gmClassic_InitMatchupOrder(scene_data->matchups.x2B0,
+#ifdef MELEE_VITA_PLATFORM
+    gmClassic_InitMatchupOrder(matchups->x2B0,
+                               (gmClassicOrderIndex*) o->state.order.x60,
+                               (gmClassicOrderIndex*) o, 0x80);
+    gmClassic_InitMatchupOrder(matchups->x26C,
+                               (gmClassicOrderIndex*) o->state.order.x54,
+                               (gmClassicOrderIndex*) o, 0x74);
+    gmClassic_InitMatchupOrder(matchups->x1B8,
+                               (gmClassicOrderIndex*) o->state.order.x34,
+                               (gmClassicOrderIndex*) o, 0x54);
+    gmClassic_InitMatchupOrder(matchups->x0CC,
+                               (gmClassicOrderIndex*) o->state.order.x0C,
+                               (gmClassicOrderIndex*) o, 0x2C);
+    memcpy(gm_804908A0, o->state.bytes, sizeof(gm_804908A0));
+#else
+    gmClassic_InitMatchupOrder(matchups->x2B0,
                                (gmClassicOrderIndex*) &gm_804908A0[0x60],
                                (gmClassicOrderIndex*) o, 0x80);
-    gmClassic_InitMatchupOrder(scene_data->matchups.x26C,
+    gmClassic_InitMatchupOrder(matchups->x26C,
                                (gmClassicOrderIndex*) &gm_804908A0[0x54],
                                (gmClassicOrderIndex*) o, 0x74);
-    gmClassic_InitMatchupOrder(scene_data->matchups.x1B8,
+    gmClassic_InitMatchupOrder(matchups->x1B8,
                                (gmClassicOrderIndex*) &gm_804908A0[0x34],
                                (gmClassicOrderIndex*) o, 0x54);
-    gmClassic_InitMatchupOrder(scene_data->matchups.x0CC,
+    gmClassic_InitMatchupOrder(matchups->x0CC,
                                (gmClassicOrderIndex*) &gm_804908A0[0x0C],
                                (gmClassicOrderIndex*) o, 0x2C);
+#endif
 
     data = gm_GetAllStarData();
     gmMainLib_8015CDC8();
@@ -961,12 +1011,18 @@ void gmClassic_801B3A34(GameModeState* arg0)
     temp_r29->x0.x9 = temp_r31->x2;
     temp_r29->x0.xB = temp_r31->x8;
     idx_val = (u16) gm_8017BE84(arg0->id) - 1;
+#ifdef MELEE_VITA_PLATFORM
+    temp_r28 = idx_val >= 0 ? gm_804908A0[idx_val] : 0;
+#else
     temp_r28 = gm_804908A0[idx_val];
+#endif
     sp8 = (u16) gm_8017BE84(arg0->id);
     spC = temp_r28;
     gm_8017CE34(new_var, &temp_r29->x0, temp_r31->xC->x02, temp_r31->x6, 1, 0,
                 temp_r31->x4, var_r27, sp8, spC);
+#ifndef MELEE_VITA_PLATFORM
     gm_LoadRumbleEnabled(new_var);
+#endif
 }
 
 void gmClassic_801B3B40(GameModeState* arg0)

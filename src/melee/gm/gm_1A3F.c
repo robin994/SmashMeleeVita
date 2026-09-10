@@ -237,6 +237,17 @@ void gm_ChangeGameModeAfterCurrentScene(int pending_mode)
     state_machine.pending_mode_change = true;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+void mv_gm_vita_enter_mode(int mode)
+{
+    HSD_ASSERT(0, mode >= 0 && mode < GM_COUNT);
+    state_machine.routing.prev_mode = state_machine.routing.curr_mode;
+    state_machine.routing.curr_mode = mode;
+    state_machine.routing.pending_mode = mode;
+    state_machine.pending_mode_change = false;
+}
+#endif
+
 u8 gm_GetCurrentGameMode(void)
 {
     return state_machine.routing.curr_mode;

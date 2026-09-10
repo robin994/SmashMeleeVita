@@ -176,3 +176,11 @@ void gm_Mode_LightningVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmlightning = {
+    GM_LIGHTNING_VS, "GM_LIGHTNING_VS", gm_Mode_LightningVs_OnInit, gm_Mode_LightningVs_OnLoad, gm_801BA704, gm_801BA730, gm_801BA758, gm_801BA780
+};
+#endif

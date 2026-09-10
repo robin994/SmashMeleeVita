@@ -64,7 +64,3 @@ void HSD_LogInit(void)
     if (runtime_log) { fprintf(runtime_log, "HSD_LOG_INIT_PASS backend=newlib\n"); fflush(runtime_log); }
 }
 
-/* Original hsd_3A76.c archive bridge, isolated from the text renderer. */
-#include <melee/lb/lbarchive.h>
-HSD_Archive* HSD_SisLib_803A945C(char* path)
-{ return lbArchive_LoadArchive(path); }

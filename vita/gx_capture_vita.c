@@ -327,10 +327,53 @@ static int uv_mtx_identity(const float m[2][3], uint8_t valid)
         {1.0f, 0.0f, 0.0f},
         {0.0f, 1.0f, 0.0f},
     };
-    if (!valid) return 0;
+    /* HSD only materializes a texture matrix when it differs from the default.
+     * No captured matrix therefore means the identity transform. */
+    if (!valid) return 1;
     for (unsigned r = 0; r < 2; ++r)
         for (unsigned c = 0; c < 3; ++c)
             if (fabsf(m[r][c] - expected[r][c]) > 1.0e-6f) return 0;
+    return 1;
+}
+
+static int uv_mtx_finite(const float m[2][3], uint8_t valid)
+{
+    if (!valid) return 1;
+    for (unsigned r = 0; r < 2; ++r)
+        for (unsigned c = 0; c < 3; ++c)
+            if (!isfinite(m[r][c])) return 0;
+    return 1;
+}
+
+int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)
+{
+    if (!m || m->texture_count != 2 || !m->image || !m->image1 ||
+        !m->width || !m->height || !m->width1 || !m->height1)
+        return 0;
+    if ((m->unsupported & ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) != 0)
+        return 0;
+    if ((m->tobj_flags & 0x0fu) != 0 || (m->tobj1_flags & 0x0fu) != 0)
+        return 0;
+    if (((m->tobj_flags >> 16) & 0x0fu) != 4u ||
+        ((m->tobj_flags >> 20) & 0x0fu) != 3u ||
+        ((m->tobj1_flags >> 16) & 0x0fu) != 4u ||
+        (((m->tobj1_flags >> 20) & 0x0fu) != 0u &&
+         ((m->tobj1_flags >> 20) & 0x0fu) != 3u))
+        return 0;
+    if ((m->tobj_flags & (1u << 24)) || (m->tobj1_flags & (1u << 24)))
+        return 0;
+    if (fabsf(m->blending - 1.0f) > 1.0e-6f ||
+        fabsf(m->blending1 - 1.0f) > 1.0e-6f)
+        return 0;
+    if (!uv_mtx_finite(m->uv_mtx, m->uv_mtx_valid) ||
+        !uv_mtx_finite(m->uv_mtx1, m->uv_mtx1_valid))
+        return 0;
+    if (m->wrap_s > GX_MIRROR || m->wrap_t > GX_MIRROR ||
+        m->wrap_s1 > GX_MIRROR || m->wrap_t1 > GX_MIRROR ||
+        m->mag_filter != GX_LINEAR || m->mag_filter1 != GX_LINEAR)
+        return 0;
+    if ((m->tev_valid && m->tev_active) || (m->tev1_valid && m->tev1_active))
+        return 0;
     return 1;
 }
 
@@ -340,16 +383,17 @@ int mv_gx_material_multitex_offscreen_bakeable(const MvGxMaterialState *m)
         !m->width || !m->height || !m->width1 || !m->height1)
         return 0;
 
-    /* Keep this deliberately tied to the one graph actually emitted by
-     * MenMainBack command 7. Independent bilinear samples must stay separate;
-     * the replay combines them in an offscreen GXM target instead of baking
-     * both source images into one texture. */
+    /* HSD's common two-layer MODULATE graph is used by MenMainBack and by
+     * almost the entire GmTtAll title background.  Independent bilinear
+     * samples stay separate; the replay combines both texture units at draw
+     * time rather than baking them into one image. */
     if ((m->unsupported & ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) != 0) return 0;
     if ((m->tobj_flags & 0x0fu) != 0 || (m->tobj1_flags & 0x0fu) != 0) return 0;
     if (((m->tobj_flags >> 16) & 0x0fu) != 4u ||
         ((m->tobj_flags >> 20) & 0x0fu) != 3u ||
         ((m->tobj1_flags >> 16) & 0x0fu) != 4u ||
-        ((m->tobj1_flags >> 20) & 0x0fu) != 0u)
+        (((m->tobj1_flags >> 20) & 0x0fu) != 0u &&
+         ((m->tobj1_flags >> 20) & 0x0fu) != 3u))
         return 0;
     if ((m->tobj_flags & (1u << 24)) || (m->tobj1_flags & (1u << 24))) return 0;
     if (fabsf(m->blending - 1.0f) > 1.0e-6f ||
@@ -628,6 +672,35 @@ void GXCallDisplayList(void *list, u32 nbytes)
                 ++stats.errors;
                 return;
             }
+        }
+        if (command->attr_mask & (1u << GX_VA_PNMTXIDX)) {
+            for (uint16_t i = 0; i < count; ++i) {
+                MvGxCaptureVertex *vertex = &vertices[stats.vertices + i];
+                int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
+                if (vertex_slot < 0) {
+                    ++stats.errors;
+                    return;
+                }
+                float x = vertex->position[0];
+                float y = vertex->position[1];
+                float z = vertex->position[2];
+                vertex->position[0] = pos_mtx[vertex_slot][0][0] * x +
+                                      pos_mtx[vertex_slot][0][1] * y +
+                                      pos_mtx[vertex_slot][0][2] * z +
+                                      pos_mtx[vertex_slot][0][3];
+                vertex->position[1] = pos_mtx[vertex_slot][1][0] * x +
+                                      pos_mtx[vertex_slot][1][1] * y +
+                                      pos_mtx[vertex_slot][1][2] * z +
+                                      pos_mtx[vertex_slot][1][3];
+                vertex->position[2] = pos_mtx[vertex_slot][2][0] * x +
+                                      pos_mtx[vertex_slot][2][1] * y +
+                                      pos_mtx[vertex_slot][2][2] * z +
+                                      pos_mtx[vertex_slot][2][3];
+            }
+            memset(command->pos_mtx, 0, sizeof(command->pos_mtx));
+            command->pos_mtx[0][0] = 1.0f;
+            command->pos_mtx[1][1] = 1.0f;
+            command->pos_mtx[2][2] = 1.0f;
         }
         ++stats.commands;
         stats.vertices += count;

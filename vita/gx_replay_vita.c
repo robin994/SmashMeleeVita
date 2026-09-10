@@ -56,28 +56,35 @@ typedef struct {
     float right[3], up[3], forward[3];
 } MvReplayCameraBasis;
 
-static int command_supported(const MvGxCaptureCommand *command)
+static int command_supported(const MvGxCaptureCommand *command, int relaxed)
 {
     if (!command) return 0;
     if (!pe_supported(&command->material)) return 0;
     const uint32_t replay_bakeable = MV_GX_MATERIAL_UNSUPPORTED_COLORMAP |
                                      MV_GX_MATERIAL_UNSUPPORTED_ALPHAMAP;
     uint32_t unsupported = command->material.unsupported;
-    if (unsupported & MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) {
-        if (!mv_gx_material_multitex_offscreen_bakeable(&command->material)) return 0;
+    if (relaxed) {
+        /* TtlMoji compatibility bridge: preserve the first HSD texture layer
+         * until all title TEV/MatAnim stages have native Vita equivalents. */
         unsupported &= ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
-    }
-    if (unsupported & MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV) {
-        if (!mv_gx_material_custom_tev_cpu_bakeable(&command->material)) return 0;
         unsupported &= ~MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV;
+    } else {
+        if (unsupported & MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) {
+            if (!mv_gx_material_multitex_offscreen_bakeable(&command->material)) return 0;
+            unsupported &= ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
+        }
+        if (unsupported & MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV) {
+            if (!mv_gx_material_custom_tev_cpu_bakeable(&command->material)) return 0;
+            unsupported &= ~MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV;
+        }
     }
     if (unsupported & ~replay_bakeable) return 0;
     if (!(command->attr_mask & (1u << MV_GX_VA_POS))) return 0;
     if (command->material.texture_count) {
         if (!command->material.image || !command->material.width || !command->material.height ||
-            !(command->attr_mask & (1u << MV_GX_VA_TEX0)) ||
-            (command->attr_mask & (1u << MV_GX_VA_CLR0))) return 0;
-        if (command->material.texture_count > 2) return 0;
+            !(command->attr_mask & (1u << MV_GX_VA_TEX0))) return 0;
+        if (!relaxed && (command->attr_mask & (1u << MV_GX_VA_CLR0))) return 0;
+        if (!relaxed && command->material.texture_count > 2) return 0;
     }
     return 1;
 }
@@ -205,17 +212,15 @@ static size_t clip_depth(const MvReplayCameraVertex *input, size_t count,
 
 static void viewport(const MvCamera *camera, float *x, float *y, float *w, float *h)
 {
-    const float box_x = 35.0f, box_y = 88.0f, box_w = 890.0f, box_h = 390.0f;
-    float aspect = camera->aspect;
-    if (camera->projection_type != 1 || aspect <= 0.0f) {
-        int width = camera->viewport_xmax - camera->viewport_xmin;
-        int height = camera->viewport_ymax - camera->viewport_ymin;
-        aspect = height > 0 ? (float)width / (float)height : 4.0f / 3.0f;
+    float aspect = camera && camera->aspect > 0.0f ? camera->aspect : (4.0f / 3.0f);
+    *h = (float)MV_GX_REPLAY_TARGET_HEIGHT;
+    *w = *h * aspect;
+    if (*w > (float)MV_GX_REPLAY_TARGET_WIDTH) {
+        *w = (float)MV_GX_REPLAY_TARGET_WIDTH;
+        *h = *w / aspect;
     }
-    *w = box_w; *h = *w / aspect;
-    if (*h > box_h) { *h = box_h; *w = *h * aspect; }
-    *x = box_x + (box_w - *w) * 0.5f;
-    *y = box_y + (box_h - *h) * 0.5f;
+    *x = ((float)MV_GX_REPLAY_TARGET_WIDTH - *w) * 0.5f;
+    *y = ((float)MV_GX_REPLAY_TARGET_HEIGHT - *h) * 0.5f;
 }
 
 static int project(const MvCamera *camera, const MvReplayCameraVertex *source,
@@ -338,14 +343,16 @@ static int material_needs_bake(const MvGxMaterialState *material)
 {
     unsigned colormap = (material->tobj_flags >> 16) & 0xfu;
     unsigned alphamap = (material->tobj_flags >> 20) & 0xfu;
-    return (material->tev_valid && material->tev_active != 0) ||
+    return (material->tev_valid && material->tev_active != 0 &&
+            mv_gx_material_custom_tev_cpu_bakeable(material)) ||
            !((colormap == 4u || colormap == 5u) &&
              (alphamap == 3u || alphamap == 4u));
 }
 
 static void bake_custom_tev_pixel(const MvGxMaterialState *material, uint8_t rgba[4])
 {
-    if (!material->tev_valid || material->tev_active == 0) return;
+    if (!material->tev_valid || material->tev_active == 0 ||
+        !mv_gx_material_custom_tev_cpu_bakeable(material)) return;
 
     /* The narrow matcher in mv_gx_material_custom_tev_cpu_bakeable guarantees
      * the exact MenMainBack stage: ADD, no bias, scale 1, clamp, with
@@ -845,11 +852,13 @@ static int render_multitex_frame0(MvGxReplay *replay, const MvCamera *camera,
     return 0;
 }
 
-int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
+static int mv_gx_replay_init_internal(MvGxReplay *replay, const MvCamera *camera, FILE *log,
+                                      uint32_t relaxed_from_command)
 {
     if (!replay || !camera) return -1;
     memset(replay, 0, sizeof(*replay));
     replay->log = log;
+    replay->relaxed_from_command = relaxed_from_command;
     replay->multitex_command = UINT32_MAX;
     replay->multitex_texture0 = UINT32_MAX;
     replay->multitex_texture1 = UINT32_MAX;
@@ -860,7 +869,8 @@ int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
 
     for (uint32_t i = 0; i < command_count; ++i) {
         const MvGxCaptureCommand *command = &commands[i];
-        if (!command_supported(command) || !command->material.texture_count) continue;
+        if (!command_supported(command, i >= replay->relaxed_from_command) ||
+            !command->material.texture_count) continue;
         if (command->material.pe_dst_factor == 5u) ++replay->pe_alpha_commands;
         else if (command->material.pe_dst_factor == 1u) ++replay->pe_additive_commands;
         if (command->cull_mode == MV_GX_CULL_NONE) ++replay->pe_cull_none_commands;
@@ -874,7 +884,8 @@ int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
             ++replay->wrap_clamp_commands;
         MvGxReplayTexture *entry = prepare_texture(replay, &command->material, i);
         if (!entry) continue;
-        if (command->material.texture_count == 2) {
+        if (command->material.texture_count == 2 &&
+            mv_gx_material_multitex_offscreen_bakeable(&command->material)) {
             if (replay->multitex_command != UINT32_MAX) {
                 if (log) fprintf(log, "GX_MULTITEX_INIT_FAIL reason=multiple_commands\n");
                 ++replay->texture_failures;
@@ -889,10 +900,19 @@ int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
             replay->multitex_texture1 = (uint32_t)(entry1 - replay->textures);
         }
     }
-    if (replay->multitex_command != UINT32_MAX && replay->texture_failures == 0) {
+    /* PE blend programs are required by every textured replay command, not
+     * only by the optional two-texture path. The old viewer always happened
+     * to contain one multitexture command, masking this dependency; GmTtAll
+     * does not, so pe_ready stayed false and rejected a valid title capture. */
+    if (replay->texture_count != 0 && replay->texture_failures == 0) {
+        if (init_multitex_programs(replay)) {
+            if (log) fprintf(log, "GX_PE_PROGRAM_FAIL stage=init backend=GXM\n");
+        }
+    }
+    if (replay->multitex_command != UINT32_MAX && replay->texture_failures == 0 &&
+        replay->pe_ready) {
         const MvGxCaptureCommand *command = &commands[replay->multitex_command];
-        if (init_multitex_programs(replay) ||
-            render_multitex_frame0(replay, camera, command, vertices, vertex_count)) {
+        if (render_multitex_frame0(replay, camera, command, vertices, vertex_count)) {
             if (log) fprintf(log, "GX_MULTITEX_INIT_FAIL command=%u backend=GXMOffscreen\n",
                              replay->multitex_command);
             replay->multitex_ready = 0;
@@ -930,6 +950,17 @@ int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
     return replay->ready ? 0 : -1;
 }
 
+int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log)
+{
+    return mv_gx_replay_init_internal(replay, camera, log, UINT32_MAX);
+}
+
+int mv_gx_replay_init_relaxed_from(MvGxReplay *replay, const MvCamera *camera, FILE *log,
+                                   uint32_t relaxed_from_command)
+{
+    return mv_gx_replay_init_internal(replay, camera, log, relaxed_from_command);
+}
+
 void mv_gx_replay_draw(MvGxReplay *replay, const MvCamera *camera)
 {
     if (!replay || !replay->ready || !camera) return;
@@ -960,13 +991,15 @@ void mv_gx_replay_draw(MvGxReplay *replay, const MvCamera *camera)
     uint32_t culled_triangles = replay->pe_culled_triangles;
     for (uint32_t ci = 0; ci < command_count; ++ci) {
         const MvGxCaptureCommand *command = &commands[ci];
-        if (!command_supported(command) || command->first_vertex > vertex_count ||
+        if (!command_supported(command, ci >= replay->relaxed_from_command) ||
+            command->first_vertex > vertex_count ||
             command->vertex_count > vertex_count - command->first_vertex) continue;
         const MvGxCaptureVertex *source = vertices + command->first_vertex;
         _vita2d_textureTintFragmentProgram =
             command->material.pe_dst_factor == 1u ? replay->pe_additive_program :
                                                      replay->pe_alpha_program;
-        if (command->material.texture_count == 2) {
+        if (command->material.texture_count == 2 &&
+            mv_gx_material_multitex_offscreen_bakeable(&command->material)) {
             if (replay->multitex_ready && ci == replay->multitex_command &&
                 replay->multitex_target) {
                 input_triangles += command->triangle_count;

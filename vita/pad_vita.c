@@ -19,8 +19,8 @@ static s8 axis(unsigned value, int inverted)
 void melee_vita_map_pad(const SceCtrlData* source, PADStatus* destination)
 {
     static const struct { unsigned vita; u16 gc; } buttons[] = {
-        { SCE_CTRL_CROSS, PAD_BUTTON_A }, { SCE_CTRL_SQUARE, PAD_BUTTON_B },
-        { SCE_CTRL_CIRCLE, PAD_BUTTON_X }, { SCE_CTRL_TRIANGLE, PAD_BUTTON_Y },
+        { SCE_CTRL_CROSS, PAD_BUTTON_A }, { SCE_CTRL_CIRCLE, PAD_BUTTON_B },
+        { SCE_CTRL_SQUARE, PAD_BUTTON_X }, { SCE_CTRL_TRIANGLE, PAD_BUTTON_Y },
         { SCE_CTRL_LTRIGGER, PAD_TRIGGER_L }, { SCE_CTRL_RTRIGGER, PAD_TRIGGER_R },
         { SCE_CTRL_SELECT, PAD_TRIGGER_Z }, { SCE_CTRL_START, PAD_BUTTON_START },
         { SCE_CTRL_UP, PAD_BUTTON_UP }, { SCE_CTRL_DOWN, PAD_BUTTON_DOWN },

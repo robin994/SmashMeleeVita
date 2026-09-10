@@ -238,7 +238,14 @@ bool lb_800144C8(ColorOverlay* arg0, Fighter_804D653C_t* arg1, int arg2,
 
 void lb_80014534(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Direct scene bootstrap does not need the full DVD preload cache here.
+     * Load the same archive/symbol directly so rumble feedback keeps the
+     * original data without retaining stage/effect preload callbacks. */
+    lbArchive_LoadSymbols("LbRb.dat", &lb_804D63C0, "lbRumbleData", NULL);
+#else
     lbArchive_80017040(NULL, "LbRb.dat", &lb_804D63C0, "lbRumbleData", 0);
+#endif
 }
 
 void lb_80014574(u8 arg0, int arg1, int arg2, int arg3)

@@ -183,3 +183,11 @@ void gm_Mode_SingleButtonVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmsinglebutton = {
+    GM_SINGLE_BUTTON_VS, "GM_SINGLE_BUTTON_VS", gm_Mode_SingleButtonVs_OnInit, gm_Mode_SingleButtonVs_OnLoad, gm_801BA10C, gm_801BA138, gm_801BA160, gm_801BA188
+};
+#endif

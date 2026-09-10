@@ -1,5 +1,9 @@
 #include "gmtitle.h"
 
+#ifdef MELEE_VITA_PLATFORM
+#include "title_boot_vita.h"
+#endif
+
 #include "gm_unsplit.h"
 #include "gmevent.h"
 #include "gmmain_lib.h"
@@ -90,11 +94,18 @@ static void fn_801A1498_inline(void)
                        model_desc_1.matanim_joint,
                        model_desc_1.shapeanim_joint);
     HSD_GObj_SetupProc(gobj, gmTitle_801A146C, 0);
+#ifdef MELEE_VITA_PLATFORM
+    /* Direct GM_TITLE Vita boot follows the same branch as the original title
+     * mode. MatAnim/TexAnim descriptors are native now, so keep advancing the
+     * real HSD graph instead of freezing the background at its first sample. */
+    HSD_JObjReqAnimAll(jobj, 130.0F);
+#else
     if (isActiveTitle()) {
         HSD_JObjReqAnimAll(jobj, loop_settings_1.start_frame);
     } else {
         HSD_JObjReqAnimAll(jobj, 130.0F);
     }
+#endif
     HSD_JObjAnimAll(jobj);
 }
 
@@ -141,6 +152,11 @@ HSD_GObj* gmTitle_801A165C(void)
     HSD_JObjAddAnimAll(jobj, model_desc_0.animjoint,
                        model_desc_0.matanim_joint,
                        model_desc_0.shapeanim_joint);
+#ifdef MELEE_VITA_PLATFORM
+    HSD_JObjReqAnimAll(jobj, 400.0F);
+    HSD_GObj_SetupProc(gobj, gmTitle_801A1630, 0);
+    HSD_JObjAnimAll(jobj);
+#else
     if (isActiveTitle()) {
         bg_initialized = GX_FALSE;
         HSD_JObjReqAnimAll(jobj, loop_settings_0.start_frame);
@@ -166,6 +182,7 @@ HSD_GObj* gmTitle_801A165C(void)
         }
     }
     gm_SetupTitleDemo();
+#endif
     return gobj;
 }
 
@@ -189,6 +206,11 @@ void gmTitle_801A185C(void)
 
 static void gmTitle_801A18D4(HSD_GObj* gobj, int unused)
 {
+#ifdef MELEE_VITA_PLATFORM
+    if (HSD_CObjSetCurrent(GET_COBJ(gobj))) {
+        HSD_CObjEndCurrent();
+    }
+#else
     GXColor erase_color = fog_desc->color;
     if (HSD_CObjSetCurrent(GET_COBJ(gobj))) {
         HSD_SetEraseColor(erase_color.r, erase_color.g, erase_color.b,
@@ -196,6 +218,7 @@ static void gmTitle_801A18D4(HSD_GObj* gobj, int unused)
         HSD_CObjEraseScreen(GET_COBJ(gobj), 1, 0, 1);
         HSD_CObjEndCurrent();
     }
+#endif
 }
 
 void gmTitle_801A1944(void)
@@ -208,11 +231,17 @@ void gmTitle_801A1944(void)
 
 void gmTitle_801A19AC(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Lighting descriptors are still GameCube-endian. The title materials
+     * themselves are native and can render without a Light GObj for v2.7. */
+    return;
+#else
     HSD_GObj* gobj = GObj_Create(HSD_GOBJ_CLASS_LIGHT, 3, 128);
     HSD_LObj* lobj = lb_80011AC4(list_list);
     PAD_STACK(4);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_LightKind, lobj);
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
+#endif
 }
 
 static void gmTitle_801A1A18(HSD_GObj* gobj)
@@ -222,16 +251,28 @@ static void gmTitle_801A1A18(HSD_GObj* gobj)
 
 HSD_GObj* gmTitle_801A1A3C(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    return NULL;
+#else
     HSD_GObj* gobj = GObj_Create(HSD_GOBJ_CLASS_FOG, 3, 0);
     HSD_Fog* fog = HSD_FogLoadDesc(fog_desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_FogKind, fog);
     GObj_SetupGXLink(gobj, HSD_GObj_FogCallback, 0, 0);
     HSD_GObj_SetupProc(gobj, gmTitle_801A1A18, 0);
     return gobj;
+#endif
 }
 
 HSD_Archive* gmTitle_801A1AC0(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    int result = mv_title_vita_prepare(&model_desc_0, &model_desc_1, &cobj_desc);
+    HSD_ASSERTREPORT(0x100, result == 0, "Vita GmTtAll native conversion failed\n");
+    list_list = NULL;
+    fog_desc = NULL;
+    gm_804D67F0 = NULL;
+    return NULL;
+#else
     const char dat[] = "GmTtAll.dat";
     const char usd[] = "GmTtAll.usd";
 
@@ -250,6 +291,7 @@ HSD_Archive* gmTitle_801A1AC0(void)
         "TtlBg_Top_shapeanim_joint",
 
         &gm_804D67F0, "TitleMark_sobjdesc", 0);
+#endif
 }
 
 void gm_Scene_Title_OnFrame(void)
@@ -261,11 +303,14 @@ void gm_Scene_Title_OnFrame(void)
         return;
     }
     frame_count++;
+#ifndef MELEE_VITA_PLATFORM
     if (frame_count > 600) {
         tmp = gm_GetCurrentSceneExitData();
         *tmp = 0;
         gm_801A4B60();
-    } else if (input & HSD_PAD_START) {
+    } else
+#endif
+    if (input & HSD_PAD_START) {
         lbAudioAx_80026F2C(0x1C);
         lbAudioAx_8002702C(0xC, 0);
         lbAudioAx_80027168();
@@ -349,10 +394,13 @@ void gm_Scene_Title_OnEnter(void* unused)
     gmTitle_801A165C();
 
     lbAudioAx_80027648();
+#ifndef MELEE_VITA_PLATFORM
     gm_PreloadTitleDemo();
+#endif
 
     fn_801A1498_inline();
 
+#ifndef MELEE_VITA_PLATFORM
     // Debug shows the build timestamp on the title screen
     if (DbLevel >= DbLKind_NoDebugRom) {
         HSD_SisLib_803A611C(0, NULL, 9, 0xD, 0, 0xE, 0, 0x13);
@@ -363,4 +411,5 @@ void gm_Scene_Title_OnEnter(void* unused)
         text->default_kerning = 1;
         HSD_SisLib_803A7548(text, scale, 0.7f, 0.55f);
     }
+#endif
 }

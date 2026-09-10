@@ -75,6 +75,9 @@ u64 lbAudioAx_80026EBC(StKind);
 void lbAudioAx_80026F2C(u32);
 void lbAudioAx_8002702C(u32 flags, u64 mask);
 void lbAudioAx_80027168(void);
+#ifdef MELEE_VITA_PLATFORM
+void lbAudioAx_VitaSfxStateTrace(const char* tag);
+#endif
 void lbAudioAx_80027648(void);
 void lbAudioAx_8002785C(void);
 void lbAudioAx_80027AB0(int);

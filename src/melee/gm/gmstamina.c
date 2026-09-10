@@ -231,3 +231,11 @@ void fn_801B9850(void)
     }
     HSD_GObj_SetupProc(GObj_Create(0xF, 0x11, 0), fn_801B96E8, 0x15);
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmstamina = {
+    GM_STAMINA_VS, "GM_STAMINA_VS", gm_Mode_StaminaVs_OnInit, gm_Mode_StaminaVs_OnLoad, gm_801B91C8, gm_801B922C, gm_801B9254, gm_801B927C
+};
+#endif

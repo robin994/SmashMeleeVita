@@ -1,17 +1,17 @@
-#include <psp2/ctrl.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/io/stat.h>
-#include <vita2d.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include "pad_vita.h"
-#include "asset_viewer.h"
-#include "asset_file.h"
+#include "render_vita.h"
 #include "gc_runtime_vita.h"
 #include "gx_boot_vita.h"
 #include "audio_boot_vita.h"
-#include "hsd_runtime_probe.h"
+#include "title_boot_vita.h"
+#include "mth_player_vita.h"
+#include "menu_boot_vita.h"
+#include "onep_boot_vita.h"
+#include <melee/gm/forward.h>
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/initialize.h>
 
@@ -19,13 +19,44 @@ _Static_assert(sizeof(void*) == 4, "GameCube data needs 32-bit pointers");
 _Static_assert(sizeof(u32) == 4 && sizeof(s32) == 4, "Dolphin ABI");
 _Static_assert(sizeof(f32) == 4, "Dolphin float ABI");
 
-/* This is a platform probe, not the game entry point. */
+/* Partial scene integration; original assets do not imply a complete game loop. */
 int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GS_MEMCARD v2.6\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.22\n"); fflush(log); }
+    if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=partial menu=mnMain_native\n"); fflush(log); }
     mv_runtime_set_log(log);
+
+    /* vitaGL owns the one GXM context for movie -> title -> menu.  Initialize
+     * it before HSD/ARAM/audio reserve most of the process memory; all later
+     * mv_render_init() calls are intentionally idempotent. */
+    SceIoStat shacccg_stat = {0};
+    int shacccg_result = sceIoGetstat("ur0:data/libshacccg.suprx", &shacccg_stat);
+    if (log) {
+        fprintf(log,
+                "VITAGL_INIT_BEGIN shader_compiler=ur0:data/libshacccg.suprx "
+                "shader_stat=%08x legacy_pool=%u ram_threshold=%u\n",
+                (unsigned) shacccg_result, 4U * 1024U * 1024U,
+                16U * 1024U * 1024U);
+        fflush(log);
+    }
+    int render_result = mv_render_init();
+    if (render_result < 0) {
+        if (log) {
+            fprintf(log, "VITAGL_INIT_FAIL code=%d shader_stat=%08x\n",
+                    render_result, (unsigned) shacccg_result);
+            fflush(log);
+        }
+        mv_runtime_set_log(NULL);
+        if (log)
+            fclose(log);
+        return sceKernelExitProcess(2);
+    }
+    if (log) {
+        fprintf(log, "VITAGL_INIT_PASS context=global owner=movie+title+menu\n");
+        fflush(log);
+    }
     /* Independent known-answer vectors for upstream HSD_Rand, seed = 1. */
     const u32 expected[] = {41, 51235, 6334, 59268, 51937};
     int passed = 1;
@@ -182,183 +213,88 @@ int main(void)
         }
         fflush(log);
     }
-    uint32_t gm_mode_boot[MV_GM_BOOT_SMOKE_STAT_COUNT] = {0};
-    int gm_mode_boot_result = services_result ? -100 : gm_VitaBootStateProbe(gm_mode_boot);
+    uint32_t final_init[1] = {0};
+    int final_init_result = services_result ? -100 : gmMain_VitaFinalInitProbe(final_init);
     if (log) {
-        if (!gm_mode_boot_result) {
+        if (!final_init_result) {
             fprintf(log,
-                    "GM_BOOT_ENTER_PASS source=gmboot.c callback=bootOnLoad mode=%02lx "
-                    "scene=%02lx next_mode=%02lx skip_intro=%lu "
-                    "stop=before_GS_MEMCARD_on_enter\n",
-                    (unsigned long)gm_mode_boot[MV_GM_BOOT_SMOKE_MODE],
-                    (unsigned long)gm_mode_boot[MV_GM_BOOT_SMOKE_SCENE],
-                    (unsigned long)gm_mode_boot[MV_GM_BOOT_SMOKE_NEXT_MODE],
-                    (unsigned long)gm_mode_boot[MV_GM_BOOT_SMOKE_SKIP_INTRO]);
+                    "GMMAIN_FINAL_INIT_PASS source=gmmain.c mainlib_reset=%lu "
+                    "next=GM_TITLE_original_scene\n",
+                    (unsigned long)final_init[0]);
         } else {
-            fprintf(log, "GM_BOOT_ENTER_FAIL code=%d\n", gm_mode_boot_result);
+            fprintf(log, "GMMAIN_FINAL_INIT_FAIL code=%d stage=gmMainLib_8015FBA4\n",
+                    final_init_result);
         }
         fflush(log);
     }
-    uint32_t memcard_enter[8] = {0};
-    int memcard_enter_result = gm_mode_boot_result ? -100 :
-                               gm_VitaMemCardSceneEnterProbe(memcard_enter);
-    if (log) {
-        if (!memcard_enter_result) {
-            fprintf(log,
-                    "GS_MEMCARD_ENTER_PASS source=gm_1AED.c stages=%lu "
-                    "assets=LbMcGame,NtMemAc,NtMsgWin,SdMsgBox "
-                    "gobjs=%lu projection=%lu viewport=%lux%lu heap_free=%lu state=%lu next=%lu "
-                    "stop=before_GS_MEMCARD_on_frame\n",
-                    (unsigned long)memcard_enter[0], (unsigned long)memcard_enter[1],
-                    (unsigned long)memcard_enter[2], (unsigned long)memcard_enter[3],
-                    (unsigned long)memcard_enter[4], (unsigned long)memcard_enter[5],
-                    (unsigned long)memcard_enter[6], (unsigned long)memcard_enter[7]);
-        } else {
-            fprintf(log, "GS_MEMCARD_ENTER_FAIL code=%d stage=%08lx\n",
-                    memcard_enter_result, (unsigned long)memcard_enter[0]);
-        }
-        fflush(log);
-    }
+
     if (hsd_init_result || gm_post_result || gx_misc_result || audio_result || ax_result ||
-        video_result || post_audio_result || services_result || gm_mode_boot_result ||
-        memcard_enter_result) {
-        if (log) { fprintf(log, "BOOT_STOP initialization_failed\n"); fflush(log); }
+        video_result || post_audio_result || services_result || final_init_result) {
+        if (log) {
+            fprintf(log, "GAME_BOOT_STOP initialization_failed\n");
+            fflush(log);
+        }
+        mv_runtime_set_log(NULL);
+        if (log)
+            fclose(log);
+        return sceKernelExitProcess(1);
+    }
+
+
+    if (log) {
+        fprintf(log,
+                "GAME_BOOT_ENTER mode=GM_OPENING_MV scene=GS_MOVIE_OPENING "
+                "asset=MvOpen.mth diagnostic_ui=disabled\n");
+        fflush(log);
+    }
+    int opening_result = mv_opening_movie_run(log);
+    if (opening_result == 2) {
         mv_runtime_set_log(NULL);
         if (log) fclose(log);
-        return sceKernelExitProcess(1);
+        return sceKernelExitProcess(0);
     }
-    MvHsdArchiveStats archive_stats = {0};
-    unsigned char *archive_copy = NULL;
-    size_t archive_copy_size = 0;
-    int archive_result = mv_read_file("ux0:data/SmashMeleeVita/files/MnMaAll.usd",
-                                      &archive_copy, &archive_copy_size);
-    if (!archive_result) {
-        archive_result = mv_hsd_archive_probe(archive_copy, archive_copy_size,
-                                              "MenMainBack_Top_joint", &archive_stats);
-    }
-    free(archive_copy);
-    if (log) {
-        if (!archive_result) {
-            fprintf(log,
-                "HSD_ARCHIVE_UPSTREAM_PASS parser=HSD_ArchiveParse file=%lu data=%lu relocations=%lu "
-                "publics=%lu externs=%lu root=MenMainBack_Top_joint root_offset=%08lx\n",
-                (unsigned long)archive_stats.file_size,
-                (unsigned long)archive_stats.data_size,
-                (unsigned long)archive_stats.relocations,
-                (unsigned long)archive_stats.publics,
-                (unsigned long)archive_stats.externs,
-                (unsigned long)archive_stats.public_offset);
-        } else {
-            fprintf(log, "HSD_ARCHIVE_UPSTREAM_FAIL code=%d\n", archive_result);
-        }
+    if (opening_result < 0 && log) {
+        fprintf(log, "GAME_OPENING_FALLBACK_TO_TITLE code=%d\n", opening_result);
         fflush(log);
     }
-    uint32_t lbfile_stats[MV_LBFILE_STAT_COUNT] = {0};
-    int lbfile_result = mv_lbfile_boot_probe(lbfile_stats);
+
     if (log) {
-        if (!lbfile_result) {
-            fprintf(log,
-                "LBFILE_DVD_PASS source=lbfile.c file=MnMaAll.usd size=%lu header=%lu fnv1a=%08lx "
-                "backend=VitaSyncDVD\n",
-                (unsigned long)lbfile_stats[MV_LBFILE_SIZE],
-                (unsigned long)lbfile_stats[MV_LBFILE_HEADER_SIZE],
-                (unsigned long)lbfile_stats[MV_LBFILE_CHECKSUM]);
-        } else {
-            fprintf(log, "LBFILE_DVD_FAIL code=%d file=MnMaAll.usd\n", lbfile_result);
-        }
+        fprintf(log,
+                "GAME_BOOT_ENTER mode=GM_TITLE scene=GS_TITLE source=gmtitle.c "
+                "visible=original_GmTtAll diagnostic_ui=disabled\n");
         fflush(log);
     }
-    uint32_t lbarchive_stats[MV_LBARCHIVE_STAT_COUNT] = {0};
-    int lbarchive_result = mv_lbarchive_boot_probe(lbarchive_stats);
-    if (log) {
-        if (!lbarchive_result) {
-            fprintf(log,
-                "LBARCHIVE_DAT_PASS source=lbarchive.c file=MnMaAll.usd size=%lu publics=%lu "
-                "relocations=%lu externs=%lu root=MenMainBack_Top_joint root_offset=%08lx\n",
-                (unsigned long)lbarchive_stats[MV_LBARCHIVE_FILE_SIZE],
-                (unsigned long)lbarchive_stats[MV_LBARCHIVE_PUBLICS],
-                (unsigned long)lbarchive_stats[MV_LBARCHIVE_RELOCATIONS],
-                (unsigned long)lbarchive_stats[MV_LBARCHIVE_EXTERNS],
-                (unsigned long)lbarchive_stats[MV_LBARCHIVE_ROOT_OFFSET]);
-        } else {
-            fprintf(log, "LBARCHIVE_DAT_FAIL code=%d file=MnMaAll.usd\n", lbarchive_result);
-        }
-        fflush(log);
-    }
-    if (vita2d_init() < 0) {
-        if (log) { fprintf(log, "VIDEO_INIT_FAIL\n"); fclose(log); }
-        return sceKernelExitProcess(1);
-    }
-    vita2d_pgf* font = vita2d_load_default_pgf();
-    if (!font) {
-        if (log) { fprintf(log, "FONT_INIT_FAIL\n"); fclose(log); }
-        vita2d_fini();
-        return sceKernelExitProcess(1);
-    }
-    vita2d_set_clear_color(RGBA8(16, 22, 32, 255));
-    MvViewer viewer;
-    mv_viewer_init(&viewer, log);
-    int diagnostics = 0;
-    unsigned previous = 0, frames = 0;
+    int title_result = 0, menu_result = 0, onep_result = 0;
+    int pending_mode = GM_TITLE;
     for (;;) {
-        SceCtrlData pad = {0};
-        int count = sceCtrlPeekBufferPositive(0, &pad, 1);
-        unsigned pressed = count > 0 ? pad.buttons & ~previous : 0;
-        if (pressed & SCE_CTRL_TRIANGLE) diagnostics = !diagnostics;
-        if (pressed & SCE_CTRL_SQUARE) mv_viewer_toggle_scene(&viewer);
-        if (pressed & SCE_CTRL_RTRIGGER) mv_viewer_page(&viewer, 1);
-        if (pressed & SCE_CTRL_LTRIGGER) mv_viewer_page(&viewer, -1);
-        if (count > 0 && pad.buttons != previous) {
-            if (log) { fprintf(log, "PAD buttons=%08lx lx=%u ly=%u rx=%u ry=%u\n",
-                (unsigned long)pad.buttons, pad.lx, pad.ly, pad.rx, pad.ry); fflush(log); }
-            previous = pad.buttons;
-        }
-        /* PS+START is the Vita screenshot shortcut. Requiring SELECT as well
-           keeps hardware screenshots possible while retaining an explicit exit. */
-        if (count > 0 &&
-            (pad.buttons & (SCE_CTRL_SELECT | SCE_CTRL_START)) ==
-                (SCE_CTRL_SELECT | SCE_CTRL_START)) break;
-        PADStatus gc[PAD_MAX_CONTROLLERS];
-        PADRead(gc);
-        PADClamp(gc);
-        vita2d_start_drawing();
-        vita2d_clear_screen();
-        if (!diagnostics) {
-            mv_viewer_draw(&viewer, font);
+        if (pending_mode == GM_TITLE) {
+            title_result = mv_title_boot_run(log);
+            if (title_result != 1) break;
+            mv_menu_vita_reset_return();
+            pending_mode = GM_MENU;
+        } else if (pending_mode == GM_MENU) {
+            menu_result = mv_main_menu_run(log);
+            if (menu_result != 0 || !mv_scene_vita_done()) break;
+            pending_mode = mv_scene_vita_pending_mode();
+            if (pending_mode < 0 || pending_mode >= GM_COUNT) break;
         } else {
-        const unsigned white = RGBA8(235, 240, 245, 255);
-        vita2d_pgf_draw_text(font, 40, 65, white, 1.5f, "Smash Melee Vita - bootstrap");
-        vita2d_pgf_draw_text(font, 40, 120, white, 1.0f, "Experimental port of doldecomp/melee. No gameplay yet.");
-        vita2d_pgf_draw_textf(font, 40, 175, white, 1.0f, "Upstream HSD_Rand: %s", passed ? "PASS" : "FAIL");
-        vita2d_pgf_draw_textf(font, 40, 230, white, 1.0f, "Input: %08lx   Left: %u,%u   Right: %u,%u",
-            (unsigned long)pad.buttons, pad.lx, pad.ly, pad.rx, pad.ry);
-        vita2d_pgf_draw_textf(font, 40, 285, white, 1.0f, "Frames: %u   Log: %s", frames, log ? "open" : "unavailable");
-        vita2d_pgf_draw_text(font, 40, 340, white, 1.0f, "SELECT+START: exit (PS+START screenshot safe)");
-        vita2d_pgf_draw_textf(font, 40, 395, white, 1.0f,
-            "PAD bridge: %s   GC buttons: %04x   Stick: %d,%d   C: %d,%d",
-            pad_passed ? "PASS" : "FAIL", gc[0].button, gc[0].stickX, gc[0].stickY,
-            gc[0].substickX, gc[0].substickY);
-        vita2d_pgf_draw_textf(font, 40, 450, white, 0.9f,
-            "gmmain: %s   HSD: %s   Audio prefix: %s   Arena=%lu KiB",
-            gm_boot_result == 0 ? "PASS" : "FAIL",
-            hsd_init_result == 0 ? "PASS" : "FAIL",
-            audio_result == 0 ? "PASS" : "FAIL",
-            (unsigned long)(gm_boot[MV_GM_BOOT_ARENA_BYTES] / 1024u));
-        vita2d_pgf_draw_textf(font, 40, 485, white, 0.8f,
-            "Original lbFile DVD read: %s   %lu bytes",
-            lbfile_result == 0 ? "PASS" : "FAIL",
-            (unsigned long)lbfile_stats[MV_LBFILE_SIZE]);
-        vita2d_pgf_draw_textf(font, 520, 485, white, 0.8f,
-            "lbArchive: %s", lbarchive_result == 0 ? "PASS" : "FAIL");
+            onep_result = mv_onep_mode_run(log, pending_mode);
+            if (onep_result == -99) break;
+            if (log) {
+                fprintf(log, "GAME_MODE_RETURN mode=%d result=%d destination=GM_MENU\n",
+                        pending_mode, onep_result);
+                fflush(log);
+            }
+            pending_mode = GM_MENU;
         }
-        vita2d_end_drawing();
-        vita2d_swap_buffers();
-        if (++frames == 120 && log) { fprintf(log, "PRESENT_120\n"); fflush(log); }
     }
-    vita2d_wait_rendering_done();
-    mv_viewer_close(&viewer);
-    vita2d_free_pgf(font);
-    vita2d_fini();
-    if (log) { fprintf(log, "EXIT frames=%u\n", frames); mv_runtime_set_log(NULL); fclose(log); }
-    return sceKernelExitProcess(0);
+    if (log) {
+        fprintf(log,
+                "GAME_BOOT_RETURN opening=%d title=%d menu=%d pending_mode=%d onep=%d\n",
+                opening_result, title_result, menu_result, pending_mode, onep_result);
+        fflush(log);
+    }
+    mv_runtime_set_log(NULL);
+    if (log) fclose(log);
+    return sceKernelExitProcess((title_result < 0 || menu_result < 0 || onep_result < 0) ? 1 : 0);
 }

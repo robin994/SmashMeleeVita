@@ -51,7 +51,13 @@
 #include <sysdolphin/baselib/memory.h>
 #include <sysdolphin/baselib/mobj.h>
 
+#ifdef MELEE_VITA_PLATFORM
+#include "menu_boot_vita.h"
+#endif
+#define MN_SUBMENU_THINK(fn) (fn)
 /* 22C068 */ static void mn_8022C068(HSD_LObj*, int, int);
+#define MN_EXTERNAL_ACTION(menu, selection, call) (call)
+#define MN_PLATFORM_PREP(call) (call)
 
 static HSD_GObj* mn_804D6BA8;
 static HSD_GObj* mn_804D6BAC;
@@ -444,7 +450,7 @@ MenuKindData mn_803EB6B0[0x22] = {
         160,
         mn_804D4B48,
         0x03,
-        mn_8022C7CC,
+        MN_SUBMENU_THINK(mn_8022C7CC),
     },
     {
         NULL,
@@ -465,7 +471,7 @@ MenuKindData mn_803EB6B0[0x22] = {
         200,
         mn_803EB69C,
         0x0A,
-        mn_8022C4F4,
+        MN_SUBMENU_THINK(mn_8022C4F4),
     },
     {
         NULL,
@@ -577,7 +583,7 @@ MenuKindData mn_803EB6B0[0x22] = {
         240,
         mn_804D4B40,
         0x03,
-        mn_8022CA54,
+        MN_SUBMENU_THINK(mn_8022CA54),
     },
     {
         NULL,
@@ -759,6 +765,15 @@ static inline u8 mn_80229A04_dontinline(MenuKind kind, int selection)
 /// @brief creates the description text for the hovered selection
 static void mn_80229A7C(MainMenuData* data, MenuKind menu_kind, int selection)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* The visible main-menu labels are HSD geometry in MnMaAll.  SIS is only
+     * used for the lower description line; keep it out of the first native
+     * menu island until the text renderer is ported to vitaGL. */
+    (void) data;
+    (void) menu_kind;
+    (void) selection;
+    return;
+#else
     HSD_Text* temp_r3;
     HSD_Text* text;
     u16* sis_idx;
@@ -776,6 +791,7 @@ static void mn_80229A7C(MainMenuData* data, MenuKind menu_kind, int selection)
         text->font_size.y = 0.0521f;
         HSD_SisLib_803A6368(text, sis_idx[selection]);
     }
+#endif
 }
 
 static inline void mn_80229A7C_dontinline(void* arg0, int arg1, int arg2)
@@ -1354,7 +1370,9 @@ void fn_8022AFEC(HSD_GObj* gp)
             mn_80229A7C_dontinline(final_data, final_data->menu_kind,
                                    hovered_selection);
         }
+#ifndef MELEE_VITA_PLATFORM
         final_data->description->hidden = 0;
+#endif
         break;
     }
     if (var_r26 != 0) {
@@ -1605,6 +1623,12 @@ void fn_8022BCD4(HSD_GObj* gobj, int unused)
 
 HSD_GObj* mn_8022BCF8(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* vitaGL owns clear/depth state.  Do not instantiate the GameCube fog
+     * callback, whose GX fixed-function path is not part of the Vita renderer. */
+    mn_804D6BA8 = NULL;
+    return NULL;
+#else
     HSD_GObj* gobj;
     HSD_Fog* fog;
 
@@ -1614,6 +1638,7 @@ HSD_GObj* mn_8022BCF8(void)
     HSD_GObjObject_80390A70(gobj, HSD_GObj_FogKind, fog);
     GObj_SetupGXLink(gobj, fn_8022BCD4, 1, 0x80);
     return gobj;
+#endif
 }
 
 void mn_8022BD6C(void)
@@ -1658,6 +1683,15 @@ HSD_GObj* mn_8022BE34(void)
 
 static inline HSD_GObj* mn_8022BE34_OnEnter(Vec3* pos)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* The replay camera is the converted ScMenMain descriptor.  A GameCube
+     * camera GX callback is unnecessary and would execute EFB-only code. */
+    if (pos != NULL) {
+        pos->x = pos->y = pos->z = 0.0f;
+    }
+    mn_804D6BAC = NULL;
+    return NULL;
+#else
     HSD_GObj* gobj = GObj_Create(2, 3, 0x80);
     HSD_CObj* cobj;
 
@@ -1669,10 +1703,17 @@ static inline HSD_GObj* mn_8022BE34_OnEnter(Vec3* pos)
     gobj->gxlink_prios = 0x7F;
     HSD_GObj_SetupProc(gobj, mn_8022BA1C, 0);
     return gobj;
+#endif
 }
 
 void mn_8022BEDC(HSD_GObj* gobj)
 {
+#ifdef MELEE_VITA_PLATFORM
+    (void) gobj;
+    mn_804D6BB0 = NULL;
+    mn_804D6BB4 = 0;
+    mn_804D6BB5 = 0;
+#else
     HSD_GObj* temp_r3;
     HSD_CObj* cobj;
 
@@ -1685,6 +1726,7 @@ void mn_8022BEDC(HSD_GObj* gobj)
     temp_r3->gxlink_prios = 0x80;
     HSD_GObj_SetupProc(temp_r3, mn_8022BA1C, 0);
     mn_804D6BB4 = HSD_SisLib_803A611C(0, temp_r3, 7, 8, 0x80, 7, 0x80, 0);
+#endif
 }
 
 GXColor* mn_8022BFBC(int arg0)
@@ -2025,14 +2067,14 @@ void mn_8022C7CC(HSD_GObj* gp)
         switch (mn_804A04F0.hovered_selection) {
         case SEL_STADIUM_TARGET:
             sfxForward();
-            gm_801677E8(mn_8022C7CC_inline());
+            MN_PLATFORM_PREP(gm_801677E8(mn_8022C7CC_inline()));
             data = gm_GetCurrentSceneExitData();
             data->pending_mode = GM_TARGET_TEST;
             gm_801A4B60();
             return;
         case SEL_STADIUM_HOMERUN:
             sfxForward();
-            gm_801677E8(mn_8022C7CC_inline());
+            MN_PLATFORM_PREP(gm_801677E8(mn_8022C7CC_inline()));
             data = gm_GetCurrentSceneExitData();
             data->pending_mode = GM_HOME_RUN_CONTEST;
             gm_801A4B60();
@@ -2146,6 +2188,8 @@ void mn_8022CC28(HSD_GObj* gp)
     if (buttons & MenuInput_Confirm) {
         mn_804D6BC8.cooldown = 5;
         mn_804A04F0.entering_menu = 1;
+        /* This is only controller-port routing, not a platform service. Keep it
+         * live on Vita so Classic/Adventure initialize the selected 1-P port. */
         gm_801677E8(mn_8022C7CC_inline());
         switch ((RegMatchMenuSelection)
                     mn_804A04F0.hovered_selection) { /* irregular */
@@ -2227,18 +2271,18 @@ void mn_8022CE6C(HSD_GObj* gp)
                     mn_804A04F0.hovered_selection) { /* irregular */
         case SEL_DATA_SNAP:
             sfxForward();
-            mnSnap_80257F24();
+            MN_EXTERNAL_ACTION(MENU_KIND_DATA, SEL_DATA_SNAP, mnSnap_80257F24());
             HSD_GObjFree(gp);
             break;
         case SEL_DATA_ARCHIVES:
             sfxForward();
-            mnGallery_80259868();
+            MN_EXTERNAL_ACTION(MENU_KIND_DATA, SEL_DATA_ARCHIVES, mnGallery_80259868());
             HSD_GObjFree(gp);
             break;
         case SEL_DATA_SOUND:
-            lbAudioAx_80023694();
-            lbAudioAx_800236DC();
-            mnSoundTest_8024BEE0(1);
+            MN_PLATFORM_PREP(lbAudioAx_80023694());
+            MN_PLATFORM_PREP(lbAudioAx_800236DC());
+            MN_EXTERNAL_ACTION(MENU_KIND_DATA, SEL_DATA_SOUND, mnSoundTest_8024BEE0(1));
             HSD_GObjFree(gp);
             break;
         case SEL_DATA_RECORDS:
@@ -2257,7 +2301,7 @@ void mn_8022CE6C(HSD_GObj* gp)
             break;
         case SEL_DATA_SPECIAL:
             sfxForward();
-            mnInfo_80252758();
+            MN_EXTERNAL_ACTION(MENU_KIND_DATA, SEL_DATA_SPECIAL, mnInfo_80252758());
             HSD_GObjFree(gp);
             break;
         }
@@ -2321,27 +2365,27 @@ void mn_8022D104(HSD_GObj* gp)
         switch (mn_804A04F0.hovered_selection) {
         case SEL_SETTINGS_RUMBLE:
             sfxForward();
-            mnVibration_Init(1);
+            MN_EXTERNAL_ACTION(MENU_KIND_SETTINGS, SEL_SETTINGS_RUMBLE, mnVibration_Init(1));
             HSD_GObjFree(gp);
             break;
         case SEL_SETTINGS_SOUND:
             sfxForward();
-            mnSound_8024A09C(1);
+            MN_EXTERNAL_ACTION(MENU_KIND_SETTINGS, SEL_SETTINGS_SOUND, mnSound_8024A09C(1));
             HSD_GObjFree(gp);
             break;
         case SEL_SETTINGS_DISPLAY:
             sfxForward();
-            mnDeflicker_8024A6C4(1);
+            MN_EXTERNAL_ACTION(MENU_KIND_SETTINGS, SEL_SETTINGS_DISPLAY, mnDeflicker_8024A6C4(1));
             HSD_GObjFree(gp);
             break;
         case SEL_SETTINGS_LANG:
             sfxForward();
-            mnLanguage_8024C5C0((HSD_GObj*) 1);
+            MN_EXTERNAL_ACTION(MENU_KIND_SETTINGS, SEL_SETTINGS_LANG, mnLanguage_8024C5C0((HSD_GObj*) 1));
             HSD_GObjFree(gp);
             break;
         case SEL_SETTINGS_ERASE:
             sfxForward();
-            mnDataDel_80250170();
+            MN_EXTERNAL_ACTION(MENU_KIND_SETTINGS, SEL_SETTINGS_ERASE, mnDataDel_80250170());
             HSD_GObjFree(gp);
             break;
         }
@@ -2397,7 +2441,7 @@ void mn_8022D34C(HSD_GObj* gp)
     if (buttons & MenuInput_Confirm) {
         mn_804D6BC8.cooldown = 5;
         mn_804A04F0.entering_menu = 1;
-        gm_801677E8(mn_8022C7CC_inline());
+        MN_PLATFORM_PREP(gm_801677E8(mn_8022C7CC_inline()));
         switch (mn_804A04F0.hovered_selection) {
         case SEL_TOY_GALLERY:
             sfxForward();
@@ -2504,12 +2548,12 @@ void mn_8022D594(HSD_GObj* gp)
             break;
         case SEL_VS_RULES:
             sfxForward();
-            mn_80231714();
+            MN_EXTERNAL_ACTION(MENU_KIND_VS, SEL_VS_RULES, mn_80231714());
             HSD_GObjFree(gp);
             break;
         case SEL_VS_NAME:
             sfxForward();
-            mnName_8023AC40();
+            MN_EXTERNAL_ACTION(MENU_KIND_VS, SEL_VS_NAME, mnName_8023AC40());
             HSD_GObjFree(gp);
             break;
         }
@@ -2562,7 +2606,7 @@ void mn_8022D7F4(HSD_GObj* gp)
     mn_804A04F0.buttons = buttons;
     if (buttons & MenuInput_Confirm) {
         mn_804A04F0.entering_menu = 1;
-        gm_801677E8(mn_8022C7CC_inline());
+        MN_PLATFORM_PREP(gm_801677E8(mn_8022C7CC_inline()));
         switch (mn_804A04F0.hovered_selection) {
         case SEL_1P_REG:
             sfxForward();
@@ -2596,7 +2640,7 @@ void mn_8022D7F4(HSD_GObj* gp)
             break;
         case SEL_1P_EVENT:
             sfxForward();
-            mnEvent_8024E838(0, 1);
+            MN_EXTERNAL_ACTION(MENU_KIND_1P, SEL_1P_EVENT, mnEvent_8024E838(0, 1));
             HSD_GObjFree(gp);
             break;
         case SEL_1P_TRAINING:
@@ -2723,7 +2767,7 @@ void mnMain_Scene_OnFrame(void)
 {
     MenuExitData* data;
     if (mn_8022F218() && mn_804A04F0.cur_menu != MENU_KIND_MAIN) {
-        lbAudioAx_80023694();
+        MN_PLATFORM_PREP(lbAudioAx_80023694());
         sfxBack();
         mn_8022F268();
         gm_801603B0();
@@ -2739,6 +2783,14 @@ void mnMain_Scene_OnFrame(void)
 
 static inline void mn_8022DDA8_inline(const u16* sp2B4)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Lighting is not consumed by the current vitaGL capture path yet.  Keep
+     * the original menu color state, but do not create an HSD_LObj/GX light. */
+    mn_804A04F0.light_lerp_frames = 0;
+    mn_804A04F0.light_color = mn_8022BFBC(
+        mn_8022C010(mn_804A04F0.cur_menu, *sp2B4));
+    return;
+#else
     int temp_r29;
     HSD_GObj* gobj;
     HSD_LObj* lobj;
@@ -2752,6 +2804,7 @@ static inline void mn_8022DDA8_inline(const u16* sp2B4)
     temp_r29 = mn_8022C010(mn_804A04F0.cur_menu, *sp2B4);
     mn_804A04F0.light_color = mn_8022BFBC(temp_r29);
     mn_8022C068(lobj, temp_r29, mn_804A04F0.light_lerp_frames);
+#endif
 }
 
 void mnMain_Scene_OnEnter(void* user_data)
@@ -2777,6 +2830,19 @@ void mnMain_Scene_OnEnter(void* user_data)
     mn_804D6BAC = NULL;
     mn_804D6BB0 = NULL;
     if (data->load_assets != false) {
+#ifdef MELEE_VITA_PLATFORM
+        int vita_prepare = mv_menu_vita_prepare(
+            &MenMainBack_Top, &MenMainPanel_Top, &MenMainConTop_Top,
+            &MenMainCursor_Top, &MenMain_cam);
+        HSD_ASSERTREPORT(0xC00, vita_prepare == 0,
+                         "Vita MnMaAll native conversion failed\n");
+        mn_804D6BB8 = mv_menu_vita_archive_proxy();
+        OSReport("GAME_MENU_PROXY_READY source=MnMaAll.usd mode=lazy_native\n");
+        gm_801BA8FC();
+        OSReport("GAME_MENU_EVENT_TABLE_LOADED source=GmEvent.dat symbol=sqEventInitDataLevelTbl\n");
+        OSReport("GAME_MENU_AUDIO_TABLE_BEGIN file=LbAd.dat "
+                 "symbol=lbAudioLoadData\n");
+#else
         mn_804D6BB8 = lbArchive_LoadSymbols(
             "MnMaAll", &MenMainBack_Top.joint, "MenMainBack_Top_joint",
             &MenMainBack_Top.animjoint, "MenMainBack_Top_animjoint",
@@ -2933,7 +2999,12 @@ void mnMain_Scene_OnEnter(void* user_data)
         }
         HSD_SisLib_803A62A0(3, "SdToy.dat", "SIS_ToyData");
         gm_801BA8FC();
+#endif
         lbAudioAx_8002392C();
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_MENU_AUDIO_TABLE_PASS file=LbAd.dat "
+                 "symbol=lbAudioLoadData\n");
+#endif
     }
 
     mn_8022DDA8_inline(hovered_selection);

@@ -1,6 +1,7 @@
 #include "hsd_native.h"
 #include "gx_texture.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +26,7 @@ typedef struct HSD_TexLODDesc HSD_TexLODDesc;
 typedef struct HSD_TObjTevDesc HSD_TObjTevDesc;
 typedef struct HSD_Material HSD_Material;
 typedef struct HSD_PEDesc HSD_PEDesc;
+typedef struct HSD_EnvelopeDesc HSD_EnvelopeDesc;
 
 struct HSD_VtxDescList {
     int32_t attr, attr_type, comp_cnt, comp_type;
@@ -39,7 +41,16 @@ struct HSD_PObjDesc {
     HSD_VtxDescList *verts;
     uint16_t flags, n_display;
     uint8_t *display;
-    union { HSD_Joint *joint; void *shape_set; void *envelope_p; } u;
+    union {
+        HSD_Joint *joint;
+        void *shape_set;
+        HSD_EnvelopeDesc **envelope_p;
+    } u;
+};
+
+struct HSD_EnvelopeDesc {
+    HSD_Joint *joint;
+    float weight;
 };
 
 struct HSD_Material {
@@ -143,6 +154,8 @@ _Static_assert(sizeof(HSD_PEDesc) == 12, "HSD_PEDesc ARM32 layout");
 
 #define MV_NATIVE_MAX_NODES 32768u
 #define MV_NATIVE_MAX_OWNED_BYTES (32u * 1024u * 1024u)
+#define MV_NATIVE_MAX_ENVELOPE_MATRICES 32u
+#define MV_NATIVE_MAX_ENVELOPE_WEIGHTS 32u
 
 enum {
     NK_JOINT = 1,
@@ -167,8 +180,12 @@ enum {
     MV_JOBJ_USE_QUATERNION = 1u << 17,
     MV_JOBJ_JOINT_MASK = 3u << 21,
     MV_JOBJ_USER_DEF_MTX = 1u << 23,
-    MV_JOBJ_BILLBOARD_MASK = 0xe00u | 0x2000u,
+    MV_JOBJ_BILLBOARD_FIELD = 0xe00u,
+    MV_JOBJ_BILLBOARD = 0x200u,
+    MV_JOBJ_PBILLBOARD = 0x2000u,
     MV_POBJ_TYPE_MASK = 0x3000u,
+    MV_POBJ_SHAPEANIM = 0x1000u,
+    MV_POBJ_ENVELOPE = 0x2000u,
 };
 
 typedef struct {
@@ -184,12 +201,19 @@ typedef struct {
 } NativeStorage;
 
 typedef struct {
+    HSD_EnvelopeDesc *desc;
+    uint32_t joint_offset;
+} NativeEnvelopePatch;
+
+typedef struct {
     const MvDat *dat;
     MvNativeHsd *out;
     NativeEntry *entries;
     size_t entry_count, entry_capacity;
     void **owned;
     size_t owned_count, owned_capacity, owned_bytes;
+    NativeEnvelopePatch *envelope_patches;
+    size_t envelope_patch_count, envelope_patch_capacity;
     int status;
 } NativeBuild;
 
@@ -284,16 +308,126 @@ static int class_name(const MvDat *dat, uint32_t field, char **name)
     return 1;
 }
 
-static void mark_unsupported(NativeBuild *b)
+static void mark_unsupported(NativeBuild *b, uint32_t kind,
+                             uint32_t offset, uint32_t value)
 {
     ++b->out->unsupported_count;
+    if (b->out->unsupported_kind == MV_NATIVE_UNSUPPORTED_NONE) {
+        b->out->unsupported_kind = kind;
+        b->out->unsupported_offset = offset;
+        b->out->unsupported_value = value;
+    }
     if (!b->status) b->status = 1;
+}
+
+const char *mv_hsd_native_unsupported_name(uint32_t kind)
+{
+    switch (kind) {
+    case MV_NATIVE_UNSUPPORTED_MOBJ_RENDERDESC: return "MObj.renderdesc";
+    case MV_NATIVE_UNSUPPORTED_POBJ_TYPE: return "PObj.type";
+    case MV_NATIVE_UNSUPPORTED_POBJ_UNION: return "PObj.u";
+    case MV_NATIVE_UNSUPPORTED_JOBJ_FLAGS: return "JObj.flags";
+    case MV_NATIVE_UNSUPPORTED_JOBJ_ROBJ: return "JObj.robjdesc";
+    default: return "none";
+    }
 }
 
 static HSD_DObjDesc *build_dobj(NativeBuild *b, uint32_t offset);
 static HSD_MObjDesc *build_mobj(NativeBuild *b, uint32_t offset);
 static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset);
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset);
+static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset);
+
+static int add_envelope_patch(NativeBuild *b, HSD_EnvelopeDesc *desc,
+                              uint32_t joint_offset)
+{
+    if (b->envelope_patch_count >= b->envelope_patch_capacity) {
+        b->status = -1;
+        return -1;
+    }
+    NativeEnvelopePatch *patch = &b->envelope_patches[b->envelope_patch_count++];
+    patch->desc = desc;
+    patch->joint_offset = joint_offset;
+    return 0;
+}
+
+static HSD_EnvelopeDesc **build_envelope_descs(NativeBuild *b,
+                                                uint32_t array_offset)
+{
+    unsigned matrix_count = 0;
+    for (; matrix_count < MV_NATIVE_MAX_ENVELOPE_MATRICES; ++matrix_count) {
+        uint32_t target;
+        int result = pointer_offset(b->dat, array_offset + matrix_count * 4u,
+                                    &target);
+        if (result < 0) { b->status = -1; return NULL; }
+        if (!result) break;
+    }
+    if (matrix_count == MV_NATIVE_MAX_ENVELOPE_MATRICES) {
+        b->status = -1;
+        return NULL;
+    }
+
+    HSD_EnvelopeDesc **lists = own_calloc(b, matrix_count + 1u,
+                                          sizeof(*lists));
+    if (!lists) { b->status = -1; return NULL; }
+
+    for (unsigned matrix = 0; matrix < matrix_count; ++matrix) {
+        uint32_t envelope_offset;
+        if (pointer_offset(b->dat, array_offset + matrix * 4u,
+                           &envelope_offset) != 1) {
+            b->status = -1;
+            return NULL;
+        }
+
+        unsigned weight_count = 0;
+        for (; weight_count < MV_NATIVE_MAX_ENVELOPE_WEIGHTS; ++weight_count) {
+            uint32_t joint_offset;
+            int result = pointer_offset(b->dat,
+                                        envelope_offset + weight_count * 8u,
+                                        &joint_offset);
+            if (result < 0) { b->status = -1; return NULL; }
+            if (!result) break;
+        }
+        if (!weight_count || weight_count == MV_NATIVE_MAX_ENVELOPE_WEIGHTS) {
+            b->status = -1;
+            return NULL;
+        }
+
+        HSD_EnvelopeDesc *descs = own_calloc(b, weight_count + 1u,
+                                             sizeof(*descs));
+        if (!descs) { b->status = -1; return NULL; }
+        lists[matrix] = descs;
+        for (unsigned weight = 0; weight < weight_count; ++weight) {
+            uint32_t joint_offset;
+            const uint8_t *raw = mv_dat_span(
+                b->dat, envelope_offset + weight * 8u, 8u);
+            if (!raw || pointer_offset(b->dat,
+                                       envelope_offset + weight * 8u,
+                                       &joint_offset) != 1) {
+                b->status = -1;
+                return NULL;
+            }
+            descs[weight].weight = be_float(raw + 4);
+            if (!isfinite(descs[weight].weight) || descs[weight].weight < 0.0f ||
+                add_envelope_patch(b, &descs[weight], joint_offset)) {
+                b->status = -1;
+                return NULL;
+            }
+        }
+    }
+    return lists;
+}
+
+static int resolve_envelope_patches(NativeBuild *b)
+{
+    for (size_t i = 0; i < b->envelope_patch_count; ++i) {
+        NativeEnvelopePatch *patch = &b->envelope_patches[i];
+        NativeEntry *joint = find_entry(b, NK_JOINT, patch->joint_offset);
+        if (!joint || joint->state != 2 || !joint->ptr) return -1;
+        patch->desc->joint = joint->ptr;
+    }
+    return 0;
+}
 
 static HSD_ImageDesc *build_image(NativeBuild *b, uint32_t offset)
 {
@@ -524,7 +658,8 @@ static HSD_MObjDesc *build_mobj(NativeBuild *b, uint32_t offset)
         /* Default upstream MObjLoad ignores this legacy field, but passing a
            serialized pointer as if it were native would violate the typed
            conversion contract. Add its adapter before accepting such roots. */
-        mark_unsupported(b);
+        mark_unsupported(b, MV_NATIVE_UNSUPPORTED_MOBJ_RENDERDESC,
+                         offset, target);
         return NULL;
     }
     result = pointer_offset(b->dat, offset + 20, &target);
@@ -546,11 +681,26 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
     if (!p || class_name(b->dat, offset, &out->class_name) < 0) { b->status = -1; return NULL; }
     out->flags = mv_be16(p + 12);
     out->n_display = mv_be16(p + 14);
-    if (out->flags & MV_POBJ_TYPE_MASK) { mark_unsupported(b); return NULL; }
+    const uint16_t pobj_type = out->flags & MV_POBJ_TYPE_MASK;
+    if (pobj_type == MV_POBJ_SHAPEANIM || pobj_type == MV_POBJ_TYPE_MASK) {
+        mark_unsupported(b, MV_NATIVE_UNSUPPORTED_POBJ_TYPE,
+                         offset, out->flags);
+        return NULL;
+    }
     uint32_t target;
     int result = pointer_offset(b->dat, offset + 20, &target);
     if (result < 0) { b->status = -1; return NULL; }
-    if (result) { mark_unsupported(b); return NULL; }
+    if (pobj_type == MV_POBJ_ENVELOPE) {
+        if (result != 1 ||
+            !(out->u.envelope_p = build_envelope_descs(b, target))) {
+            if (!b->status) b->status = -1;
+            return NULL;
+        }
+    } else if (result) {
+        mark_unsupported(b, MV_NATIVE_UNSUPPORTED_POBJ_UNION,
+                         offset, target);
+        return NULL;
+    }
     result = pointer_offset(b->dat, offset + 4, &target);
     if (result < 0) { b->status = -1; return NULL; }
     if (result && !(out->next = build_pobj(b, target))) return NULL;
@@ -564,7 +714,7 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
         b->status = -1;
         return NULL;
     }
-    out->u.joint = NULL;
+    if (pobj_type != MV_POBJ_ENVELOPE) out->u.joint = NULL;
     entry->state = 2;
     ++b->out->pobj_count;
     return out;
@@ -606,10 +756,16 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     HSD_Joint *out = entry->ptr;
     if (!p || class_name(b->dat, offset, &out->class_name) < 0) { b->status = -1; return NULL; }
     out->flags = mv_be32(p + 4);
-    if (out->flags & (MV_JOBJ_PTCL | MV_JOBJ_INSTANCE | MV_JOBJ_SPLINE |
-                      MV_JOBJ_USE_QUATERNION | MV_JOBJ_JOINT_MASK |
-                      MV_JOBJ_USER_DEF_MTX | MV_JOBJ_BILLBOARD_MASK)) {
-        mark_unsupported(b);
+    uint32_t unsupported_flags = out->flags &
+        (MV_JOBJ_PTCL | MV_JOBJ_INSTANCE | MV_JOBJ_SPLINE |
+         MV_JOBJ_USE_QUATERNION | MV_JOBJ_JOINT_MASK |
+         MV_JOBJ_USER_DEF_MTX | MV_JOBJ_PBILLBOARD);
+    const uint32_t billboard = out->flags & MV_JOBJ_BILLBOARD_FIELD;
+    if (billboard && billboard != MV_JOBJ_BILLBOARD)
+        unsupported_flags |= billboard;
+    if (unsupported_flags) {
+        mark_unsupported(b, MV_NATIVE_UNSUPPORTED_JOBJ_FLAGS,
+                         offset, out->flags);
         return NULL;
     }
     uint32_t target;
@@ -643,7 +799,11 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     }
     result = pointer_offset(b->dat, offset + 0x3c, &target);
     if (result < 0) { b->status = -1; return NULL; }
-    if (result) { mark_unsupported(b); return NULL; }
+    if (result) {
+        mark_unsupported(b, MV_NATIVE_UNSUPPORTED_JOBJ_ROBJ,
+                         offset, target);
+        return NULL;
+    }
     out->robjdesc = NULL;
     entry->state = 2;
     ++b->out->joint_count;
@@ -652,6 +812,7 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
 
 static void release_build(NativeBuild *b, int keep_owned)
 {
+    free(b->envelope_patches);
     free(b->entries);
     if (!keep_owned) {
         for (size_t i = 0; i < b->owned_count; ++i) free(b->owned[i]);
@@ -659,35 +820,40 @@ static void release_build(NativeBuild *b, int keep_owned)
     }
 }
 
-int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out)
+int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *out)
 {
-    if (!dat || !root_name || !out || !dat->pointer_bits) return -1;
+    if (!dat || !out || !dat->pointer_bits || root_offset > dat->data_size) return -1;
     memset(out, 0, sizeof(*out));
-    uint32_t root_offset = UINT32_MAX;
-    for (uint32_t i = 0; i < dat->public_count; ++i) {
-        const char *name;
-        uint32_t offset;
-        if (mv_dat_public(dat, i, &name, &offset)) return -1;
-        if (!strcmp(name, root_name)) { root_offset = offset; break; }
-    }
-    if (root_offset == UINT32_MAX) return -1;
     NativeBuild b = {.dat = dat, .out = out};
     /* Entries must not move while recursive builders retain an entry pointer. */
     b.entries = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.entries));
     b.owned = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.owned));
-    if (!b.entries || !b.owned) {
+    b.envelope_patches = calloc(MV_NATIVE_MAX_NODES,
+                                sizeof(*b.envelope_patches));
+    if (!b.entries || !b.owned || !b.envelope_patches) {
+        free(b.envelope_patches);
         free(b.entries);
         free(b.owned);
         return -1;
     }
     b.entry_capacity = MV_NATIVE_MAX_NODES;
     b.owned_capacity = MV_NATIVE_MAX_NODES;
+    b.envelope_patch_capacity = MV_NATIVE_MAX_NODES;
     out->root = build_joint(&b, root_offset);
+    if (!b.status && resolve_envelope_patches(&b)) b.status = -1;
     int result = b.status;
     if (!result && !out->root) result = -1;
     if (result) {
+        uint32_t unsupported_kind = out->unsupported_kind;
+        uint32_t unsupported_offset = out->unsupported_offset;
+        uint32_t unsupported_value = out->unsupported_value;
+        size_t unsupported_count = out->unsupported_count;
         release_build(&b, 0);
         memset(out, 0, sizeof(*out));
+        out->unsupported_kind = unsupported_kind;
+        out->unsupported_offset = unsupported_offset;
+        out->unsupported_value = unsupported_value;
+        out->unsupported_count = unsupported_count;
         return result;
     }
     NativeStorage *storage = malloc(sizeof(*storage));
@@ -701,6 +867,19 @@ int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *ou
     out->storage = storage;
     release_build(&b, 1);
     return 0;
+}
+
+int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out)
+{
+    if (!dat || !root_name || !out || !dat->pointer_bits) return -1;
+    uint32_t root_offset = UINT32_MAX;
+    for (uint32_t i = 0; i < dat->public_count; ++i) {
+        const char *name; uint32_t offset;
+        if (mv_dat_public(dat, i, &name, &offset)) return -1;
+        if (!strcmp(name, root_name)) { root_offset = offset; break; }
+    }
+    if (root_offset == UINT32_MAX) return -1;
+    return mv_hsd_native_build_at(dat, root_offset, out);
 }
 
 void mv_hsd_native_free(MvNativeHsd *graph)

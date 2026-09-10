@@ -35,10 +35,16 @@ static void world(HSD_Archive* a, HSD_WObjDesc* w)
         HSD_Panic(__FILE__,__LINE__,"unsupported scene WObj class/RObj");
     vector(a,&w->pos);
 }
+extern void mv_event_menu_archive_prepare(HSD_Archive*);
+
 void mv_boot_archive_prepare(HSD_Archive* a, const char* filename)
 {
     /* Only this scene root is consumed by the initial OnEnter callback today.
      * Other roots retain their original scalar encoding until adapted. */
+    if (strcmp(filename, "GmEvent.dat") == 0) {
+        mv_event_menu_archive_prepare(a);
+        return;
+    }
     if (strcmp(filename,"NtMsgWin.dat") != 0) return;
     SceneDesc* scene = HSD_ArchiveGetPublicAddress(a,"ScNtcCommon_scene_data");
     require_range(a,scene,sizeof(*scene));

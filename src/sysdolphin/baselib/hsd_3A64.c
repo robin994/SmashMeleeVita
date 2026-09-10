@@ -1,4 +1,6 @@
+#ifdef MWERKS_GEKKO
 #include <printf.h> // IWYU pragma: keep
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 

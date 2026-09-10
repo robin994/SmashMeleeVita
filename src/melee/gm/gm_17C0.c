@@ -563,7 +563,14 @@ void gm_8017CE34(StartMeleeData* arg0, Unk1PData* arg1, s8* arg2, u8 arg3,
     enemy_cpu_type = 0;
     arg1->xC.xC = 1;
     fn_8017E21C();
+#ifdef MELEE_VITA_PLATFORM
+    gm_SetupRulesDefaults(&arg0->rules);
+    for (int vita_i = 0; vita_i < 6; ++vita_i) {
+        gm_SetupPlayerDefaults(&arg0->players[vita_i]);
+    }
+#else
     fn_8016F030(arg0);
+#endif
     arg0->rules.x30 = 1.0f;
     arg0->rules.x4_4 = 1;
 
@@ -612,20 +619,32 @@ void gm_8017CE34(StartMeleeData* arg0, Unk1PData* arg1, s8* arg2, u8 arg3,
         arg1->xC.xC = 5;
         switch ((s32) arg1->x9) {
         case 1:
+#ifdef MELEE_VITA_PLATFORM
+            arg0->rules.on_pause_override = NULL;
+#else
             arg0->rules.on_pause_override = gm_80165290;
+#endif
             arg0->rules.x9 = 1;
             arg0->rules.x3_1 = 0;
             arg0->players[0].xC_b1 = 0;
             break;
         case 2:
             arg0->rules.x9 = 3;
+#ifdef MELEE_VITA_PLATFORM
+            arg0->rules.on_match_start = NULL;
+#else
             arg0->rules.on_match_start = fn_8017C7EC;
+#endif
             break;
         case 3:
             arg0->rules.x9 = 2;
             arg0->rules.x7 = 9;
             arg0->rules.x4_4 = 0;
+#ifdef MELEE_VITA_PLATFORM
+            arg0->rules.on_match_end = NULL;
+#else
             arg0->rules.on_match_end = (void (*)(u8)) fn_8017C7A0;
+#endif
             arg0->rules.xD = 0x30;
             break;
         }
@@ -710,6 +729,12 @@ void gm_8017CE34(StartMeleeData* arg0, Unk1PData* arg1, s8* arg2, u8 arg3,
                 }
             }
 
+#ifdef MELEE_VITA_PLATFORM
+            (void) event_enemy_count;
+            (void) sp8;
+            (void) stage_flags;
+            arg0->rules.x54 = NULL;
+#else
             stage_flags = Ground_801C5AD0(Stage_8022519C(arg7));
 
             gm_8016A22C((s8) (u8) arg2[0], arg2[1], arg2[2], colors[0],
@@ -719,16 +744,25 @@ void gm_8017CE34(StartMeleeData* arg0, Unk1PData* arg1, s8* arg2, u8 arg3,
                         event_enemy_count, (s32) stage_flags, (s32) arg5,
                         (s32) arg4, attack_ratio, defense_ratio);
             gm_8016A21C(&arg0->rules);
+#endif
             arg1->xC.x11 = 0;
             if (arg1->x8 & 4) {
+#ifndef MELEE_VITA_PLATFORM
                 fn_8016A450();
+#endif
             }
             if ((u8) special_enemy_mode == 1) {
+#ifndef MELEE_VITA_PLATFORM
                 fn_8016A46C();
+#endif
                 arg0->players[0].xC_b5 = 1;
             }
         } else if (temp_r3_4 != 0) {
+#ifdef MELEE_VITA_PLATFORM
+            arg0->rules.x54 = NULL;
+#else
             gm_8016A21C(&arg0->rules);
+#endif
             arg1->xC.x11 = 0;
         }
     }
@@ -842,7 +876,11 @@ void gm_8017CE34(StartMeleeData* arg0, Unk1PData* arg1, s8* arg2, u8 arg3,
         arg0->rules.x0_3 = 3;
         arg0->rules.disable_pausing = 1;
         arg0->rules.x7 = 0;
+#ifdef MELEE_VITA_PLATFORM
+        arg0->rules.on_match_start = NULL;
+#else
         arg0->rules.on_match_start = (void (*)(void)) fn_8017C71C;
+#endif
         arg1->xC.xC = 6;
     }
     if (arg7 == 0x49) {

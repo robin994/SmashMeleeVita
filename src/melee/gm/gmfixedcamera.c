@@ -175,3 +175,11 @@ void gm_Mode_CameraVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmfixedcamera = {
+    GM_CAMERA_VS, "GM_CAMERA_VS", gm_Mode_CameraVs_OnInit, gm_Mode_CameraVs_OnLoad, gm_801B9F10, gm_801B9F3C, gm_801B9F64, gm_801B9F8C
+};
+#endif

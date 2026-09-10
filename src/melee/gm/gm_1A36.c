@@ -163,10 +163,23 @@ void gm_801A3E88(void)
 
 void gm_801A3EF4(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* The menu-complete Vita target does not link the monolithic GameMode
+     * table because that would retain every gameplay island. Reinitialize the
+     * native 1P/event modes that are actually present; remaining modes get
+     * their defaults from gmMainLib reset until their runtime is promoted. */
+    extern void gm_Mode_Classic_OnInit(void);
+    extern void gm_Mode_Adventure_OnInit(void);
+    extern void gm_Mode_Event_OnInit(void);
+    gm_Mode_Classic_OnInit();
+    gm_Mode_Adventure_OnInit();
+    gm_Mode_Event_OnInit();
+#else
     GameMode* scene;
     for (scene = gm_GetAllGameModes(); scene->kind != GM_COUNT; scene++) {
         if (scene->on_init != NULL) {
             scene->on_init();
         }
     }
+#endif
 }

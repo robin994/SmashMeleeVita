@@ -174,3 +174,11 @@ void gm_Mode_SuperSuddenDeath_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmsupersudden = {
+    GM_SUPER_SUDDEN_DEATH_VS, "GM_SUPER_SUDDEN_DEATH_VS", gm_Mode_SuperSuddenDeath_OnInit, gm_Mode_SuperSuddenDeath_OnLoad, gm_801B8BB4, gm_801B8BE0, gm_801B8C08, gm_801B8C30
+};
+#endif

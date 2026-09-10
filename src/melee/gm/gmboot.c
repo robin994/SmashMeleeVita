@@ -32,11 +32,6 @@ static struct loadData load_data;
 static struct leaveData leave_data;
 
 #ifdef MELEE_VITA_BOOT_PROBE
-void* gm_VitaBootGetEnterData(void)
-{
-    return &load_data;
-}
-
 int gm_VitaBootStateProbe(u32 out[4])
 {
     GameModeState state = { 0 };
@@ -54,6 +49,31 @@ int gm_VitaBootStateProbe(u32 out[4])
     out[1] = state.info.scene_kind;
     out[2] = load_data.mode_id;
     out[3] = gmMainLib_8046B0F0.skip_intro ? 1 : 0;
+    return 0;
+}
+
+int gm_VitaMemCardStateProbe(u32 out[4])
+{
+    GameModeState state = { 0 };
+    if (out == NULL) {
+        return -1;
+    }
+
+    /* Keep the same backing data used by the real GM_BOOT/GM_MEMCARD tables.
+     * This executes Melee's original memcardOnLoad callback but deliberately
+     * stops before gm_Scene_MemCard_OnEnter(), whose archive/UI dependencies
+     * are the next runtime frontier. */
+    state.id = 0;
+    state.info.scene_kind = GS_MEMCARD;
+    state.info.enter_data = &load_data;
+    state.info.exit_data = &leave_data;
+    bootOnLoad(&state);
+    memcardOnLoad(&state);
+
+    out[0] = state.info.scene_kind;
+    out[1] = load_data.x0;
+    out[2] = load_data.x4;
+    out[3] = load_data.mode_id;
     return 0;
 }
 #endif

@@ -40,6 +40,9 @@
 #include <sysdolphin/baselib/memory.h>
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/random.h>
+#ifdef MELEE_VITA_PLATFORM
+#include "css_assets_vita.h"
+#endif
 #include <sysdolphin/baselib/sislib.h>
 
 static u8 mnCharSel_804D50C8[4] = { 1, 2, 4, 8 };
@@ -4276,11 +4279,14 @@ s32 mnCharSel_802640A0(void)
         cobj = HSD_CObjLoadDesc(MenMain_cam = MODELS->cam);
         HSD_GObjObject_80390A70(gobj, HSD_GObj_CameraKind, cobj);
     }
+#ifndef MELEE_VITA_PLATFORM
     GObj_SetupGXLinkMax(gobj, HSD_GObj_803910D8, 0);
     gobj->gxlink_prios = 0x1F;
+#endif
     HSD_GObj_SetupProc(gobj, mn_8022BA1C, 5);
     ctx = HSD_SisLib_803A611C(0, gobj, 7, 8, 0x80, 1, 0x80, 0);
 
+#ifndef MELEE_VITA_PLATFORM
     gobj = GObj_Create(3, 4, 0x80);
     {
         HSD_LObj* lobj0 = HSD_LObjLoadDesc(MODELS->light0);
@@ -4296,6 +4302,7 @@ s32 mnCharSel_802640A0(void)
         HSD_GObjObject_80390A70(gobj, HSD_GObj_FogKind, fog);
     }
     GObj_SetupGXLink(gobj, (GObj_RenderFunc) (Event) fn_8026407C, 0, 0x80);
+#endif
 
     gobj = GObj_Create(4, 5, 0x80);
     jobj = HSD_JObjLoadJoint(ANIM[0].joint);
@@ -5312,6 +5319,13 @@ void mnCharSel_Scene_OnEnter(void* arg0)
     lbAudioAx_8002702C(2, 8);
     lbAudioAx_80027168();
     lbAudioAx_80027648();
+#ifdef MELEE_VITA_PLATFORM
+    mnCharSel_804D6CD0 = NULL;
+    mnCharSel_804D6CD4 = NULL;
+    HSD_ASSERTREPORT(0x14D0, mv_css_vita_prepare(&mnCharSel_804D6CB4) == 0,
+                     "Vita CSS native asset conversion failed\n");
+    mnCharSel_804D6CD8 = (u8*) mnCharSel_804D6CB4 + 0x10;
+#else
     if (lbLang_IsSavedLanguageJP() != 0) {
         mnCharSel_804D6CD0 = lbArchive_LoadArchive("MnSlChr.dat");
         mnCharSel_804D6CD4 = lbArchive_LoadArchive("MnExtAll.dat");
@@ -5322,6 +5336,7 @@ void mnCharSel_Scene_OnEnter(void* arg0)
     mnCharSel_804D6CB4 = HSD_ArchiveGetPublicAddress(mnCharSel_804D6CD0,
                                                      "MnSelectChrDataTable");
     mnCharSel_804D6CD8 = (u8*) mnCharSel_804D6CB4 + 0x10;
+#endif
     if (lbLang_IsSavedLanguageJP() != 0) {
         HSD_SisLib_803A62A0(0, "SdSlChr.dat", "SIS_SelCharData");
     } else {
@@ -5433,18 +5448,22 @@ void mnCharSel_Scene_OnFrame(void)
         sfxBack();
         break;
     case 3:
+#ifndef MELEE_VITA_PLATFORM
         mn_8022F138(1, 8);
         HSD_SisLib_803A5E70();
         mn_80231804(mnCharSel_804D6CD4, 1);
         mnCharSel_804D6CF6 = 5;
         sfxForward();
+#endif
         break;
     case 4:
+#ifndef MELEE_VITA_PLATFORM
         mn_8022F138(1, 8);
         HSD_SisLib_803A5E70();
         mnNameNew_EnterFromMnCharSel(mnCharSel_804D6CD4, mnCharSel_804D6CF9);
         mnCharSel_804D6CF6 = 5;
         sfxForward();
+#endif
         break;
     }
 }
@@ -5457,6 +5476,9 @@ void mnCharSel_Scene_OnExit(void* unused)
     u8 type;
 
     HSD_SisLib_803A5FBC();
+#ifdef MELEE_VITA_PLATFORM
+    /* The scene owner releases descriptors after destroying their GObjs. */
+#else
     if (mnCharSel_804D6CD0 != NULL) {
         lbArchive_80016EFC(mnCharSel_804D6CD0);
         mnCharSel_804D6CD0 = NULL;
@@ -5465,6 +5487,7 @@ void mnCharSel_Scene_OnExit(void* unused)
         lbArchive_80016EFC(mnCharSel_804D6CD4);
         mnCharSel_804D6CD4 = NULL;
     }
+#endif
     mnCharSel_804D6CB0->pending_scene_change = mnCharSel_804D6CF6;
     if (mnCharSel_804D6CF6 != 0) {
         return;

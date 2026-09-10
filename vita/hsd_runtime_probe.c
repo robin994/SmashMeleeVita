@@ -70,8 +70,11 @@ static void capture_concat(const float a[12], const float b[12], float out[12])
     memcpy(out, result, sizeof(result));
 }
 
-/* Rigid Euler subset of upstream HSD_MtxSRT. The native graph builder rejects
- * quaternion, IK, billboards, user matrices and RObj before this is reachable. */
+/* Euler subset of upstream HSD_MtxSRT. Quaternion, IK, user matrices and RObj
+ * remain fail-closed in the native graph builder. JOBJ_BILLBOARD descriptors
+ * are accepted for MAIN; camera-facing billboard orientation is a separate
+ * render-space step and does not change the hierarchical model matrix used by
+ * envelope palette resolution here. */
 static int capture_make_srt(float m[12], const HSD_JObj *jobj, const float *parent_scl)
 {
     float sx0 = jobj->scale.x, sy0 = jobj->scale.y, sz0 = jobj->scale.z;
@@ -305,7 +308,7 @@ static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
 }
 
 static int capture_joints(HSD_JObj *jobj, const float parent[12],
-                          const float parent_scl[3], int parent_has_scl)
+                          const float parent_scl[3], int parent_has_scl, int visibility)
 {
     for (; jobj; jobj = jobj->next) {
         float local[12], world[12], current_scl[3] = {0};
@@ -321,19 +324,52 @@ static int capture_joints(HSD_JObj *jobj, const float parent[12],
             current_scl[1] = jobj->scale.y * (parent_has_scl ? parent_scl[1] : 1.0f);
             current_scl[2] = jobj->scale.z * (parent_has_scl ? parent_scl[2] : 1.0f);
         }
-        if (union_type_dobj(jobj)) {
+        if ((!visibility || !(jobj->flags & JOBJ_HIDDEN)) && union_type_dobj(jobj)) {
             for (HSD_DObj *dobj = jobj->u.dobj; dobj; dobj = dobj->next) {
                 MvGxMaterialState material;
                 capture_material_state(dobj, &material);
                 mv_gx_capture_set_material(&material);
                 for (HSD_PObj *pobj = dobj->pobj; pobj; pobj = pobj->next) {
-                    if (HSD_PObjCaptureRigid(pobj, (MtxPtr)world))
+                    if (HSD_PObjCaptureVita(pobj, jobj, (MtxPtr)world))
                         return -1;
                 }
             }
         }
         if (!(jobj->flags & JOBJ_INSTANCE) &&
-            capture_joints(jobj->child, world, current_scl, current_has_scl))
+            capture_joints(jobj->child, world, current_scl, current_has_scl, visibility))
+            return -1;
+    }
+    return 0;
+}
+
+/* The load-only HSD island deliberately does not install JObj make_mtx
+ * callbacks.  Build the same hierarchical SRT matrices here before capture so
+ * envelope PObjs can resolve their palette joints without re-enabling the GX
+ * renderer. */
+static int prepare_joint_matrices(HSD_JObj *jobj, const float parent[12],
+                                  const float parent_scl[3], int parent_has_scl)
+{
+    for (; jobj; jobj = jobj->next) {
+        float local[12], world[12], current_scl[3] = {0};
+        if (capture_make_srt(local, jobj, parent_has_scl ? parent_scl : NULL))
+            return -1;
+        capture_concat(parent, local, world);
+        memcpy(jobj->mtx, world, sizeof(world));
+
+        int current_has_scl;
+        if (jobj->flags & JOBJ_CLASSICAL_SCALE) {
+            current_has_scl = parent_has_scl;
+            if (parent_has_scl)
+                memcpy(current_scl, parent_scl, sizeof(current_scl));
+        } else {
+            current_has_scl = 1;
+            current_scl[0] = jobj->scale.x * (parent_has_scl ? parent_scl[0] : 1.0f);
+            current_scl[1] = jobj->scale.y * (parent_has_scl ? parent_scl[1] : 1.0f);
+            current_scl[2] = jobj->scale.z * (parent_has_scl ? parent_scl[2] : 1.0f);
+        }
+        if (!(jobj->flags & JOBJ_INSTANCE) &&
+            prepare_joint_matrices(jobj->child, world, current_scl,
+                                   current_has_scl))
             return -1;
     }
     return 0;
@@ -361,24 +397,31 @@ int mv_hsd_runtime_probe(const MvNativeHsd *native, MvHsdRuntimeStats *stats)
     return 0;
 }
 
-int mv_hsd_gx_capture_probe(const MvNativeHsd *native, MvGxCaptureStats *capture)
+int mv_hsd_gx_capture_append(const MvNativeHsd *native, int reset, MvGxCaptureStats *capture)
 {
     if (!native || !native->root || !capture || native->unsupported_count) return -1;
     HSD_IDInitAllocData();
     HSD_IDSetup();
     HSD_JObj *root = HSD_JObjLoadJoint(native->root);
     if (!root) return -2;
-    mv_gx_capture_reset();
+    if (reset) mv_gx_capture_reset();
     HSD_ClearVtxDesc();
     float identity[12];
     capture_identity(identity);
-    if (capture_joints(root, identity, NULL, 0)) return -3;
+    if (prepare_joint_matrices(root, identity, NULL, 0)) return -3;
+    if (capture_joints(root, identity, NULL, 0, 0)) return -3;
     if (mv_gx_capture_stats(capture)) return -3;
-    if (capture->display_lists != native->pobj_count || !capture->commands ||
-        !capture->vertices || !capture->triangles) return -4;
+    if (!capture->commands || !capture->vertices || !capture->triangles) return -4;
     return 0;
 }
 
+int mv_hsd_gx_capture_probe(const MvNativeHsd *native, MvGxCaptureStats *capture)
+{
+    int result = mv_hsd_gx_capture_append(native, 1, capture);
+    if (result) return result;
+    if (capture->display_lists != native->pobj_count) return -4;
+    return 0;
+}
 int mv_hsd_archive_probe(void *bytes, size_t size, const char *public_name,
                          MvHsdArchiveStats *stats)
 {
@@ -396,5 +439,18 @@ int mv_hsd_archive_probe(void *bytes, size_t size, const char *public_name,
     stats->publics = archive.header.nb_public;
     stats->externs = archive.header.nb_extern;
     stats->public_offset = (uint32_t)offset;
+    return 0;
+}
+
+/* Capture the existing animated runtime graph; no per-frame constructors. */
+int mv_hsd_gx_capture_runtime(HSD_JObj *root, int reset, int visibility, MvGxCaptureStats *capture)
+{
+    if (!root || !capture) return -1;
+    if (reset) mv_gx_capture_reset();
+    HSD_ClearVtxDesc();
+    float identity[12];capture_identity(identity);
+    if (prepare_joint_matrices(root, identity, NULL, 0)) return -2;
+    if (capture_joints(root,identity,NULL,0,visibility)) return -3;
+    if (mv_gx_capture_stats(capture)) return -4;
     return 0;
 }

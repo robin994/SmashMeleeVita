@@ -1,5 +1,7 @@
 #include <m2c_macros.h>
+#ifdef MWERKS_GEKKO
 #include <printf.h> // IWYU pragma: keep
+#endif
 
 #include "cobj.h"
 #include "gobj.h"

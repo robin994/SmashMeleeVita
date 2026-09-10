@@ -92,6 +92,7 @@ void mv_scene_free(MvScene *scene);
 /* Read the static HSD camera descriptor used by a named *_camera root. WObj
    animation/RObj indirections are deliberately rejected until their adapters
    exist; the menu camera in MnMaAll.usd is fully static. */
+int mv_camera_read_at(const MvDat *v, uint32_t root_offset, MvCamera *camera);
 int mv_camera_read(const MvDat *v, const char *root_name, MvCamera *camera);
 int mv_camera_visibility(const MvCamera *camera, const MvScene *scene,
                          MvCameraVisibility *visibility);

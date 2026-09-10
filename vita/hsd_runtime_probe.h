@@ -29,6 +29,8 @@ int mv_hsd_runtime_probe(const MvNativeHsd *native, MvHsdRuntimeStats *stats);
  * deliberately geometry/state capture only: material/TEV submission is a
  * later renderer stage. */
 int mv_hsd_gx_capture_probe(const MvNativeHsd *native, MvGxCaptureStats *stats);
+/* Append one native HSD model graph to the Vita GX capture queue. */
+int mv_hsd_gx_capture_append(const MvNativeHsd *native, int reset, MvGxCaptureStats *stats);
 
 /* Parse a writable copy of an original HSD archive with the upstream archive
  * API adapted for the GameCube big-endian file format on ARM.  Pointer fields
@@ -37,3 +39,6 @@ int mv_hsd_gx_capture_probe(const MvNativeHsd *native, MvGxCaptureStats *stats);
  * before feeding an HSD object constructor. */
 int mv_hsd_archive_probe(void *bytes, size_t size, const char *public_name,
                          MvHsdArchiveStats *stats);
+
+struct HSD_JObj;
+int mv_hsd_gx_capture_runtime(struct HSD_JObj *root, int reset, int visibility, MvGxCaptureStats *capture);

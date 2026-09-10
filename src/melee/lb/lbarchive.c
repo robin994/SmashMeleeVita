@@ -1,4 +1,8 @@
 #include "lbarchive.h"
+#ifdef MELEE_VITA_PLATFORM
+extern int mv_menu_vita_archive_is_proxy(const HSD_Archive*);
+extern void *mv_menu_vita_archive_lookup(const char*);
+#endif
 #ifdef MELEE_VITA_BOOT_PROBE
 extern void mv_boot_archive_prepare(HSD_Archive*, const char*);
 #define PREPARE_SCENE(a, f) mv_boot_archive_prepare(a, f)
@@ -53,8 +57,18 @@ void lbArchive_LoadSections(HSD_Archive* archive, void** symbol, ...)
     for (; symbol != NULL; symbol = va_arg(symbols, void**)) {
         symbol_name = va_arg(symbols, const char*);
         *symbol = NULL;
-        *symbol = HSD_ArchiveGetPublicAddress(archive, symbol_name);
+#ifdef MELEE_VITA_PLATFORM
+        if (mv_menu_vita_archive_is_proxy(archive))
+            *symbol = mv_menu_vita_archive_lookup(symbol_name);
+        else
+#endif
+            *symbol = HSD_ArchiveGetPublicAddress(archive, symbol_name);
         if (*symbol == NULL) {
+#ifdef MELEE_VITA_PLATFORM
+            if (mv_menu_vita_archive_is_proxy(archive) &&
+                strstr(symbol_name, "_shapeanim_joint") != NULL)
+                continue;
+#endif
             OSReport("Cannot find symbol %s.\n", symbol_name);
         }
     }

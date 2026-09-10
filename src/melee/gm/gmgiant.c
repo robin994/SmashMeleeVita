@@ -176,3 +176,11 @@ void gm_Mode_GiantVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmgiant = {
+    GM_GIANT_VS, "GM_GIANT_VS", gm_Mode_GiantVs_OnInit, gm_Mode_GiantVs_OnLoad, gm_801B8FB8, gm_801B8FE4, gm_801B900C, gm_801B9034
+};
+#endif

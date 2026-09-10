@@ -1572,10 +1572,12 @@ void JObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_jobj",
                      sizeof(HSD_JObjInfo), sizeof(HSD_JObj));
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    /* Vita bootstrap phase: construct the authentic runtime object graph
-       before the GX/display backend is linked. Do not install renderer,
-       animation or destruction callbacks that this phase cannot execute. */
+    /* Vita renders through the HSD capture -> vitaGL path, but live game
+       logic still calls HSD_JObjSetupMatrix() while animating menu objects.
+       Install the authentic matrix builder without enabling the GX display
+       callbacks that remain owned by the Vita capture backend. */
     HSD_JOBJ_INFO(&hsdJObj)->load = JObjLoad;
+    HSD_JOBJ_INFO(&hsdJObj)->make_mtx = HSD_JObjMakeMatrix;
 #else
     HSD_CLASS_INFO(&hsdJObj)->init = JObjInit;
     HSD_CLASS_INFO(&hsdJObj)->release = JObjRelease;

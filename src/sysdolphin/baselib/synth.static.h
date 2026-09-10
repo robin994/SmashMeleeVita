@@ -52,7 +52,15 @@ static struct {
     /* 08 */ void (*x8)(int, int);
     /* 0C */ int xC;
 } HSD_Synth_804C2A60[6];
+/* The original DOL places this scratch buffer at 0x804C2AC0, i.e. on a
+ * 32-byte boundary. DevCom/DVD transfers require both source and destination
+ * addresses to be 32-byte aligned. Preserve that ABI property explicitly on
+ * Vita instead of relying on the linker to reproduce the original BSS layout. */
+#ifdef MELEE_VITA_PLATFORM
+static u32 hsd_SynthSFXLoadBuf[0x20 / 4] __attribute__((aligned(32)));
+#else
 static u32 hsd_SynthSFXLoadBuf[0x20 / 4];
+#endif
 static AXVPB* HSD_Synth_804C2AE0[0x80 / 4];
 static int hsd_SynthSFXBank[0x80 / 4];
 static int hsd_SynthSFXBankHead[0x84 / 4];
@@ -75,7 +83,11 @@ static struct {
     /* 04 */ s32 x4;
     /* 08 */ s32 x8;
     /* 0C */ char pad[0x14];
-} lbl_804C4540[3];
+} lbl_804C4540[3]
+#ifdef MELEE_VITA_PLATFORM
+    __attribute__((aligned(32)))
+#endif
+    ;
 
 /* 4D7720 */ static int HSD_Synth_804D7720;
 /* 4D7724 */ static int hsd_SynthSFXBankNum;

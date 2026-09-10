@@ -286,13 +286,24 @@ static s32 PObjLoad(HSD_PObj* pobj, HSD_PObjDesc* desc)
     pobj->n_display = desc->n_display;
     pobj->display = desc->display;
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    /* The bootstrap converter only accepts rigid POBJ_SKIN descriptors with
-       no joint reference. Reject richer runtime types here as well so this
-       target cannot silently construct incomplete envelope/shape objects. */
-    if (pobj_type(pobj) != POBJ_SKIN || desc->u.joint != NULL) {
-        HSD_Panic(__FILE__, __LINE__, "load-only PObj requires rigid skin\n");
+    /* The Vita native converter now supports the bounded envelope descriptor
+       subset used by MnMaAll.  Keep shape animation and shared-skin refs
+       fail-closed until their native adapters exist. */
+    switch (pobj_type(pobj)) {
+    case POBJ_ENVELOPE:
+        pobj->u.envelope_list = loadEnvelopeDesc(desc->u.envelope_p);
+        break;
+    case POBJ_SKIN:
+        if (desc->u.joint != NULL) {
+            HSD_Panic(__FILE__, __LINE__,
+                      "load-only shared-skin PObj requires native adapter\n");
+        }
+        pobj->u.jobj = NULL;
+        break;
+    default:
+        HSD_Panic(__FILE__, __LINE__,
+                  "load-only PObj type requires native adapter\n");
     }
-    pobj->u.jobj = NULL;
 #else
     switch (pobj_type(pobj)) {
     case POBJ_SHAPEANIM:
@@ -409,8 +420,19 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
     }
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    if (pobj_type(pobj) != POBJ_SKIN || pdesc->u.joint != NULL) {
-        HSD_Panic(__FILE__, __LINE__, "load-only PObj refs require rigid skin\n");
+    switch (pobj_type(pobj)) {
+    case POBJ_ENVELOPE:
+        resolveEnvelope(pobj->u.envelope_list, pdesc->u.envelope_p);
+        break;
+    case POBJ_SKIN:
+        if (pdesc->u.joint != NULL) {
+            HSD_Panic(__FILE__, __LINE__,
+                      "load-only shared-skin refs require native adapter\n");
+        }
+        break;
+    default:
+        HSD_Panic(__FILE__, __LINE__,
+                  "load-only PObj refs require native adapter\n");
     }
 #else
     switch (pobj_type(pobj)) {
@@ -1265,6 +1287,72 @@ int HSD_PObjCaptureRigid(HSD_PObj* pobj, Mtx pmtx)
     GXSetCurrentMtx(GX_PNMTX0);
     GXLoadPosMtxImm(pmtx, GX_PNMTX0);
     PObjDispSimplePrimitive(pobj, 0);
+    return 0;
+}
+
+int HSD_PObjCaptureVita(HSD_PObj* pobj, HSD_JObj* owner, Mtx pmtx)
+{
+    if (pobj == NULL || owner == NULL || pmtx == NULL) return -1;
+    if (pobj_type(pobj) == POBJ_SKIN)
+        return HSD_PObjCaptureRigid(pobj, pmtx);
+    if (pobj_type(pobj) != POBJ_ENVELOPE || pobj->u.envelope_list == NULL)
+        return -1;
+
+    switch (pobj->flags & (POBJ_CULLFRONT | POBJ_CULLBACK)) {
+    case 0: GXSetCullMode(GX_CULL_NONE); break;
+    case POBJ_CULLFRONT: GXSetCullMode(GX_CULL_FRONT); break;
+    case POBJ_CULLBACK: GXSetCullMode(GX_CULL_BACK); break;
+    case POBJ_CULLFRONT | POBJ_CULLBACK: return 0;
+    }
+
+    /* Capture the same envelope palette matrices that SetupEnvelopeModelMtx()
+       would submit to GX.  We stop before GX rasterization: GXLoadPosMtxImm
+       records the palette and the command-list decoder applies PNMTXIDX per
+       vertex before the vitaGL replay. */
+    Mtx right_storage;
+    MtxPtr right = _HSD_mkEnvelopeModelNodeMtx(owner, right_storage);
+    HSD_SList* list = pobj->u.envelope_list;
+    for (unsigned idx = 0; idx < 10 && list != NULL; ++idx, list = list->next) {
+        HSD_Envelope* env = list->data;
+        if (env == NULL || env->jobj == NULL) return -1;
+
+        Mtx palette, bind_tmp, right_tmp;
+        MtxPtr matrix;
+        if (env->weight >= (1.0f - FLT_EPSILON)) {
+            if (env->next != NULL) return -1;
+            matrix = env->jobj->mtx;
+            if (right != NULL) {
+                if (env->jobj->envelopemtx == NULL) return -1;
+                MTXConcat(env->jobj->mtx, env->jobj->envelopemtx, palette);
+                matrix = palette;
+            }
+        } else {
+            memset(palette, 0, sizeof(palette));
+            float total_weight = 0.0f;
+            for (HSD_Envelope* blend = env; blend != NULL; blend = blend->next) {
+                if (blend->jobj == NULL || blend->jobj->envelopemtx == NULL ||
+                    !isfinite(blend->weight) || blend->weight < 0.0f)
+                    return -1;
+                MTXConcat(blend->jobj->mtx, blend->jobj->envelopemtx, bind_tmp);
+                HSD_MtxScaledAdd(bind_tmp, palette, palette, blend->weight);
+                total_weight += blend->weight;
+            }
+            if (!isfinite(total_weight) || fabsf(total_weight - 1.0f) > 0.001f)
+                return -1;
+            matrix = palette;
+        }
+
+        if (right != NULL) {
+            MTXConcat(matrix, right, right_tmp);
+            matrix = right_tmp;
+        }
+        GXLoadPosMtxImm(matrix, (u32)(idx * 3u));
+    }
+    if (list != NULL) return -1;
+
+    setupArrayDesc(pobj->verts);
+    setupVtxDesc(pobj);
+    GXCallDisplayList(pobj->display, pobj->n_display << 5);
     return 0;
 }
 #endif

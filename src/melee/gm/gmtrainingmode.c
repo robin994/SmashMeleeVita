@@ -293,3 +293,11 @@ void gm_Mode_Training_OnLoad(void)
     gm_804D68C0 = gm_801677F0();
     gm_804D68C1 = 0;
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmtrainingmode = {
+    GM_TRAINING, "GM_TRAINING", gm_Mode_Training_OnInit, gm_Mode_Training_OnLoad, gm_801B1B74, gm_801B1C24, gm_801B1EB8, gm_801B1EEC
+};
+#endif

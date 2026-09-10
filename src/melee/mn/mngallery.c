@@ -62,6 +62,10 @@ void mnGallery_80258940(void)
 
 void mnGallery_8025896C(HSD_GObj* gobj, int render_pass)
 {
+#ifdef MELEE_VITA_PLATFORM
+    (void)gobj; (void)render_pass;
+    return;
+#else
     HSD_GObj* data = mnGallery_804D6C88;
     HSD_CObj* cobj = gobj->hsd_obj;
     PAD_STACK(0x10);
@@ -74,8 +78,8 @@ void mnGallery_8025896C(HSD_GObj* gobj, int render_pass)
         }
         HSD_SObjLib_803A54EC(gobj, render_pass);
     }
+#endif
 }
-
 void mnGallery_80258A08(HSD_GObj* gobj, u16 width, u16 height, u32 priority)
 {
     HSD_CObj* cobj;
@@ -122,6 +126,12 @@ void mnGallery_80258A08(HSD_GObj* gobj, u16 width, u16 height, u32 priority)
 
 static void mnGallery_80258BC4(struct mnGallery_804D6C88_userdata* data)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Keep Gallery navigation live; the legacy THP/SObj preview is replaced
+     * later by the existing Vita MTH decoder. */
+    if (data) { data->unk0 = 0; data->unk1 = 0; data->state = 1; }
+    return;
+#else
     HSD_GObj* gobj;
     s32 mode;
 
@@ -165,14 +175,18 @@ static void mnGallery_80258BC4(struct mnGallery_804D6C88_userdata* data)
         break;
     }
     data->unk0 = 1;
+#endif
 }
-
 #ifdef MUST_MATCH
 #pragma push
 #pragma dont_inline on
 #endif
 static void mnGallery_80258D50(struct mnGallery_804D6C88_userdata* data)
 {
+#ifdef MELEE_VITA_PLATFORM
+    if (data) { data->unk0 = 0; data->unk1 = 0; data->gobj8 = NULL; }
+    return;
+#else
     if (data->unk0 != 0) {
         lbMthp_8001F800();
         lbAudioAx_800236DC();
@@ -186,6 +200,7 @@ static void mnGallery_80258D50(struct mnGallery_804D6C88_userdata* data)
             data->gobj8 = NULL;
         }
     }
+#endif
 }
 #ifdef MUST_MATCH
 #pragma pop
@@ -194,6 +209,14 @@ static void mnGallery_80258D50(struct mnGallery_804D6C88_userdata* data)
 static void mnGallery_80258DBC(HSD_GObj* gobj,
                                struct mnGallery_804D6C88_userdata* data)
 {
+#ifdef MELEE_VITA_PLATFORM
+    u32 buttons = HSD_PadCopyStatus[0].trigger | HSD_PadCopyStatus[1].trigger |
+                  HSD_PadCopyStatus[2].trigger | HSD_PadCopyStatus[3].trigger;
+    if (buttons & 0x1300) sfxBack();
+    data->state = 1;
+    mn_8022BD8C();
+    return;
+#else
     u32 buttons;
     u32 skip;
     u32 pressed;
@@ -229,6 +252,7 @@ static void mnGallery_80258DBC(HSD_GObj* gobj,
             }
         }
     }
+#endif
 }
 
 static inline void fn_80258ED0_helper(void)

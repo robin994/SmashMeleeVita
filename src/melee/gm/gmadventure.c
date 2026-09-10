@@ -54,6 +54,23 @@ enum {
     ADVENTURE_BACK_TO_CSS = 0x70,
 };
 
+#ifdef MELEE_VITA_PLATFORM
+GameModeState gm_Mode_Adventure_States[] = {
+    {
+        ADVENTURE_INTRO, 2, 0, gm_801B3F40, NULL,
+        { GS_INTRO_NORMAL, &gm_804D68E0, NULL },
+    },
+    {
+        ADVENTURE_MUSHROOM_KINGDOM, 2, 0, gm_801B4064, NULL,
+        { GS_VS, &gmClassic_80472AF8, &gmClassic_8047086C },
+    },
+    {
+        ADVENTURE_BACK_TO_CSS, 2, 0, gm_801B42E8, gm_801B4350,
+        { GS_CSS, &gmClassic_80470708, &gmClassic_80470708 },
+    },
+    { -1 },
+};
+#else
 GameModeState gm_Mode_Adventure_States[] = {
     {
         ADVENTURE_INTRO,
@@ -634,6 +651,7 @@ GameModeState gm_Mode_Adventure_States[] = {
     { -1 },
 };
 
+#endif
 struct gm_803DE650_t gm_803DE650[] = {
     {
         0x00,
@@ -1266,9 +1284,15 @@ void gm_801B4064(GameModeState* arg0)
 
     gm_8017CE34(temp_r28, &temp_r27->x0, temp_r31->xA, temp_r31->x4, var_r30,
                 var_r29, temp_r31->x2, temp_r31->x6, gm_8017E48C(arg0), tmp);
+#ifndef MELEE_VITA_PLATFORM
     gm_LoadRumbleEnabled(temp_r28);
+#endif
     if (temp_r31->x1 & 8) {
+#ifdef MELEE_VITA_PLATFORM
+        temp_r28->rules.on_match_start = NULL;
+#else
         temp_r28->rules.on_match_start = gm_8017C838;
+#endif
     }
 }
 

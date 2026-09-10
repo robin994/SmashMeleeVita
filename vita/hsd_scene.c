@@ -196,6 +196,7 @@ typedef struct {
     uint32_t anim_offset;
     float parent[12], parent_scl[3];
     uint8_t parent_has_scl, has_anim;
+    int8_t branch_visibility;
 } MvJointWork;
 
 static float be_float(const uint8_t *p)
@@ -263,17 +264,10 @@ static int camera_up_from_roll(const float eye[3], const float interest[3],
     return normalize3(up);
 }
 
-int mv_camera_read(const MvDat *v, const char *root_name, MvCamera *camera)
+int mv_camera_read_at(const MvDat *v, uint32_t root, MvCamera *camera)
 {
-    if (!v || !root_name || !camera || !v->pointer_bits) return -1;
+    if (!v || !camera || !v->pointer_bits || root > v->data_size) return -1;
     memset(camera, 0, sizeof(*camera));
-    uint32_t root = NONE;
-    for (uint32_t i = 0; i < v->public_count; ++i) {
-        const char *name; uint32_t offset;
-        if (mv_dat_public(v, i, &name, &offset)) return -1;
-        if (!strcmp(name, root_name)) { root = offset; break; }
-    }
-    if (root == NONE) return -1;
     const uint8_t *p = mv_dat_span(v, root, 64);
     if (!p) return -1;
     camera->flags = mv_be16(p + 4);
@@ -310,6 +304,19 @@ int mv_camera_read(const MvDat *v, const char *root_name, MvCamera *camera)
             !isfinite(camera->right) || camera->top == camera->bottom || camera->left == camera->right) return -1;
     } else return -1;
     return 0;
+}
+
+int mv_camera_read(const MvDat *v, const char *root_name, MvCamera *camera)
+{
+    if (!v || !root_name || !camera || !v->pointer_bits) return -1;
+    uint32_t root = NONE;
+    for (uint32_t i = 0; i < v->public_count; ++i) {
+        const char *name; uint32_t offset;
+        if (mv_dat_public(v, i, &name, &offset)) return -1;
+        if (!strcmp(name, root_name)) { root = offset; break; }
+    }
+    if (root == NONE) return -1;
+    return mv_camera_read_at(v, root, camera);
 }
 
 int mv_camera_visibility(const MvCamera *camera, const MvScene *scene,
@@ -885,6 +892,7 @@ static int mv_scene_build_internal(const MvDat *v, const char *root_name,
     todo[0].offset = root; identity_mtx(todo[0].parent);
     todo[0].anim_offset = anim_root;
     todo[0].has_anim = anim_root_name != NULL;
+    todo[0].branch_visibility = -1;
     todo[0].parent_scl[0] = todo[0].parent_scl[1] = todo[0].parent_scl[2] = 1.0f;
     todo[0].parent_has_scl = 0;
     while (pending) {
@@ -896,6 +904,10 @@ static int mv_scene_build_internal(const MvDat *v, const char *root_name,
         if (++processed > MAX_NODES) goto traversal_fail;
         ++scene->joint_count;
         uint32_t flags = mv_be32(p + 4), child = NONE, next = NONE;
+        if (work.branch_visibility == 0)
+            flags |= MV_JOBJ_HIDDEN;
+        else if (work.branch_visibility > 0)
+            flags &= ~MV_JOBJ_HIDDEN;
         int has_child = mv_dat_pointer(v, joint + 8, &child);
         int has_next = mv_dat_pointer(v, joint + 12, &next);
         if (has_child < 0 || has_next < 0) goto traversal_fail;
@@ -915,6 +927,17 @@ static int mv_scene_build_internal(const MvDat *v, const char *root_name,
             /* HSD_JObjAddAnim applies this AnimJoint flag before frame 0. */
             if (anim.flags & 1u) flags |= MV_JOBJ_CLASSICAL_SCALE;
             else flags &= ~MV_JOBJ_CLASSICAL_SCALE;
+            /* Match JObjUpdateFunc. NODE changes only this JObj while BRANCH
+             * applies the same HIDDEN state recursively to this whole
+             * subtree. Siblings keep the inherited state from their parent. */
+            if (anim.channel_mask & (1u << (11 - 1))) {
+                if (anim.channels[11 - 1] > 0.5f) flags &= ~MV_JOBJ_HIDDEN;
+                else flags |= MV_JOBJ_HIDDEN;
+            }
+            if (anim.channel_mask & (1u << (12 - 1))) {
+                if (anim.channels[12 - 1] > 0.5f) flags &= ~MV_JOBJ_HIDDEN;
+                else flags |= MV_JOBJ_HIDDEN;
+            }
         }
         int unsupported = (flags & (MV_JOBJ_INSTANCE | MV_JOBJ_USE_QUATERNION |
                                     MV_JOBJ_JOINT_MASK | MV_JOBJ_USER_DEF_MTX |
@@ -948,6 +971,9 @@ static int mv_scene_build_internal(const MvDat *v, const char *root_name,
                 child_work->offset = child; memcpy(child_work->parent, world, sizeof(world));
                 memcpy(child_work->parent_scl, current_scl, sizeof(current_scl));
                 child_work->parent_has_scl = (uint8_t)current_has_scl;
+                child_work->branch_visibility = work.branch_visibility;
+                if (work.has_anim && (anim.channel_mask & (1u << (12 - 1))))
+                    child_work->branch_visibility = anim.channels[12 - 1] > 0.5f ? 1 : 0;
                 if (work.has_anim) {
                     child_work->has_anim = anim.has_child;
                     child_work->anim_offset = anim.child;
@@ -980,7 +1006,9 @@ static int mv_scene_build_internal(const MvDat *v, const char *root_name,
             if (has_dobj && decode_dobjs(v, joint, dobj, world, scene)) goto traversal_fail;
         }
     }
-    if (scene->animated && scene->anim_joint_count != scene->joint_count) goto traversal_fail;
+    /* HSD_JObjAddAnimAll permits the AnimJoint tree to end before the Joint
+     * tree. Remaining joints are still visited with ajoint == NULL and keep
+     * their static R/T/S, so partial animation trees are valid. */
     free(todo); free(visited); compute_bounds(scene);
     return scene->mesh_count && scene->vertex_count ? 0 : -1;
 traversal_fail:

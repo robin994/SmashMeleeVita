@@ -321,3 +321,32 @@ void PSMTXTrans(Mtx m, f32 x, f32 y, f32 z)
 
 f32 PSVECSquareMag(Vec* v)
 { return v->x*v->x + v->y*v->y + v->z*v->z; }
+
+
+u32 PSMTXInverse(Mtx src, Mtx inv)
+{
+    Mtx tmp;
+    f32 (*m)[4] = src == inv ? tmp : inv;
+    f32 det = ((((src[2][1] * (src[0][2] * src[1][0])) +
+                 ((src[2][2] * (src[0][0] * src[1][1])) +
+                  (src[2][0] * (src[0][1] * src[1][2])))) -
+                (src[0][2] * (src[2][0] * src[1][1]))) -
+               (src[2][2] * (src[1][0] * src[0][1]))) -
+              (src[1][2] * (src[0][0] * src[2][1]));
+    if (det == 0.0f) return 0;
+    det = 1.0f / det;
+    m[0][0] = det * ((src[1][1] * src[2][2]) - (src[2][1] * src[1][2]));
+    m[0][1] = det * -((src[0][1] * src[2][2]) - (src[2][1] * src[0][2]));
+    m[0][2] = det * ((src[0][1] * src[1][2]) - (src[1][1] * src[0][2]));
+    m[1][0] = det * -((src[1][0] * src[2][2]) - (src[2][0] * src[1][2]));
+    m[1][1] = det * ((src[0][0] * src[2][2]) - (src[2][0] * src[0][2]));
+    m[1][2] = det * -((src[0][0] * src[1][2]) - (src[1][0] * src[0][2]));
+    m[2][0] = det * ((src[1][0] * src[2][1]) - (src[2][0] * src[1][1]));
+    m[2][1] = det * -((src[0][0] * src[2][1]) - (src[2][0] * src[0][1]));
+    m[2][2] = det * ((src[0][0] * src[1][1]) - (src[1][0] * src[0][1]));
+    m[0][3] = (-m[0][0] * src[0][3]) - (m[0][1] * src[1][3]) - (m[0][2] * src[2][3]);
+    m[1][3] = (-m[1][0] * src[0][3]) - (m[1][1] * src[1][3]) - (m[1][2] * src[2][3]);
+    m[2][3] = (-m[2][0] * src[0][3]) - (m[2][1] * src[1][3]) - (m[2][2] * src[2][3]);
+    if (m == tmp) PSMTXCopy(tmp, inv);
+    return 1;
+}

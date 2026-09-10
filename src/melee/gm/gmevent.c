@@ -1,4 +1,8 @@
 #include "gmevent.h"
+#ifdef MELEE_VITA_PLATFORM
+#include <sysdolphin/baselib/archive.h>
+#include <sysdolphin/baselib/debug.h>
+#endif
 
 #include <melee/ft/forward.h>
 #include <melee/pl/forward.h>
@@ -200,6 +204,54 @@ GameModeState gm_Mode_Event_States[] = {
     },
     { -1 },
 };
+
+#ifdef MELEE_VITA_PLATFORM
+/* Menu readers use evinit flags and player kind. Relocation fixes pointers,
+ * but the two packed flag bytes still need the ARM bitfield layout. Convert
+ * shared evinit records exactly once per newly parsed archive. Runtime-only
+ * x4/bonus/stage/player scalars are deliberately outside this menu adapter. */
+static void event_menu_range(HSD_Archive* archive, const void* ptr, size_t size)
+{
+    uintptr_t base = (uintptr_t) archive->data;
+    uintptr_t value = (uintptr_t) ptr;
+    if (!ptr || value < base || size > archive->header.data_size ||
+        value - base > archive->header.data_size - size)
+        HSD_Panic(__FILE__, __LINE__, "GmEvent menu descriptor outside archive");
+}
+
+void mv_event_menu_archive_prepare(HSD_Archive* archive)
+{
+    struct gm_804D6900_t** levels = HSD_ArchiveGetPublicAddress(
+        archive, "sqEventInitDataLevelTbl");
+    struct gm_evinit* seen[51];
+    unsigned count = 0;
+    event_menu_range(archive, levels, 51 * sizeof(*levels));
+    for (unsigned i = 0; i < 51; ++i) {
+        struct gm_804D6900_t* level = levels[i];
+        event_menu_range(archive, level, sizeof(*level));
+        struct gm_evinit* init = level->evinit;
+        event_menu_range(archive, init, sizeof(*init));
+        /* mnEvent calls gm_801BEBF8, which dereferences player_init[0]. */
+        event_menu_range(archive, level->player_init[0], sizeof(gm_801BAB40_src));
+        unsigned j;
+        for (j = 0; j < count && seen[j] != init; ++j) {}
+        if (j != count) continue;
+        seen[count++] = init;
+        const u8 a = ((u8*) init)[0], b = ((u8*) init)[1];
+        init->x0_0 = a >> 5;
+        init->x0_3 = (a >> 2) & 7;
+        init->x0_6 = (a >> 1) & 1;
+        init->x0_7 = a & 1;
+        init->x1_0 = b >> 7;
+        init->x1_1 = (b >> 6) & 1;
+        init->x1_2 = (b >> 5) & 1;
+        init->x1_3 = (b >> 4) & 1;
+        init->x1_4 = (b >> 3) & 1;
+        init->x1_5 = b & 7;
+    }
+    OSReport("GAME_MENU_EVENT_NATIVE_PASS levels=51 unique_init=%u scope=menu_flags+pointer_bounds runtime_scalars=unconverted\n", count);
+}
+#endif
 
 void gm_801BA8FC(void)
 {

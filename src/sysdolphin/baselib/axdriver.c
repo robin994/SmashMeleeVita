@@ -11,6 +11,46 @@
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 
+#ifdef MELEE_VITA_PLATFORM
+static u32 vita_sem_be32(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u32) p[0] << 24 | (u32) p[1] << 16 | (u32) p[2] << 8 | p[3];
+}
+
+static void vita_sem_store_u32(void* ptr, u32 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static bool vita_sem_convert_index(void* bytes, size_t size)
+{
+    size_t offset = 0;
+    u8* data = bytes;
+
+    /* smash2.sem begins with five count + u32-array blocks. Byte swapping
+       those index blocks lets the original relocation code stay unchanged. */
+    for (int block = 0; block < 5; ++block) {
+        if (offset + 4 > size) return false;
+        u32 count = vita_sem_be32(data + offset);
+        vita_sem_store_u32(data + offset, count);
+        offset += 4;
+        if (count > (size - offset) / 4) return false;
+        for (u32 i = 0; i < count; ++i) {
+            u32 value = vita_sem_be32(data + offset + i * 4);
+            vita_sem_store_u32(data + offset + i * 4, value);
+        }
+        offset += (size_t) count * 4;
+    }
+    return true;
+}
+
+static u32 vita_sem_command_word(const u32* ptr)
+{
+    return vita_sem_be32(ptr);
+}
+#endif
+
 void* AXDriverAlloc(size_t size)
 {
     void* ptr = &AXDriver_804D77D4[axfxallocsize];
@@ -325,7 +365,11 @@ void AXDriver_8038C6C0(HSD_SM* v)
     PAD_STACK(8);
 
     while (v->x30 == (s32) AXDriver_804D778C) {
+#ifdef MELEE_VITA_PLATFORM
+        cmd_word = vita_sem_command_word(v->cmd_stream);
+#else
         cmd_word = *v->cmd_stream;
+#endif
         cmd_type = cmd_word >> 0x18U;
 
         cmd_size = AXDriver_8038C678(cmd_type, cmd_word);
@@ -335,99 +379,99 @@ void AXDriver_8038C6C0(HSD_SM* v)
         v->x30 += cmd_size;
         switch (cmd_type) {
         case 2:
-            v->x2A = *v->cmd_stream;
+            v->x2A = cmd_word;
             if (v->x2A == 0) {
                 v->flags |= 0x100000;
             }
             break;
         case 3:
             if ((v->flags & 0x100000) || v->x2A != 0) {
-                v->cmd_stream -= *v->cmd_stream & 0xFFFFFF;
+                v->cmd_stream -= cmd_word & 0xFFFFFF;
                 v->x2A--;
             }
             break;
         case 1:
             v->flags |= 1;
-            v->fid = *v->cmd_stream;
+            v->fid = cmd_word;
             break;
         case 4:
             v->flags |= 2;
-            v->pri = *v->cmd_stream;
+            v->pri = cmd_word;
             break;
         case 5:
             v->flags |= 2;
-            cmd_val = v->pri + (s8) (u8) *v->cmd_stream;
+            cmd_val = v->pri + (s8) (u8) cmd_word;
             v->pri = CLAMP(5, cmd_val, 0x1C);
             break;
         case 6:
             v->flags |= 4;
-            v->x1A = *v->cmd_stream;
+            v->x1A = cmd_word;
             break;
         case 7:
             v->flags |= 4;
-            cmd_val = v->x1A + (s8) (u8) *v->cmd_stream;
+            cmd_val = v->x1A + (s8) (u8) cmd_word;
             v->x1A = CLAMP(0, cmd_val, 0xFF);
             break;
         case 8:
             v->flags |= 8;
-            v->x1C = *v->cmd_stream;
+            v->x1C = cmd_word;
             break;
         case 9:
             v->flags |= 8;
-            cmd_val = v->x1C + (s8) (u8) *v->cmd_stream;
+            cmd_val = v->x1C + (s8) (u8) cmd_word;
             v->x1C = CLAMP(0, cmd_val, 0xFF);
             break;
         case 10:
             v->flags |= 0x10;
-            v->x1E = *v->cmd_stream;
+            v->x1E = cmd_word;
             break;
         case 11:
             v->flags |= 0x10;
-            cmd_val = v->x1E + (s8) (u8) *v->cmd_stream;
+            cmd_val = v->x1E + (s8) (u8) cmd_word;
             v->x1E = CLAMP(0, cmd_val, 0xFF);
             break;
         case 12:
             v->flags |= 0x20;
-            v->x20 = (s16) (u16) *v->cmd_stream;
+            v->x20 = (s16) (u16) cmd_word;
             break;
         case 13:
             v->flags |= 0x20;
-            cmd_val = v->x20 + (s16) (u16) *v->cmd_stream;
+            cmd_val = v->x20 + (s16) (u16) cmd_word;
             v->x20 = CLAMP(-0x2A30, cmd_val, 0x960);
             break;
         case 16:
             if (!(AXDriver_804D603C & 1)) {
                 v->flags |= 0x80;
-                v->x24[0] = *v->cmd_stream;
+                v->x24[0] = cmd_word;
             }
             break;
         case 20:
             if (!(AXDriver_804D603C & 1)) {
-                v->x26 = *v->cmd_stream;
+                v->x26 = cmd_word;
             }
             break;
         case 21:
             if (!((AXDriver_804D603C >> 1U) & 1)) {
-                v->x27 = *v->cmd_stream;
+                v->x27 = cmd_word;
             }
             break;
         case 17:
             if (!(AXDriver_804D603C & 1)) {
                 v->flags |= 0x80;
-                cmd_val = v->x24[0] + (s8) (u8) *v->cmd_stream;
+                cmd_val = v->x24[0] + (s8) (u8) cmd_word;
                 v->x24[0] = CLAMP(0, cmd_val, 0xFF);
             }
             break;
         case 18:
             if (!((AXDriver_804D603C >> 1U) & 1)) {
                 v->flags |= 0x80;
-                v->x24[1] = *v->cmd_stream;
+                v->x24[1] = cmd_word;
             }
             break;
         case 19:
             if (!(AXDriver_804D603C >> 1 & 1)) {
                 v->flags |= 0x80;
-                cmd_val = v->x24[1] + (s8) (u8) *v->cmd_stream;
+                cmd_val = v->x24[1] + (s8) (u8) cmd_word;
                 v->x24[1] = CLAMP(0, cmd_val, 0xFF);
             }
             break;
@@ -841,6 +885,16 @@ void AXDriver_8038DA70(const char* path, void (*callback)(void))
     }
 
     DVDClose(&fileInfo);
+
+#ifdef MELEE_VITA_PLATFORM
+    if (!vita_sem_convert_index(AXDriver_804D7798, AXDriver_804D779C)) {
+        OSReport("invalid big-endian SEM index in %s\n", path);
+        HSD_AudioFree(AXDriver_804D7798);
+        AXDriver_804D7798 = NULL;
+        AXDriver_804D779C = 0;
+        return;
+    }
+#endif
 
     AXDriver_804D77A0 = ((s32*) AXDriver_804D7798)[0];
     count = AXDriver_804D77A0;

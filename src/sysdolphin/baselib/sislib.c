@@ -18,6 +18,14 @@
 #include <dolphin/os.h>
 #include <dolphin/types.h>
 
+#ifdef MELEE_VITA_PLATFORM
+static void HSD_SisLib_VitaNoopRender(HSD_GObj* gobj, int code)
+{
+    (void) gobj;
+    (void) code;
+}
+#endif
+
 static HSD_WObjDesc HSD_SisLib_8040C490 = {
     NULL,
     { 0, 0, 1 },
@@ -267,8 +275,17 @@ HSD_Text* HSD_SisLib_803A5ACC(int font_idx, s32 context_id, f32 pos_x,
             cam_entry = cam_entry->x0;
         }
         gobj = GObj_Create(cam_entry->x8, cam_entry->xC, cam_entry->xD);
+#ifdef MELEE_VITA_PLATFORM
+        /* CSS reorders SIS text entities with HSD_GObjGXLink_803909D8().
+         * They must therefore have a valid GX link even though the legacy GX
+         * text renderer is not used by the vitaGL replay path. Keep the
+         * original list membership/order contract with a no-op renderer. */
+        GObj_SetupGXLink(gobj, HSD_SisLib_VitaNoopRender, cam_entry->xE,
+                         cam_entry->xF);
+#else
         GObj_SetupGXLink(gobj, HSD_SisLib_803A84BC, cam_entry->xE,
                          cam_entry->xF);
+#endif
     }
     while (list_cur != NULL) {
         list_tail = list_cur;

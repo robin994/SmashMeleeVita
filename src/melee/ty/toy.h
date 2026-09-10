@@ -65,8 +65,19 @@
 /* 31263C */ void Toy_8031263C(void);
 /* 3127D4 */ void Toy_803127D4(void);
 /* 3FE5E8 */ extern char Toy_str_ScMenFigure_cam_int1_camera[];
+#ifdef MELEE_VITA_PLATFORM
+/* Original GALE01 Toy BSS block: 4A26B8..4A2ABC. Several routines address
+ * later globals by fixed offsets from 4A26B8, so Vita must expose one backing
+ * object instead of relying on ELF section ordering. */
+extern u8 Toy_VitaBss_804A26B8[0x404];
+#define Toy_804A284C \
+    (*(u16 (*)[302]) (void*) (Toy_VitaBss_804A26B8 + 0x194))
+#define Toy_804A2AA8 \
+    (*(ToyAnimState*) (void*) (Toy_VitaBss_804A26B8 + 0x3F0))
+#else
 /* 4A284C */ extern u16 Toy_804A284C[302];
 /* 4A2AA8 */ extern ToyAnimState Toy_804A2AA8;
+#endif
 /* 4D6EAC */ extern TyDspEntry* Toy_sbss_804D6EAC;
 /* 4D6EB0 */ extern TyDspEntry* Toy_sbss_804D6EB0;
 /* 4D6EC8 */ extern HSD_Archive* Toy_sbss_804D6EC8;

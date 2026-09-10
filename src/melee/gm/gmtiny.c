@@ -176,3 +176,11 @@ void gm_Mode_TinyVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmtiny = {
+    GM_TINY_VS, "GM_TINY_VS", gm_Mode_TinyVs_OnInit, gm_Mode_TinyVs_OnLoad, gm_801B8DA8, gm_801B8DD4, gm_801B8DFC, gm_801B8E24
+};
+#endif

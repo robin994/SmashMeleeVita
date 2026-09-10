@@ -192,3 +192,11 @@ void gm_Mode_InvisibleVs_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gminvisible = {
+    GM_INVISIBLE_VS, "GM_INVISIBLE_VS", gm_Mode_InvisibleVs_OnInit, gm_Mode_InvisibleVs_OnLoad, onEnterCss, onExitCss, onEnterSss, onExitSss
+};
+#endif

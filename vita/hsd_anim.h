@@ -5,12 +5,13 @@
 #include <stdint.h>
 
 /* One sampled HSD_AnimJoint node. Channels use the upstream JObj animation
-   numbers (1..10 = rotate XYZ, path, translate XYZ, scale XYZ). */
+   numbers (1..12 = rotate XYZ, path, translate XYZ, scale XYZ, node/branch
+   visibility). */
 typedef struct {
     uint32_t child, next, flags;
     uint16_t channel_mask;
     uint8_t has_child, has_next;
-    float channels[10];
+    float channels[12];
     size_t aobj_count, fobj_count, applied_channel_count;
 } MvAnimJointSample;
 

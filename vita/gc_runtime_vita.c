@@ -2,7 +2,9 @@
 #include "gx_boot_vita.h"
 #include "audio_boot_vita.h"
 
+#include <dolphin/ar.h>
 #include <dolphin/card.h>
+#include <dolphin/card/CARDStat.h>
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 #include <dolphin/vi.h>
@@ -19,6 +21,7 @@
 #include <psp2/kernel/processmgr.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -80,6 +83,14 @@ typedef struct {
 static MvDvdEntry dvd_entries[MV_DVD_MAX_ENTRIES];
 static unsigned dvd_entry_count;
 static int devcom_request_id = 4;
+static DVDDiskID current_disk_id = {
+    .gameName = {'G', 'A', 'L', 'E'},
+    .company = {'0', '1'},
+    .diskNumber = 0,
+    .gameVersion = 2,
+    .streaming = 0,
+    .streamingBufSize = 0,
+};
 
 static uintptr_t align_up(uintptr_t value, uint32_t align)
 {
@@ -282,6 +293,58 @@ OSTime OSGetTime(void)
     return (OSTime)((usec * MV_GC_TIMER_HZ) / 1000000ull);
 }
 
+static int mv_is_leap_year(int year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+static int mv_leap_days_before(int year)
+{
+    if (year < 1) return 0;
+    return (year + 3) / 4 - (year - 1) / 100 + (year - 1) / 400;
+}
+
+void OSTicksToCalendarTime(OSTime ticks, OSCalendarTime *td)
+{
+    static const int year_days[12] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+    };
+    static const int leap_year_days[12] = {
+        0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335
+    };
+    const OSTime ticks_per_second = (OSTime)OS_TIMER_CLOCK;
+    OSTime subsecond = ticks % ticks_per_second;
+    if (subsecond < 0) subsecond += ticks_per_second;
+    td->usec = (int)((subsecond * 1000000ll / ticks_per_second) % 1000);
+    td->msec = (int)((subsecond * 1000ll / ticks_per_second) % 1000);
+    ticks -= subsecond;
+
+    s64 seconds = ticks / ticks_per_second;
+    int days = (int)(seconds / 86400ll) + 0xB2575;
+    int secs = (int)(seconds % 86400ll);
+    if (secs < 0) {
+        --days;
+        secs += 86400;
+    }
+
+    td->wday = (days + 6) % 7;
+    int year = days / 365;
+    int year_start;
+    while (days < (year_start = year * 365 + mv_leap_days_before(year))) --year;
+    days -= year_start;
+    td->year = year;
+    td->yday = days;
+
+    const int *months = mv_is_leap_year(year) ? leap_year_days : year_days;
+    int month = 12;
+    while (days < months[--month]) {}
+    td->mon = month;
+    td->mday = days - months[month] + 1;
+    td->hour = secs / 3600;
+    td->min = (secs / 60) % 60;
+    td->sec = secs % 60;
+}
+
 BOOL OSDisableInterrupts(void)
 {
     BOOL previous = critical_depth == 0;
@@ -409,26 +472,64 @@ long DVDReadPrio(DVDFileInfo *fileInfo, void *addr, long length, long offset,
     MvDvdEntry *entry = dvd_entry_by_id((s32)fileInfo->startAddr);
     if (!entry || (uint64_t)offset > entry->size) return DVD_RESULT_FATAL_ERROR;
 
-    SceUID fd = sceIoOpen(entry->path, SCE_O_RDONLY, 0);
-    if (fd < 0) return DVD_RESULT_FATAL_ERROR;
-    if (sceIoLseek(fd, offset, SCE_SEEK_SET) < 0) {
-        sceIoClose(fd);
-        return DVD_RESULT_FATAL_ERROR;
-    }
-
     size_t available = entry->size - (size_t)offset;
     size_t wanted = (size_t)length;
     size_t to_read = wanted < available ? wanted : available;
     size_t done = 0;
-    while (done < to_read) {
-        int result = sceIoRead(fd, (uint8_t *)addr + done, to_read - done);
-        if (result <= 0) {
-            sceIoClose(fd);
+
+    /* Prefer native Vita I/O. If it fails for an extracted regular file,
+       retry through newlib stdio, which is already used successfully by the
+       movie/title/menu asset path on hardware. */
+    int native_failed = 0;
+    SceUID fd = sceIoOpen(entry->path, SCE_O_RDONLY, 0);
+    if (fd < 0) {
+        native_failed = 1;
+    } else {
+        if (sceIoLseek(fd, offset, SCE_SEEK_SET) < 0) {
+            native_failed = 2;
+        } else {
+            while (done < to_read) {
+                int result = sceIoRead(fd, (uint8_t *)addr + done,
+                                       to_read - done);
+                if (result <= 0) {
+                    native_failed = 3;
+                    break;
+                }
+                done += (size_t)result;
+            }
+        }
+        sceIoClose(fd);
+    }
+
+    if (native_failed) {
+        FILE *stream = fopen(entry->path, "rb");
+        if (!stream || fseek(stream, offset, SEEK_SET)) {
+            if (stream) fclose(stream);
+            OSReport("DVD_READ_FAIL path=%s backend=sceIo+stdio native_stage=%d "
+                     "offset=%ld size=%ld\n",
+                     entry->path, native_failed, offset, length);
             return DVD_RESULT_FATAL_ERROR;
         }
-        done += (size_t)result;
+        done = 0;
+        while (done < to_read) {
+            size_t got = fread((uint8_t *)addr + done, 1, to_read - done,
+                               stream);
+            if (!got) {
+                int failed = ferror(stream);
+                fclose(stream);
+                OSReport("DVD_READ_FAIL path=%s backend=stdio native_stage=%d "
+                         "offset=%ld size=%ld ferror=%d done=%u/%u\n",
+                         entry->path, native_failed, offset, length, failed,
+                         (unsigned)done, (unsigned)to_read);
+                return DVD_RESULT_FATAL_ERROR;
+            }
+            done += got;
+        }
+        fclose(stream);
+        OSReport("DVD_READ_FALLBACK_PASS path=%s native_stage=%d offset=%ld "
+                 "size=%ld\n",
+                 entry->path, native_failed, offset, length);
     }
-    sceIoClose(fd);
 
     /* DVD requests are 32-byte rounded and may legally extend past the file's
      * logical length into sector padding.  Extracted files do not contain that
@@ -456,6 +557,109 @@ void CARDInit(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita/save", 0777);
     card_ready = 1;
+}
+
+static s32 mv_card_channel_result(s32 chan)
+{
+    if (!card_ready) CARDInit();
+    return chan == 0 ? CARD_RESULT_READY : CARD_RESULT_NOCARD;
+}
+
+s32 CARDMountAsync(s32 chan, void *workArea, CARDCallback detachCallback,
+                   CARDCallback attachCallback)
+{
+    (void)workArea;
+    (void)detachCallback;
+    s32 result = mv_card_channel_result(chan);
+    if (attachCallback) attachCallback(chan, result);
+    return result;
+}
+
+s32 CARDCheckAsync(s32 chan, CARDCallback callback)
+{
+    s32 result = mv_card_channel_result(chan);
+    if (callback) callback(chan, result);
+    return result;
+}
+
+s32 CARDFreeBlocks(s32 chan, s32 *byteNotUsed, s32 *filesNotUsed)
+{
+    s32 result = mv_card_channel_result(chan);
+    if (result != CARD_RESULT_READY) return result;
+    if (byteNotUsed) *byteNotUsed = (16 * 1024 * 1024 / 8) - (5 * 8192);
+    if (filesNotUsed) *filesNotUsed = CARD_MAX_FILE;
+    return CARD_RESULT_READY;
+}
+
+s32 CARDOpen(s32 chan, char *fileName, CARDFileInfo *fileInfo)
+{
+    if (mv_card_channel_result(chan) != CARD_RESULT_READY)
+        return CARD_RESULT_NOCARD;
+    if (!fileName || !fileInfo) return CARD_RESULT_FATAL_ERROR;
+
+    char path[512];
+    snprintf(path, sizeof(path), "ux0:data/SmashMeleeVita/save/%s", fileName);
+    SceIoStat stat;
+    if (sceIoGetstat(path, &stat) < 0) return CARD_RESULT_NOFILE;
+    memset(fileInfo, 0, sizeof(*fileInfo));
+    fileInfo->chan = chan;
+    fileInfo->fileNo = 0;
+    fileInfo->length = (s32)stat.st_size;
+    return CARD_RESULT_READY;
+}
+
+s32 CARDClose(CARDFileInfo *fileInfo)
+{
+    return fileInfo ? CARD_RESULT_READY : CARD_RESULT_FATAL_ERROR;
+}
+
+s32 CARDGetStatus(s32 chan, s32 fileNo, CARDStat *stat)
+{
+    (void)fileNo;
+    (void)stat;
+    return mv_card_channel_result(chan) == CARD_RESULT_READY ? CARD_RESULT_NOFILE
+                                                             : CARD_RESULT_NOCARD;
+}
+
+s32 CARDUnmount(s32 chan)
+{
+    return mv_card_channel_result(chan);
+}
+
+s32 CARDFormatAsync(s32 chan, CARDCallback callback)
+{
+    s32 result = mv_card_channel_result(chan) == CARD_RESULT_READY
+                     ? CARD_RESULT_IOERROR
+                     : CARD_RESULT_NOCARD;
+    if (callback) callback(chan, result);
+    return result;
+}
+
+s32 CARDDeleteAsync(s32 chan, char *fileName, CARDCallback callback)
+{
+    (void)fileName;
+    s32 result = mv_card_channel_result(chan) == CARD_RESULT_READY
+                     ? CARD_RESULT_NOFILE
+                     : CARD_RESULT_NOCARD;
+    if (callback) callback(chan, result);
+    return result;
+}
+
+s32 CARDRenameAsync(s32 chan, const char *oldName, const char *newName,
+                    CARDCallback callback)
+{
+    (void)oldName;
+    (void)newName;
+    s32 result = mv_card_channel_result(chan) == CARD_RESULT_READY
+                     ? CARD_RESULT_NOFILE
+                     : CARD_RESULT_NOCARD;
+    if (callback) callback(chan, result);
+    return result;
+}
+
+DVDDiskID *DVDGetCurrentDiskID(void)
+{
+    return &current_disk_id;
 }
 
 /* The original HSD CARD layer resets its asynchronous command queue here.
@@ -555,14 +759,18 @@ BOOL OSGetResetSwitchState(void)
     return false;
 }
 
-bool lbLang_IsSettingUS(void)
+void OSResetSystem(int reset, u32 code, BOOL forceMenu)
 {
-    return true;
+    (void)forceMenu;
+    reset_code = code;
+    sceKernelExitProcess(reset ? 1 : 0);
 }
 
-bool lbLang_IsSavedLanguageUS(void)
+void lb_800192A8(void (*cb)(void))
 {
-    return true;
+    /* Vita DVD reads complete synchronously, so the GameCube drive-state pump
+     * collapses to the periodic callback used by Melee's wait loops. */
+    if (cb) cb();
 }
 
 bool HSD_DevComIsBusy(int idx)
@@ -571,9 +779,23 @@ bool HSD_DevComIsBusy(int idx)
     return false;
 }
 
+int HSD_DevComCancelEx(int dcReq, u32 flags, HSD_DevComCallback cb, void *args)
+{
+    (void)dcReq;
+    (void)flags;
+    (void)cb;
+    (void)args;
+    /* All requests in this adapter finish inside HSD_DevComRequest(), so there
+     * is no outstanding queue entry left to cancel. Upstream also returns 0
+     * when the requested id is no longer present. */
+    return 0;
+}
+
 int HSD_DevComRequest(int file, uintptr_t src, uintptr_t dest, size_t size,
                       int type, int pri, HSD_DevComCallback callback, void *args)
 {
+    static u8 relay[0x4000] __attribute__((aligned(32)));
+    static ARQRequest relay_request;
     (void)pri;
     int req = devcom_request_id;
     devcom_request_id += 4;
@@ -585,20 +807,109 @@ int HSD_DevComRequest(int file, uintptr_t src, uintptr_t dest, size_t size,
         if (callback) callback(req, (int)(intptr_t)args, NULL, false);
         return req;
     }
-    if (type != 0x21 && type != 0x23) {
+    if (type != 0x21 && type != 0x22 && type != 0x23) {
+        OSReport("DEVCOM_FAIL reason=type file=%d src=%08lx dest=%08lx size=%u "
+                 "type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned long)dest,
+                 (unsigned)size, type, pri);
         if (callback) callback(req, (int)(intptr_t)args, NULL, true);
         return -1;
     }
-    if (!dest || !size) {
+    if ((type != 0x22 && !dest) || !size) {
+        OSReport("DEVCOM_FAIL reason=zero file=%d src=%08lx dest=%08lx size=%u "
+                 "type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned long)dest,
+                 (unsigned)size, type, pri);
+        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
+        return -1;
+    }
+    if ((src & 31u) || (type != 0x22 && (dest & 31u)) || (size & 31u)) {
+        OSReport("DEVCOM_FAIL reason=alignment file=%d src=%08lx dest=%08lx "
+                 "size=%u type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned long)dest,
+                 (unsigned)size, type, pri);
+        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
+        return -1;
+    }
+    if (type == 0x22 && size > sizeof(relay)) {
+        OSReport("DEVCOM_FAIL reason=sbuf_size file=%d src=%08lx size=%u max=%u "
+                 "type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned)size,
+                 (unsigned)sizeof(relay), type, pri);
         if (callback) callback(req, (int)(intptr_t)args, NULL, true);
         return -1;
     }
 
     DVDFileInfo info;
-    if (!DVDFastOpen(file, &info) ||
-        DVDReadPrio(&info, (void *)dest, (long)size, (long)src, 2) < 0) {
+    if (!DVDFastOpen(file, &info)) {
+        OSReport("DEVCOM_FAIL reason=fastopen file=%d src=%08lx dest=%08lx "
+                 "size=%u type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned long)dest,
+                 (unsigned)size, type, pri);
         if (callback) callback(req, (int)(intptr_t)args, NULL, true);
         return -1;
+    }
+
+    if (type == 0x21) {
+        if (DVDReadPrio(&info, (void *)dest, (long)size, (long)src, 2) < 0) {
+            DVDClose(&info);
+            MvDvdEntry *entry = dvd_entry_by_id(file);
+            OSReport("DEVCOM_FAIL reason=dvdread file=%d path=%s src=%08lx "
+                     "dest=%08lx size=%u type=%02x pri=%d\n",
+                     file, entry ? entry->path : "?", (unsigned long)src,
+                     (unsigned long)dest, (unsigned)size, type, pri);
+            if (callback) callback(req, (int)(intptr_t)args, NULL, true);
+            return -1;
+        }
+    } else if (type == 0x22) {
+        /* DEVCOMDEST_SBUF: GameCube reads into one of DevCom's internal
+         * relay buffers and passes that buffer to the completion callback.
+         * A destination address of zero is therefore intentional. */
+        if (!callback) {
+            DVDClose(&info);
+            OSReport("DEVCOM_FAIL reason=sbuf_callback file=%d src=%08lx size=%u "
+                     "type=%02x pri=%d\n",
+                     file, (unsigned long)src, (unsigned)size, type, pri);
+            return -1;
+        }
+        if (DVDReadPrio(&info, relay, (long)size, (long)src, 2) < 0) {
+            DVDClose(&info);
+            MvDvdEntry *entry = dvd_entry_by_id(file);
+            OSReport("DEVCOM_FAIL reason=dvdread_sbuf file=%d path=%s src=%08lx "
+                     "size=%u type=%02x pri=%d\n",
+                     file, entry ? entry->path : "?", (unsigned long)src,
+                     (unsigned)size, type, pri);
+            callback(req, (int)(intptr_t)args, NULL, true);
+            return -1;
+        }
+        DVDClose(&info);
+        OSReport("DEVCOM_SBUF_PASS file=%d src=%08lx size=%u type=%02x pri=%d\n",
+                 file, (unsigned long)src, (unsigned)size, type, pri);
+        callback(req, (int)(intptr_t)args, relay, false);
+        return req;
+    } else {
+        /* Type 0x23 is DVD -> relay RAM -> ARAM on GameCube. ARAM addresses
+           are offsets and must never be treated as CPU pointers on Vita. */
+        size_t done = 0;
+        while (done < size) {
+            size_t chunk = size - done;
+            if (chunk > sizeof(relay)) chunk = sizeof(relay);
+            if (DVDReadPrio(&info, relay, (long)chunk, (long)(src + done), 2) < 0) {
+                DVDClose(&info);
+                MvDvdEntry *entry = dvd_entry_by_id(file);
+                OSReport("DEVCOM_FAIL reason=dvdread_aram file=%d path=%s "
+                         "src=%08lx dest=%08lx size=%u done=%u type=%02x pri=%d\n",
+                         file, entry ? entry->path : "?",
+                         (unsigned long)src, (unsigned long)dest,
+                         (unsigned)size, (unsigned)done, type, pri);
+                if (callback) callback(req, (int)(intptr_t)args, NULL, true);
+                return -1;
+            }
+            ARQPostRequest(&relay_request, 0, ARQ_TYPE_MRAM_TO_ARAM,
+                           ARQ_PRIORITY_LOW, (u32)(uintptr_t)relay,
+                           (u32)(dest + done), (u32)chunk, NULL);
+            done += chunk;
+        }
     }
     DVDClose(&info);
     if (callback) callback(req, (int)(intptr_t)args, NULL, false);
@@ -696,3 +1007,9 @@ int mv_lbarchive_boot_probe(uint32_t out[MV_LBARCHIVE_STAT_COUNT])
     return 0;
 }
 
+
+/* PowerPC cache maintenance is unnecessary on Vita process memory. */
+void DCFlushRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
+void DCFlushRangeNoSync(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
+void DCInvalidateRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
+void DCStoreRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }

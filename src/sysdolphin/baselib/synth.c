@@ -41,6 +41,51 @@ struct SfxLoadStreamNode {
     /* 0x14 */ s32 x14;
 };
 
+#ifdef MELEE_VITA_PLATFORM
+static u16 vita_sfx_be16(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u16) (((u16) p[0] << 8) | p[1]);
+}
+
+static u32 vita_sfx_be32(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u32) p[0] << 24 | (u32) p[1] << 16 | (u32) p[2] << 8 | p[3];
+}
+
+static void vita_sfx_store_u16(void* ptr, u16 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static void vita_sfx_store_u32(void* ptr, u32 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static void vita_sfx_convert_voice(u8* voice, u32 aram_base)
+{
+    /* SSM descriptors are packed GameCube AX structures. Convert only the
+       scalar descriptor fields; the ADPCM sample payload in ARAM stays raw. */
+    vita_sfx_store_u16(voice + 0x10, vita_sfx_be16(voice + 0x10));
+    vita_sfx_store_u16(voice + 0x12, vita_sfx_be16(voice + 0x12));
+
+    for (int off = 0x14; off <= 0x1C; off += 4) {
+        u32 address = vita_sfx_be32(voice + off) + aram_base * 2;
+        vita_sfx_store_u16(voice + off, (u16) (address >> 16));
+        vita_sfx_store_u16(voice + off + 2, (u16) address);
+    }
+
+    for (int off = 0x20; off < 0x48; off += 2) {
+        vita_sfx_store_u16(voice + off, vita_sfx_be16(voice + off));
+    }
+    for (int off = 0x48; off < 0x4E; off += 2) {
+        vita_sfx_store_u16(voice + off, vita_sfx_be16(voice + off));
+    }
+}
+#endif
+
 static inline s32 SfxLoadStreamDataSize(s32 size)
 {
     return size + 8;
@@ -63,6 +108,22 @@ static void HSD_SynthSFXSampleLoadCallback(int result, int length, void* addr,
         AXVPB** pp;
         s32 count;
         s32 base;
+
+#ifdef MELEE_VITA_PLATFORM
+        /* A failed/misaligned header transfer used to leave the scratch
+         * buffer zeroed. header_size - 0x10 then underflowed and the backwards
+         * copy walked below the audio heap until a Data Abort. Fail at the
+         * actual invariant instead and leave enough telemetry in runtime.log
+         * to diagnose malformed SSM data on hardware. */
+        OSReport("SFX_SAMPLE_HEADER header=%08x sample=%08x count=%u base=%u heap=%p cancel=%u\n",
+                 (unsigned) hsd_SynthSFXLoadBuf[0],
+                 (unsigned) hsd_SynthSFXLoadBuf[1],
+                 (unsigned) hsd_SynthSFXLoadBuf[2],
+                 (unsigned) hsd_SynthSFXLoadBuf[3], HSD_Synth_804D7730,
+                 cancelflag ? 1U : 0U);
+        HSD_ASSERTREPORT(0x65, header_size >= 0x10,
+                         "invalid SFX header size after DevCom load\n");
+#endif
 
         alloc_size =
             hsd_SynthSFXLoadBuf[2] * 8 + sizeof(struct SfxLoadStreamNode);
@@ -101,10 +162,24 @@ static void HSD_SynthSFXSampleLoadCallback(int result, int length, void* addr,
             s32 id;
             void** bucket;
 
+#ifdef MELEE_VITA_PLATFORM
+            n = (s32) vita_sfx_be32(HSD_Synth_804D7734);
+#else
             n = *HSD_Synth_804D7734;
+#endif
             (void) n;
             nbytes = SfxLoadStreamDataSize(n << 6);
             memcpy((u8*) HSD_Synth_804D7730 + 8, HSD_Synth_804D7734, nbytes);
+#ifdef MELEE_VITA_PLATFORM
+            vita_sfx_store_u32((u8*) HSD_Synth_804D7730 + 8,
+                               vita_sfx_be32((u8*) HSD_Synth_804D7730 + 8));
+            vita_sfx_store_u32((u8*) HSD_Synth_804D7730 + 0xC,
+                               vita_sfx_be32((u8*) HSD_Synth_804D7730 + 0xC));
+            for (k = 0; k < n; k++) {
+                vita_sfx_convert_voice((u8*) HSD_Synth_804D7730 + k * 0x40,
+                                       hsd_SynthSFXBank[bankID]);
+            }
+#else
             for (k = 0; k < n; k++) {
                 u8* e = (u8*) HSD_Synth_804D7730 + k * 0x40;
                 if (e + 0x10 != NULL) {
@@ -117,6 +192,7 @@ static void HSD_SynthSFXSampleLoadCallback(int result, int length, void* addr,
                 *(u32*) ((u8*) HSD_Synth_804D7730 + k * 0x40 + 0x1C) +=
                     hsd_SynthSFXBank[bankID] * 2;
             }
+#endif
             id = base + i;
             HSD_Synth_804D7730->x4 = id;
             id &= 0x1F;
@@ -156,6 +232,15 @@ static void HSD_SynthSFXHeaderLoadCallback(int result, int length, void* addr,
 
     if (HSD_Synth_804D7738 == 0) {
         int bankID = HSD_Synth_804C2A60[0].bankID;
+
+#ifdef MELEE_VITA_PLATFORM
+        /* Header words 4..7 are already the first packed SFX descriptor and
+           stay byte-exact until HSD_SynthSFXSampleLoadCallback converts it. */
+        for (int i = 0; i < 4; ++i) {
+            vita_sfx_store_u32(&hsd_SynthSFXLoadBuf[i],
+                               vita_sfx_be32(&hsd_SynthSFXLoadBuf[i]));
+        }
+#endif
 
         HSD_ASSERTREPORT(0xCD,
                          hsd_SynthSFXBankHead[bankID + 1] -
@@ -1340,6 +1425,30 @@ void HSD_Synth_8038B120(void)
 
 void HSD_SynthPStreamFirstHakoHeaderCallback(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* HPS stream headers are stored in GameCube byte order. The 0x20-byte
+     * block is read directly into this ring entry, so normalize it before the
+     * original stream code consumes the chunk size/offset and ADPCM loop
+     * state on little-endian ARM. */
+    {
+        u8* raw = (u8*) &lbl_804C4540[HSD_Synth_804D7768];
+        u32* words = (u32*) raw;
+        u16* halves = (u16*) (raw + 0x0C);
+        int i;
+
+        words[0] = __builtin_bswap32(words[0]);
+        words[1] = __builtin_bswap32(words[1]);
+        words[2] = __builtin_bswap32(words[2]);
+        for (i = 0; i < 10; ++i) {
+            halves[i] = __builtin_bswap16(halves[i]);
+        }
+        OSReport("HPS_BLOCK_HEADER chunk=%u end=%u next=%08x slot=%u\n",
+                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x0,
+                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x4,
+                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x8,
+                 (unsigned) HSD_Synth_804D7768);
+    }
+#endif
     HSD_DevComRequest(HSD_Synth_804D7764, 0xA0,
                       HSD_Synth_804D7780 + (HSD_Synth_804D7768 << 16),
                       lbl_804C4540[HSD_Synth_804D7768].x0, 0x23, 0,
@@ -1355,6 +1464,48 @@ void HSD_SynthPStreamHeaderCallback(int arg0, int arg1, void* arg2,
 
     node = getNode(HSD_Synth_804D7760);
     if (node != NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        const u8* stream = arg2;
+        u32 sample_rate = ((u32) stream[8] << 24) | ((u32) stream[9] << 16) |
+                          ((u32) stream[10] << 8) | (u32) stream[11];
+        u32 voice_count = ((u32) stream[12] << 24) |
+                          ((u32) stream[13] << 16) |
+                          ((u32) stream[14] << 8) | (u32) stream[15];
+
+        HSD_ASSERTREPORT(0x5CE, voice_count > 0 && voice_count <= 2,
+                         "invalid HPS channel count on Vita\n");
+        node->voice_count = voice_count;
+        if (node->voice_count == 2) {
+            node->voice[1] = AXAcquireVoice(0x1D, dropcallback, 0);
+            HSD_ASSERTMSG(0x5CF, node->voice[1], "entry->voice[1]");
+        }
+        node->x14 = 0.00003125f * (f32) sample_rate;
+        OSReport("HPS_STREAM_HEADER sample_rate=%u channels=%u cancel=%u\n",
+                 (unsigned) sample_rate, (unsigned) voice_count,
+                 (unsigned) cancelflag);
+        for (i = 0; i < node->voice_count; i++) {
+            const u8* channel = stream + 0x10 + i * 0x38;
+            AXPBADDR addr;
+            AXPBADPCM adpcm;
+            u16* addr_words = (u16*) &addr;
+            u16* adpcm_words = (u16*) &adpcm;
+            int j;
+
+            for (j = 0; j < (int) (sizeof(addr) / sizeof(u16)); ++j) {
+                addr_words[j] = ((u16) channel[j * 2] << 8) |
+                                (u16) channel[j * 2 + 1];
+            }
+            channel += sizeof(addr);
+            for (j = 0; j < (int) (sizeof(adpcm) / sizeof(u16)); ++j) {
+                adpcm_words[j] = ((u16) channel[j * 2] << 8) |
+                                 (u16) channel[j * 2 + 1];
+            }
+            *(u32*) &HSD_Synth_80407FD8.ratioHi =
+                (u32) (65536.0f * node->x14);
+            AXSetVoiceAddr(node->voice[i], &addr);
+            AXSetVoiceAdpcm(node->voice[i], &adpcm);
+        }
+#else
         node->voice_count = entry[3];
         if (node->voice_count == 2) {
             node->voice[1] = AXAcquireVoice(0x1D, dropcallback, 0);
@@ -1366,6 +1517,7 @@ void HSD_SynthPStreamHeaderCallback(int arg0, int arg1, void* arg2,
             AXSetVoiceAddr(node->voice[i], (AXPBADDR*) &entry[i * 14 + 4]);
             AXSetVoiceAdpcm(node->voice[i], (AXPBADPCM*) &entry[i * 14 + 8]);
         }
+#endif
         HSD_Synth_804D7774 = (HSD_Synth_804D7774 + 2) % 3;
         HSD_Synth_804D776C = HSD_Synth_804D7770 = HSD_Synth_804D7768 =
             HSD_Synth_804D7774;

@@ -27,7 +27,23 @@ typedef struct {
     size_t lod_count;
     size_t tev_count;
     size_t unsupported_count;
+    /* Preserved even when mv_hsd_native_build() returns 1, so callers can
+       report exactly which serialized HSD feature stopped the conversion. */
+    uint32_t unsupported_kind;
+    uint32_t unsupported_offset;
+    uint32_t unsupported_value;
 } MvNativeHsd;
+
+enum {
+    MV_NATIVE_UNSUPPORTED_NONE = 0,
+    MV_NATIVE_UNSUPPORTED_MOBJ_RENDERDESC,
+    MV_NATIVE_UNSUPPORTED_POBJ_TYPE,
+    MV_NATIVE_UNSUPPORTED_POBJ_UNION,
+    MV_NATIVE_UNSUPPORTED_JOBJ_FLAGS,
+    MV_NATIVE_UNSUPPORTED_JOBJ_ROBJ,
+};
+
+const char *mv_hsd_native_unsupported_name(uint32_t kind);
 
 enum {
     MV_NATIVE_STAT_JOINTS,
@@ -49,6 +65,7 @@ enum {
 /* Returns 0 on a complete supported graph, 1 when the selected root requires
    an explicitly unsupported HSD descriptor type, and -1 for malformed data or
    allocation failure. No necessary descriptor is silently replaced by NULL. */
+int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *out);
 int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out);
 void mv_hsd_native_free(MvNativeHsd *graph);
 int mv_hsd_native_stats(const MvDat *dat, const char *root_name,

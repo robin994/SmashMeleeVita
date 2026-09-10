@@ -1,6 +1,866 @@
-# Porting status — 2026-09-09, v2.6 GS_MEMCARD entry (ARM tested; Vita pending)
+# Porting status - 2026-09-10, v3.22 menu routing integration checkpoint
+
+## Active integration — supersedes v3.22 frontier policy
+
+User direction: integrate missing original scene code; no artificial paused
+runtime-frontier screen. The v3.22 frontier pause has been removed in source.
+Work is in progress; do not install an intermediate package as a finished port.
+
+Current edits: persistent outer scene dispatch, remembered menu parent/selection,
+current GM state update, GObj pool reuse/scene destruction before native asset
+release, original CSS/SSS callback bindings for VS plus nine Special variants
+and Training. Original gmvs/gm_1884 sources are being linked rather than replacing
+their missing state/functions with stubs. Native SSS rendering is still being
+implemented; the temporary -80 return must be replaced before completion.
+
+Fresh independent ARM object audit: 1045/1182 compile, 137 fail using the audit
+script's flags (not the platform build flags). `build/vita/audit/report.json`
+contains all errors; this is not a linked gameplay test. It establishes that
+full gameplay integration also needs source portability work, not only routing.
+No new hardware evidence. Final build/test/hash checks still pending.
+
+
+## 2026-09-10 — v3.22 / 00.32 integration checkpoint
+
+Full menu graph release is **not complete**. vitaGL remains the renderer.
+
+Implemented in this continuation:
+- Scene-owned native `MenuExitData`, separate from Title button storage.
+  Reset uses GM_COUNT; Title/CSS resets cannot expose a stale menu target.
+- Valid GM exits other than Classic/Adventure/Title stop at
+  `GAME_MENU_RUNTIME_FRONTIER`. The original menu shell is retained and paused;
+  a fresh Circle press resumes it, Select+Start exits. Frontier has log output
+  only, not explanatory on-screen text. Hardware return is not yet verified.
+- Node/edge/GM-exit logs, controller port, MENU frame timings, proxy symbol
+  offset and owning menu. These are observed transitions, not full coverage.
+- Dynamic capture deduplicates by HSD object pointer (512-root bound). Base
+  anchors are required on initial entry only; subsequent external panels may
+  replace them. Empty capture is an explicit error. Non-JObj objects stay out.
+- GmEvent.dat: archive preparation now validates all 51 table entries, evinit
+  and first-player pointers, converts both packed evinit flag bytes to the ARM
+  bitfield layout, and handles shared init records once per archive load.
+  `GAME_MENU_EVENT_NATIVE_PASS` explicitly reports menu-only scope. The old
+  unconditional TABLE_PASS has become TABLE_LOADED. Runtime-only scalar tables
+  (x4, bonus, stage and player values) still require typed conversion before
+  Event gameplay can run; this change does not claim that conversion.
+
+Verification:
+- `build/vita/test-env/bin/python vita/tools/test_menu_boundary.py`: PASS on
+  compiled ARM code for all 45 GM IDs, separate storage, reset invalidation,
+  51 retail Event records, exact flag bytes, preservation of unrelated bytes,
+  and rejection of an invalid relocated table pointer.
+- Final v3.22 Vita compile/link/package: PASS (exit 0).
+  ZIP CRC and bundled eboot match: PASS. VPK contains no ISO or SDK CHM.
+  Artifact: `build/vita/SmashMeleeVita-assets.vpk`, 1589615 bytes.
+  SHA-256: `dfe192f90d0cfa38ace450a5ef2c7a4f8aba8a1d5740dfce20f7144ca0fc2a65`.
+  Build log: `build/vita/menu-graph-routing-build.log`.
+  ARM log: `build/vita/menu-boundary-check.log`.
+  Evidence: `build/vita/menu-graph-routing-verification.json`.
+- Existing linker enum-ABI warnings remain. No new hardware proof in this turn.
+
+Remaining before the single full-graph release:
+1. Implement proper GM_TITLE return and CSS Back lifecycle; main still ends
+   after these returns. Destruction must precede freeing descriptor assets.
+2. Audit enter/exit/re-enter of each external panel and exact parent/selection;
+   proxy classes and SIS/SObj text remain incomplete.
+3. Add declared reachable-node/edge inventory and coverage counters; current
+   per-frame node observation cannot prove external-panel or whole-graph coverage.
+4. Add an on-screen runtime-frontier explanation and validate retained-shell
+   resume; finish runtime descriptor conversion before promoting any new mode.
+5. Build the complete graph, then run the physical navigation sweep described
+   below. This checkpoint is not a request for a one-screen hardware release.
+
+
+
+
+## Documentation rule
+
+PORTING_STATUS.md is now a live deliverable. Every future routing, scene, renderer, asset-conversion, linker-frontier, hardware-test or testable-VPK change must update this file in the same iteration before the work is considered ready for handoff/testing.
+
+The detailed full-graph plan is tracked in MENU_GRAPH_STRATEGY.md.
+
+## v3.21 current menu-graph baseline
+
+The strategy has changed from incremental one-screen milestones to a **full graph first, bug-fix second** pass. The target is to connect every reachable retail menu selection before using physical-Vita testing to fix individual routes or visual defects.
+
+Current source state already establishes the broad base for that pass:
+
+- all live internal submenu think callbacks are enabled on Vita, including Regular Match, Stadium, Special Melee and Records;
+- the original external menu modules are linked for Event, Multi-Man, Rules, Item/Stage Switch, Name Entry, Rumble, Sound, Display, Language, Data Delete, Snapshot, Gallery, Sound Test, Records/Diagram pages and related Info panels;
+- MnMaAll.usd is exposed through a lazy ARM-native archive proxy for named JObj/AnimJoint/MatAnimJoint requests;
+- the menu renderer dynamically captures additional live JObjs from the HSD GX-link lists rather than assuming only the MAIN background/panel/content roots exist;
+- the broad source set currently links and packages to build/vita/SmashMeleeVita-assets.vpk;
+- the executable banner is MELEE_VITA_GAME_BOOT v3.21 and the Vita package version is 00.31;
+- Classic is hardware-proven through CSS exit and first-match StartMeleeData preparation. The playable GS_VS fighter/ground/HUD runtime remains a separate gameplay boundary and is not part of the definition of menu-graph completion.
+
+The next implementation pass completes the routing architecture rather than adding another isolated screen: dedicated GM_MENU exit state, persistent parent/selection return semantics, first-class external-panel nodes, ARM-safe conversion of data-only DAT tables such as Event data, a generic terminal GM_* dispatcher, and menu graph node/edge coverage telemetry.
+
+### Full-graph completion criterion
+
+A menu edge is connected when it either enters the correct original submenu/panel or exits with the exact retail GM_* target. If the target gameplay runtime is not ported yet, the dispatcher must stop at an explicit GAME_MENU_RUNTIME_FRONTIER boundary; it must not silently fall back to MAIN/Title or terminate ambiguously.
+
+No hardware bug-fix pass starts until the complete reachable graph has been wired and a single VPK has been produced for a broad navigation sweep.
+
+---
+
+# Porting status — v3.16 Classic/Adventure CSS and first-VS preparation
+
+## v3.16 local result (build verified; hardware pending)
+
+The original live MAIN path can now route 1-P Mode into the original Character Select
+state for both Classic and Adventure. The Vita path uses the real `MnSlChr.usd` HSD
+objects, original `mnCharSel_Scene_OnEnter/OnFrame/OnExit` state logic, Vita pad input,
+and the shared vitaGL GX capture/replay backend. Per-frame telemetry records frame, capture,
+replay and present timing while the CSS is active.
+
+After CSS confirmation, v3.16 no longer stops at a synthetic `STAGE_MATCH_PENDING` marker.
+It runs the original mode CSS exit callback, the original first preparation/intro state, and
+then the original first `GS_VS` state `on_enter`. Classic therefore passes through state 0
+before state 1; Adventure passes through `ADVENTURE_INTRO` before
+`ADVENTURE_MUSHROOM_KINGDOM`. The resulting `StartMeleeData` is built by the original
+1-P rules/roster builder and contains the selected player, CPU roster, stock/rule data and
+the first stage kind. Fresh logs end this bounded milestone with
+`GAME_1P_PREP_STATE_READY` and `GAME_1P_STAGE_MATCH_READY`.
+
+This is deliberately not yet a claim of playable fighter gameplay. The actual `GS_VS` scene
+runtime still depends on fighter, camera, ground/event and HUD islands that are not ported into
+the Vita executable. For `MELEE_VITA_PLATFORM` only, v3.16 keeps the original match-data
+construction but removes live gameplay callbacks/event side effects that would otherwise drag
+those unported islands into the link. Non-Vita state tables and behavior remain unchanged.
+
+The Vita Classic/Adventure state tables are reduced to the states reachable by this milestone
+(CSS, preparation/intro and first VS), preventing unreachable later-mode callbacks from forcing
+unported gameplay dependencies into the binary. The original full tables remain compiled for
+non-Vita targets.
+
+Build validation: `make -f Makefile.vita` completes VELF, SELF and VPK packaging. The known
+ARM EABI enum-size linker warnings remain and are still tracked as an ABI cleanup item. Physical
+Vita validation of v3.16 is pending; the next hardware test should return the fresh v3.16
+`runtime.log` and a CSS screenshot, then confirm the two new post-CSS markers.
+
+Final v3.16 build artifact:
+
+- `build/vita/SmashMeleeVita-v3.16.vpk`: 1,469,689 bytes; SHA-256 `41cac79fd63d036d32290221d003ab0cc08b6f17e6e7bfc4cbcd189fbdd7e55d`.
+- `build/vita/eboot.bin`: 1,027,562 bytes; SHA-256 `0c7fbe3f51d07aa1a867e2ee1f9d3c2159bf8c5fd62d1999bfd510ba0b7f56d3`.
+- VPK entries: `sce_sys/param.sfo`, `eboot.bin`, `sce_sys/icon0.png`, `sce_sys/pic0.png`, `sce_sys/livearea/contents/bg.png`, `startup.png`, and `template.xml`.
+- The legacy `arm-boot-check` is not a v3.16 pass criterion: its Unicorn model currently reaches the existing DevCom/SFX path without modeling the real Vita file load, reports `invalid SFX header size after DevCom load`, and traps in `_kill_r`. The Vita executable itself links/packages successfully; physical-hardware validation remains authoritative for this milestone.
+
+---
+# Porting status — v3.13 native MAIN HPS/cardgame frontier
+# Porting status — v3.15 live `mnMain` matrix + MatAnim/TexAnim
+
+## v3.14 hardware result / v3.15 second-frame crash + menu material fix
+
+Physical-Vita v3.14 reaches the real original MAIN scene. The verified run
+completes the opening movie path, original `GmTtAll.usd` Title, START
+transition, GM_MENU preload/cardgame boundary, `MnMaAll.usd` native conversion,
+`LbAd.dat`, DevCom SBUF/HPS streaming setup and finally
+`mnMain_Scene_OnEnter()`. The first MAIN capture contains 241 GX commands / 2248
+triangles and the first vitaGL submit succeeds (`gl_error=0`).
+
+The corresponding core is a branch-to-NULL on the following MAIN tick: the
+main thread has `PC=0`, and its runtime LR maps back to
+`HSD_JObjSetupMatrixSub()`. Under `MELEE_VITA_HSD_LOAD_ONLY`, the JObj class had
+only installed `load`; live `mnMain` animation calls
+`HSD_JOBJ_METHOD(jobj)->make_mtx()` on dirty menu nodes, so the method pointer
+was NULL. v3.15 installs the original `HSD_JObjMakeMatrix` method while keeping
+`make_pmtx`/`disp` on the Vita capture path. This fixes live matrix updates
+without re-enabling the GameCube GX renderer.
+
+The v3.14 screenshot also proves that the menu topology is now original but
+its material state is not: all five MAIN choices render as `1-P Mode`. The
+reason is explicit in the old runtime marker (`matanim=pending`). Original
+`mn_8022B3A0()` selects each label with `start_frame + selection * 2` and stops
+specific TObj FObjs via `mn_8022F3D8()`, but those operations cannot select a
+different TIMG when `StaticModelDesc.matanim_joint` is NULL.
+
+v3.15 converts and attaches the authentic `MnMaAll.usd` MatAnim/TexAnim graphs
+for all four live MAIN roots. ShapeAnim inspection reports zero ShapeAnim
+objects for these roots, so no ShapeAnim adapter is required for this scene:
+
+- `MenMainBack`: 86 MatAnim / 15 TexAnim;
+- `MenMainPanel`: 44 MatAnim / 3 TexAnim;
+- `MenMainConTop`: 20 MatAnim / 6 TexAnim;
+- `MenMainCursor`: 10 MatAnim / 4 TexAnim.
+
+The release ARM regression builds native AnimJoint + MatAnim for Panel, ConTop
+and Cursor, executes `HSD_JObjAnimAll()` plus `HSD_JObjSetupMatrixSub()`, and
+captures all three successfully (Panel 47 display lists / 1102 triangles,
+ConTop 20 / 177, Cursor 10 / 129). Hardware markers `GAME_MENU_LIVE_PASS` at
+frames 1/60/180 distinguish a stable live menu from the old first-frame-only
+success.
+
+The lower description (`Solo Smash!` for 1-P Mode) remains intentionally
+pending. Upstream `mn_80229A7C()` renders that line through HSD SisLib; the
+current Vita MAIN island keeps SIS text disabled until its draw path is routed
+to vitaGL. This does not affect the five HSD/TIMG menu labels fixed in v3.15.
+
+Hardware-test artifact built from the real checkout:
+
+- `build/vita/SmashMeleeVita-v3.15-menu-matanim-vitaGL.vpk`
+- size: 1,411,630 bytes
+- SHA-256: `5ac3f29a1652f4f8ef7a6c0c292249a5756d963cb4c159690a948ce3238016bb`
+- SELF SHA-256: `8282f8c0772dce681e24fb45701edd4003004154243a84a911a9a184bc7fae38`
+
+The packaged VPK still contains the user-supplied LiveArea icon/pic/background/
+startup/template assets, contains no `.DS_Store`, and the linked map resolves
+`vglInitExtended`/`vglSwapBuffers` with no `vita2d_*` symbols.
+
+## v3.13 hardware result / v3.14 live MAIN GObj locator fix
+
+Physical-Vita v3.13 validates the complete stream-audio frontier introduced in
+v3.12/v3.13. After START on the original Title, the runtime enters `GM_MENU`,
+recreates the menu preload heap, loads the cardgame resources, prepares all four
+native `MnMaAll.usd` roots, loads `LbAd.dat`, completes the original DevCom
+`0x22` SBUF request and parses both the 32000-Hz stereo HPS header and its first
+0x10000-byte stream block. The hardware log reaches:
+
+- `GAME_MENU_NATIVE_PREPARE_PASS`;
+- `GAME_MENU_AUDIO_TABLE_PASS`;
+- `DEVCOM_SBUF_PASS`;
+- `HPS_STREAM_HEADER sample_rate=32000 channels=2 cancel=0`;
+- `HPS_BLOCK_HEADER chunk=65536 end=65535 next=000100a0 slot=2`.
+
+The next failure is `GAME_MENU_ORIGINAL_CAPTURE_FAIL code=-1`. This is not a
+failed START transition and not a failure inside `mnMain_Scene_OnEnter()`: START
+correctly exits the Title and enters the MAIN scene. The failure is in the Vita
+capture wrapper's live-GObj lookup. Upstream `GObj_Create()` has signature
+`GObj_Create(classifier, p_link, priority)`. The original MAIN objects are
+created as `(4,5)`, `(5,6)` and `(6,7)`, with GX links 2/3/4 respectively, but
+the wrapper accidentally used the classifier values 4/5/6 as indices into
+`HSD_GObj_Entities`. v3.14 fixes the locator to use p_links 5/6/7 and logs
+`GAME_MENU_GOBJ_LOOKUP_PASS` with all three live JObj roots before the first
+capture. A lookup failure now reports each missing root explicitly.
+
+Expected v3.14 progression is therefore:
+
+1. the same verified v3.13 movie/Title/HPS sequence;
+2. `GAME_MENU_GOBJ_LOOKUP_PASS ... plinks=5,6,7 gxlinks=2,3,4`;
+3. `GAME_MENU_ORIGINAL_ENTER_PASS commands=... triangles=...`;
+4. live `GAME_MENU_SELECTION` markers when UP/DOWN changes the original
+   `mn_8022DB10` selection state.
+
+## v3.12 hardware result / v3.13 HPS stream endian + original cardgame setup
+
+Physical-Vita v3.12 validates the DevCom SBUF implementation end-to-end. The
+opening movie still decodes and renders through vitaGL, the original Title
+advances with native MatAnim/TexAnim, START transitions to `GM_MENU`, native
+`MnMaAll.usd` preparation succeeds, and `LbAd.dat` loads successfully. The
+stream-audio request then reports `DEVCOM_SBUF_PASS file=9 src=00000000
+size=128 type=22`, proving the original `0x22` DVD -> SBUF callback semantics
+are now correct on hardware.
+
+The same run exposes two independent lifecycle/ABI issues immediately after
+that pass. First, the follow-up `0x21` request targets `lbl_804C4540` at an ARM
+address ending in `0x1094`, which is not 32-byte aligned and is rejected by the
+GameCube DevCom alignment contract. The subsequent `0x23 size=0` is a
+consequence of the failed 0x20-byte block-header read. Second,
+`lbCardGame_UpdatePowerTime()` asserts `_p(enable)` because the direct Vita
+Title -> MAIN bridge entered `mnMain_Scene_OnEnter()` without the
+`gmmenumode.c:onEnter()` cardgame setup normally performed by the game-mode
+state machine.
+
+v3.13 fixes both without weakening upstream assertions. `lbl_804C4540[3]` is
+explicitly 32-byte aligned on Vita. HPS headers are converted from their native
+GameCube byte order before the original stream code consumes them: the initial
+0x80-byte header now reads the 32000-Hz sample rate/channel count as BE32 and
+converts `AXPBADDR`/`AXPBADPCM` BE16 fields; each 0x20-byte stream block swaps
+its `x0/x4/x8` fields plus loop-state halfwords before scheduling the normal
+`0x23` ARAM transfer. Real extracted HPS files verify the expected first block
+values `x0=0x10000`, `x4=0xffff`, `x8=0x100a0` for the common menu stream
+layout. Runtime markers are `HPS_STREAM_HEADER` and `HPS_BLOCK_HEADER`.
+
+Before entering `mnMain_Scene_OnEnter()`, the Vita path now also performs the
+same cardgame boundary used by `gmmenumode.c:onEnter()`:
+`lbCardNew_AllocWorkArea()` followed by `lbCardGame_LoadArchive(0)`. This loads
+the original `LbMcGame`/`NtMemAc` resources and sets the cardgame subsystem
+enabled before MAIN calls `lbCardGame_UpdatePowerTime()`. The new marker is
+`GAME_MENU_CARDGAME_PASS`. No internal enable flag is forged by the Vita
+wrapper.
+
+Expected v3.13 hardware progression after START is therefore:
+
+1. `GAME_MENU_NATIVE_PREPARE_PASS`;
+2. `GAME_MENU_AUDIO_TABLE_PASS`;
+3. `DEVCOM_SBUF_PASS`;
+4. `HPS_STREAM_HEADER sample_rate=32000 channels=2 cancel=0`;
+5. an aligned `0x21` block-header read followed by
+   `HPS_BLOCK_HEADER chunk=65536 ...` and the normal `0x23` stream transfer;
+6. `GAME_MENU_CARDGAME_PASS` and then `GAME_MENU_ORIGINAL_ENTER_PASS`.
+
+Title visual fidelity is still explicitly unfinished. v3.11/v3.12 prove the
+native animation graph and vitaGL path, but remaining custom TEV/multitexture
+material semantics still separate the Vita Title from the GameCube reference.
+
+## v3.11 hardware result / v3.12 DevCom `0x22` SBUF support
+
+Physical-Vita v3.11 validates the new Title MatAnim/TexAnim path and advances
+past the previous MAIN preload failure. The original opening movie still decodes
+and renders through vitaGL, `GmTtAll.usd` reaches the live Title loop, and START
+transitions into the original `mnMain_Scene_OnEnter()` path. MAIN preload,
+`mv_menu_vita_prepare()` and the `LbAd.dat` / `lbAudioLoadData` archive load all
+complete successfully on hardware.
+
+The next failure is no longer heap, archive, file I/O or renderer related. The
+hardware log ends on `DEVCOM_FAIL reason=type ... type=22` from the original
+stream-audio startup. Upstream HSD defines type `0x22` as DVD -> DevCom SBUF:
+`dest == 0` is intentional, up to `DEVCOM_BUF_SIZE` bytes are read into an
+internal 32-byte-aligned relay buffer, and that buffer pointer is supplied to
+the completion callback. `HSD_Synth_8038B5AC()` uses exactly this path to read
+the first 0x80-byte stream header before scheduling the normal `0x21` / `0x23`
+follow-up transfers.
+
+v3.12 implements that exact synchronous Vita equivalent. The adapter now accepts
+`0x22`, validates source/size alignment without requiring a destination pointer,
+enforces the 0x4000-byte SBUF limit, reads into the existing aligned DevCom relay
+buffer, and invokes the original callback with that buffer. Success is logged as
+`DEVCOM_SBUF_PASS`; invalid callback, oversized SBUF or DVD read failures remain
+fatal and retain explicit diagnostic markers. No renderer fallback or vita2d
+path is introduced.
+
+The v3.11 screenshot also confirms a substantial Title fidelity improvement:
+`Melee`, `TM`, `PRESS START` and copyright layers are now present and animated
+from the original MatAnim/TexAnim data. It is still not visually GameCube-faithful
+yet: remaining differences are concentrated in custom TEV / multitexture
+compositing and some animated material transforms, so Title fidelity remains an
+active renderer task after the MAIN boot frontier.
+
+## v3.10 hardware result / v3.11 native Title MatAnim + exact two-texture vitaGL
+
+Physical-Vita v3.10 reaches the original `GmTtAll.usd` Title and accepts START,
+but the visible result is not yet faithful to GameCube: the logo/copyright are
+present while the background is dominated by a green wireframe-like layer and
+the original `Melee` / `PRESS START` material effects are incomplete. The same
+run identifies the following MAIN failure after START: `lbHeap_80015BD0()`
+returns NULL before the `LbAd.dat` DevCom request because the direct Vita scene
+bridge skipped the original preload heap lifecycle. v3.11 restores the
+`lbDvdPreload_2 -> lbHeap_80015900()` boundary before `mnMain_Scene_OnEnter()`
+and reinitializes SisLib, rather than bypassing the original archive load.
+
+The Title fidelity work is now data-driven from the verified original
+`GmTtAll.usd`. ARM capture reproduces the hardware scene exactly: 77 GX commands
+and 2681 triangles. `TtlBg` contributes 37 commands, 36 of which are two-texture
+materials. 34 of those 36 use the same exact two-layer HSD MODULATE graph and
+are now executed directly by vitaGL with independent animated UV matrices;
+only two background commands still require broader custom-TEV support.
+
+The missing Title animation is not ShapeAnim: both `TtlBg` and `TtlMoji` have
+zero ShapeAnim objects. v3.11 adds a typed big-endian -> ARM converter for
+`HSD_MatAnimJoint`, `HSD_MatAnim`, `HSD_TexAnim`, `HSD_AObjDesc`,
+`HSD_FObjDesc`, animated image tables and TLUT tables. Those converted graphs
+are passed to the original `HSD_JObjAddAnimAll()` path. The verified counts are:
+
+- `TtlBg`: 6 MatAnimJoint nodes, 5 MatAnim, 2 TexAnim, 6 AObj, 14 FObj;
+- `TtlMoji`: 31 MatAnimJoint nodes, 29 MatAnim, 21 TexAnim, 44 AObj, 113 FObj;
+- `TtlMoji` references 452 animated ImageDesc entries; 450 are 32x32 and two
+  are 176x40, totaling only about 1.81 MiB when decoded to RGBA.
+
+The ARM runtime test attaches both native MatAnim graphs to live HSD JObjs,
+samples the GameCube title frames (background 130, logo 400), captures the same
+77-command stream, then advances each graph for 600 additional HSD animation
+ticks without an assertion, invalid TIMG index or trap. The original lightweight
+Title animation procs are enabled on Vita again so MatAnim/TexAnim continue to
+advance every rendered frame.
+
+vitaGL texture caching is also changed for live material animation. UV matrices
+and PE state no longer create duplicate decoded textures, common HSD
+MODULATE/REPLACE material color is applied dynamically with the GL vertex color,
+and the cache is heap-backed with 512 entries plus LRU eviction. This avoids
+both the old 128-entry stack footprint and permanent draw failure when animated
+TIMG sequences exceed the historical cache. Hardware logs report cache usage at
+frames 0/120/300 through `GAME_TITLE_TEXTURE_CACHE`.
+
+The Vita package now also embeds the supplied LiveArea assets from `vita/sce_sys`:
+128x128 `icon0.png`, 960x544 `pic0.png`, 840x500 LiveArea background,
+280x158 startup image and `template.xml`. Finder metadata such as `.DS_Store`
+is deliberately excluded from the VPK.
+
+Expected v3.11 hardware markers:
+
+1. `GAME_TITLE_MATANIM_NATIVE_PASS moji_joints=31 ... moji_fobj=113 bg_joints=6 ... bg_fobj=14`;
+2. `VITAGL_REPLAY_READY ... capacity=512 ...`;
+3. `GAME_TITLE_LIVE_ANIM frame=120 ...` and `GAME_TITLE_TEXTURE_CACHE frame=120 ...`;
+4. visually, substantially more of the original red/blue radial background and
+   animated Title material layers should be present. The remaining visual gap is
+   expected to concentrate in the 15 `TtlMoji` multitexture commands and custom
+   TEV patterns not yet translated exactly.
+
+## v3.9 hardware result / v3.10 `LbAd.dat` DevCom diagnostics + DVD fallback
+
+Physical-Vita v3.9 validates the native MAIN asset conversion added after the
+v3.8 `MenMainPanel` failure. The runtime reaches
+`GAME_MENU_NATIVE_PREPARE_PASS` for `Back+Panel+ConTop+Cursor`, so the v3.9
+billboard/envelope/PNMTXIDX descriptor path completes on real hardware before
+the next failure.
+
+The new failure is an intentional `HSD_Panic`, not a renderer Data Abort:
+`lbFile_8001615C()` asserts `!cancelflag` at `lbfile.c:18`. The next operation
+after `mv_menu_vita_prepare()` in the original `mnMain_Scene_OnEnter()` is
+`lbAudioAx_8002392C()`, which loads `LbAd.dat` / `lbAudioLoadData` through
+`lbArchive_LoadSymbols()`. The verified local disc file is 14488 bytes
+(14496 bytes after the GameCube 32-byte DVD round-up).
+
+v3.10 keeps the upstream assertion intact and makes the Vita DVD/DevCom bridge
+diagnosable instead of hiding a failed request. `HSD_DevComRequest()` now logs
+distinct `DEVCOM_FAIL` reasons for unsupported type, zero request, alignment,
+`DVDFastOpen`, CPU DVD read and ARAM DVD read. `DVDReadPrio()` still prefers
+`sceIo*`, but if native file I/O fails it retries with newlib stdio; that path
+is already exercised on hardware by the MTH/title/menu asset loaders. A
+successful fallback is reported as `DVD_READ_FALLBACK_PASS`; failure of both
+backends stays fatal and reaches the original assertion.
+
+`mnMain_Scene_OnEnter()` brackets the audio-table load with
+`GAME_MENU_AUDIO_TABLE_BEGIN` / `GAME_MENU_AUDIO_TABLE_PASS`. The next hardware
+run therefore proves either that v3.10 advances beyond `LbAd.dat`, or identifies
+the exact DevCom cancellation reason in the same run.
+
+The release ARM regression after these changes remains green on the verified
+`MnMaAll.usd`: `MenMainPanel` captures 47 display lists / 1102 triangles,
+`MenMainConTop` 20 / 177, and `MenMainCursor` 10 / 129, all with zero capture
+errors. No renderer fallback was reintroduced; the game target remains
+vitaGL-only.
+
+## v3.8 hardware result / v3.9 native MAIN envelope + billboard capture
+
+Hardware v3.8 is the first run that proves the complete visible game-first chain reaches the real
+MAIN menu island with vitaGL.  The physical-Vita runtime log proves:
+
+- the global vitaGL context initializes successfully;
+- original HSD/audio/SFX initialization completes through `GMMAIN_FINAL_INIT_PASS`;
+- original `MvOpen.mth` is parsed as MTHP, THP-JPEG reconstruction/TurboJPEG decode succeeds,
+  frame 0 is submitted and presented through vitaGL, and the movie can be skipped by user input;
+- the original `GmTtAll.usd` Title scene is created, captured and animated live;
+- START is read by the Title and causes `GM_TITLE -> GM_MENU`;
+- execution enters the original `mnMain_Scene_OnEnter()` from `src/melee/mn/mnmain.c`.
+
+The v3.8 crash is therefore no longer a boot, movie, Title or vitaGL-context problem.  It occurs at
+the explicit Vita assertion around `mv_menu_vita_prepare()` because native conversion stopped on
+`MenMainPanel_Top_joint` with result `1`.
+
+Host inspection of the verified `MnMaAll.usd` identifies the exact missing HSD features instead of
+treating the failure as a generic parser error:
+
+- `MenMainBack_Top_joint`: already complete;
+- `MenMainPanel_Top_joint`: uses `JOBJ_BILLBOARD` and twelve `POBJ_ENVELOPE` PObjs;
+- `MenMainConTop_Top_joint`: uses `POBJ_ENVELOPE`;
+- `MenMainCursor_Top_joint`: uses `POBJ_ENVELOPE`.
+
+v3.9 extends the typed native descriptor converter and the GX-capture-to-vitaGL path specifically
+for those original Melee features:
+
+- `JOBJ_BILLBOARD` is accepted by the descriptor converter while other unported billboard modes,
+  quaternion/IK/user-matrix/RObj paths remain fail-closed;
+- `HSD_EnvelopeDesc**` arrays are converted to native little-endian descriptors with deferred joint
+  fixups after the complete JObj tree exists;
+- the load-only HSD runtime loads/resolves `POBJ_ENVELOPE` instead of panicking;
+- the capture precomputes live JObj model matrices because the load-only class intentionally does
+  not install the original GX rendering callbacks;
+- `HSD_PObjCaptureVita()` reproduces the envelope palette construction performed by
+  `SetupEnvelopeModelMtx()`, including the real 0.5/0.5 two-joint blends present in
+  `MenMainPanel_Top_joint`;
+- GX `PNMTXIDX` is preserved per vertex.  The command-list decoder applies the selected palette
+  position matrix to each vertex before vitaGL replay, then resets the command model transform to
+  identity to avoid double transformation.
+
+The native converter now reports `unsupported=0` for all four MAIN roots.  Release-ELF ARM tests
+exercise the same runtime chain used by the game (`HSD_JObjLoadJoint -> mv_hsd_gx_capture_runtime`)
+and pass with the verified `MnMaAll.usd`:
+
+- Back: 86 display lists, 96 commands, 324 triangles;
+- Panel: 47 display lists, 1102 triangles;
+- ConTop: 20 display lists, 177 triangles;
+- Cursor: 10 display lists, 129 triangles.
+
+The full host asset audit remains green: 861 standard HSD archives pass, 0 fail, 33 files are
+reported as expected nonstandard containers, and 357 menu textures decode successfully.
+
+v3.9 still does **not** claim final visual fidelity.  Camera-facing billboard orientation is not yet
+applied as an exact render-space transform by the capture layer, and the MAIN MatAnim/ShapeAnim
+coverage remains incomplete.  Those are visual/runtime frontiers to validate after physical-Vita
+hardware proves the original menu can now be constructed and presented without the v3.8 assertion.
+
+Expected v3.9 hardware frontier after START on Title:
+
+1. `GAME_MENU_ORIGINAL_ON_ENTER_BEGIN ... source=mnmain.c ... renderer=vitaGL`;
+2. `GAME_MENU_NATIVE_PREPARE_PASS ... billboard=JOBJ_native envelope=HSD_palette_capture pnmtxidx=per_vertex vita_renderer=vitaGL ...`;
+3. `GAME_MENU_ORIGINAL_ENTER_PASS commands=... triangles=... selection=...`;
+4. UP/DOWN should emit `GAME_MENU_SELECTION ... source=mn_8022DB10`.
+
+### v3.9 artifact
+
+- `build/vita/SmashMeleeVita-v3.9-native-menu-envelope-vitaGL.vpk`: 955890 bytes;
+  SHA-256 `7e8651e14899591edf273f6c06338b3fc9aba81f6280521f3fed7d92b4087ebd`.
+- `build/vita/eboot.bin`: 961017 bytes;
+  SHA-256 `6414b0ce469e0c9698bf5062f99340628c6aca57ed184bb14b248e38b31df899`.
+- `build/vita/melee_vita`: 4656096 bytes;
+  SHA-256 `713fe509365f61d16f83697e721e76fe175fb7fd949373acd2e5df1ffe7ec13e`.
+
+This artifact is build/host/ARM validated; physical-Vita v3.9 validation is pending.
+
+## v3.7 hardware result / v3.8 opening-movie Data Abort fix
+
+Hardware v3.7 proves the vitaGL context is now initialized correctly: the log reaches
+`VITAGL_INIT_PASS`, completes HSD/audio/SFX initialization through `GMMAIN_FINAL_INIT_PASS`, opens
+the original `MvOpen.mth`, validates its MTHP header and reaches `GAME_OPENING_BEGIN`.
+
+The first movie draw then raises a main-thread Data Abort.  The v3.7 core dump reports runtime PC
+`0x81143042` and LR `0x8106F8ED`; after applying the module relocation, the LR lands on the first
+`glVertex2f()` in `mv_opening_movie_run()`.  Disassembly confirms the fault occurs as the first
+immediate-mode vertex is submitted, after TurboJPEG has already decoded the frame.
+
+Inspection of the vitaGL implementation identifies the deterministic cause: the v3.6/v3.7 renderer
+passed `pool_size=0` to `vglInitExtended()`.  That first argument is vitaGL's GL1 immediate-mode
+vertex pool.  `scene_reset()` only allocates `legacy_pool_ptr` when `legacy_pool_size` is non-zero,
+while `glVertex3f()` writes vertex data directly through `legacy_pool_ptr`.  The MTHP movie player
+and the GX replay both use `glBegin/glVertex*`, so the zero pool leaves the first vertex write aimed
+at NULL.
+
+v3.8 restores a 4 MiB legacy pool while retaining the correct v3.7 interpretation of
+`vglInitExtended()`'s resolution-fallback return value.  First-frame file-only markers were added:
+
+- `GAME_OPENING_FRAME0_DECODE_PASS` after THP-JPEG reconstruction/TurboJPEG RGBA decode;
+- `GAME_OPENING_FRAME0_DRAW_BEGIN` immediately before the first vitaGL quad;
+- `GAME_OPENING_FRAME0_DRAW_PASS` after the first complete draw/present.
+
+Expected v3.8 hardware frontier is a visible first frame from `MvOpen.mth` followed by
+`GAME_OPENING_FRAME frame=1/3036 ...`. START/CROSS should skip the movie and continue to Title.
+
+### v3.8 artifact
+
+- `build/vita/SmashMeleeVita-v3.8-vitaGL-legacy-pool.vpk`: 953146 bytes;
+  SHA-256 `5ab8872765ded3910034840a7fc31b261f676dcdea7a775e610b30f60f4e3d5e`.
+- `build/vita/eboot.bin`: 958497 bytes;
+  SHA-256 `d3d1c98993582d22404f149f5775f66115e2380d14a5ebf33106a0d3f6b50998`.
+- `build/vita/melee_vita`: 4650536 bytes;
+  SHA-256 `c107729770b6bc12a094b5c4686c2cac82db7188969e699f5ff4545d9471a73f`.
+
+## v3.6 hardware result / v3.7 vitaGL init fix
+
+Hardware v3.6 showed only the vitaGL splash and the runtime log stopped at:
+
+- `VITAGL_INIT_BEGIN ... shader_stat=00000000`;
+- `VITAGL_INIT_FAIL code=-1 shader_stat=00000000`.
+
+`shader_stat=0` proves `ur0:data/libshacccg.suprx` is present.  Inspection of the installed/current
+vitaGL implementation identified the actual bug in the port wrapper: `vglInitExtended()` returns a
+resolution-fallback flag, not a generic success flag.  On a normal 960x544 Vita display it completes
+initialization, sets vitaGL's internal `vgl_inited` state, shows the splash, and returns `GL_FALSE`;
+`GL_TRUE` only means the requested framebuffer size was clamped to the maximum display size.  The
+v3.6 wrapper incorrectly treated normal `GL_FALSE` as failure and exited immediately after the
+splash.
+
+v3.7 removes that incorrect return-value test.  `mv_render_init()` now treats the value returned by
+`vglInitExtended()` only as resolution-fallback information and validates the live GL context with
+`glGetString(GL_VERSION)` / `glGetString(GL_RENDERER)`.  The renderer remains initialized once,
+before HSD/audio allocations, and remains shared across `MvOpen.mth -> Title -> MAIN`.
+
+The v3.7 ARM/Vita build succeeds through VELF/SELF/VPK packaging in the real source checkout.
+Hardware validation is required next; the expected decisive marker is `VITAGL_INIT_PASS`, followed
+by normal HSD/audio boot and `GAME_OPENING_BEGIN` or the Title fallback path.
+
+### v3.7 artifact
+
+- `build/vita/SmashMeleeVita-v3.7-vitaGL-returnfix.vpk`: 952848 bytes;
+  SHA-256 `0c1116a150af8a6bade46140ecfc3ae1603d47c0091946aa28aa9ab633f928ba`.
+- `build/vita/eboot.bin`: 958338 bytes;
+  SHA-256 `879a73bcbf833c9ae907aab863031a3afdc579ec753d89705a750c624951e3b5`.
+- `build/vita/melee_vita`: 4650440 bytes;
+  SHA-256 `390579912f4084fd6ee38124038b0809150fc7e745349db8e928ba1d23edd4f8`.
+
+## v3.5 original MAIN menu island on vitaGL (build OK; hardware pending)
+
+The static `menu_boot_vita.c` composition bridge has been replaced for `MENU_KIND_MAIN`.
+The Vita path now converts the real `MnMaAll.usd` roots to native little-endian HSD descriptors,
+attaches their real AnimJoint graphs, then calls `mnMain_Scene_OnEnter()` from the original
+`src/melee/mn/mnmain.c`.  The resulting live GObjs/JObjs are advanced by the original HSD proc
+scheduler and captured every frame for the vitaGL replay backend.
+
+The linked MAIN island now contains the original functions `mnMain_Scene_OnEnter`,
+`mn_8022DB10`, `fn_8022AFEC`, `mn_80229B2C`, `mn_80229DC0`, `mn_8022B3A0`, plus the original
+JObj traversal helpers `lb_80011E24` and `lb_8001204C` from `lbspdisplay.c`.  This is no longer a
+one-time capture of four static roots: Melee itself creates the background, panel, five option
+branches and cursor JObjs and updates hover animation/state.  The Vita loop calls
+`HSD_PadRenewStatus()`, `gm_EvaluateAllControllerInputs()` and `HSD_GObj_80390CFC()` before each
+live capture, so UP/DOWN navigation is driven by the original `mn_8022DB10` input logic.
+
+The 50-symbol v3.4 `mnMain` frontier is closed for this bounded MAIN island.  The build achieves
+that without success stubs: compile-time Vita pruning removes references to unported submenu think
+functions; fog/light GameCube GX callbacks and SIS description text are deliberately excluded from
+this first island because the active renderer is vitaGL.  Confirmation/back currently play the
+original UI SFX but remain on MAIN instead of entering an unported submenu or writing through the
+temporary Title exit-data shim.  1P/VS/Trophies/Options/Data transitions are therefore still
+explicitly pending, not claimed working.
+
+Native `MnMaAll` data prepared for the original code in v3.5:
+
+- `MenMainBack_Top_joint` + `MenMainBack_Top_animjoint`;
+- `MenMainPanel_Top_joint` + `MenMainPanel_Top_animjoint`;
+- `MenMainConTop_Top_joint` + `MenMainConTop_Top_animjoint`;
+- `MenMainCursor_Top_joint` + `MenMainCursor_Top_animjoint`;
+- `ScMenMain_cam_int1_camera` converted to a native HSD perspective-camera descriptor.
+
+MatAnim/ShapeAnim, SIS description text, fog and HSD light objects are still not connected to the
+MAIN island.  The current vitaGL replay still has incomplete general GX TEV coverage, so a correct
+link/build does not prove final visual fidelity.  The next physical-Vita run must confirm the
+original panel/options/cursors are visible and that UP/DOWN changes the highlighted selection.
+
+v3.5 build validation:
+
+- `make -f Makefile.vita` succeeds through ARM link, VELF, SELF and VPK packaging in both the
+  managed worktree and the real source checkout;
+- final map contains `mnMain_Scene_OnEnter`, `mn_8022DB10`, `fn_8022AFEC`, `lb_80011E24`,
+  `lb_8001204C`, `vglInitExtended` and `vglSwapBuffers`;
+- final map contains no `vita2d_*` symbol;
+- boot marker is `MELEE_VITA_GAME_BOOT v3.5`; VPK version is `00.23`;
+- host `asset-check` passes: 861 HSD archives passed / 0 failed, 357 menu textures decoded,
+  and `MenMainBack` frame-0 AnimJoint reports 102 joints / 87 FObjs / 0 unsupported;
+- the legacy `arm-check` reaches Rand, PAD, HSD geometry and AnimJoint PASS, then stops because
+  its old harness expects the test-only symbol `mv_matanim_frame0_stats` in the release ELF.
+  `--gc-sections` now removes that unreferenced helper; it is not forced back into the VPK merely
+  to satisfy the old test harness;
+- hardware validation of v3.5 is pending.
+
+### v3.5 artifact
+
+- `build/vita/SmashMeleeVita-v3.5-native-main-vitaGL.vpk`: 951982 bytes;
+  SHA-256 `b3110df7045366b7fd19da469e4ca02546208bef79b181697f606b18ed655e51`.
+- `build/vita/eboot.bin`: 957839 bytes;
+  SHA-256 `717f3a807b54d30c8e620bb64c4cbfb9f4bd1fd3cc73e14d7d1dfd39be6f1a45`.
+- `build/vita/melee_vita`: 4650180 bytes;
+  SHA-256 `c0f7fd530933ab7681f63390817ff7121be90f3ff78e39e66b97095cd654719a`.
+
+Expected v3.5 log frontier after START on Title:
+
+1. `GAME_MENU_ORIGINAL_ON_ENTER_BEGIN ... source=mnmain.c ... renderer=vitaGL`;
+2. `GAME_MENU_NATIVE_PREPARE_PASS ... roots=Back+Panel+ConTop+Cursor`;
+3. `GAME_MENU_ORIGINAL_ENTER_PASS commands=... triangles=... selection=...`;
+4. moving UP/DOWN should emit `GAME_MENU_SELECTION ... source=mn_8022DB10`.
+
+## v3.4 renderer and SDK-reference policy
+
+vitaGL is now mandatory for the game target. CMake no longer exposes a vita2d comparison
+backend: `melee_vita` always compiles `gx_replay_vitagl.c` + `render_vitagl.c`, defines
+`MELEE_VITAGL=1`, and links vitaGL/vitashark/Shacc. The final link map contains
+`vglInitExtended` and `vglSwapBuffers` and contains no `vita2d_*` symbol. The old vita2d
+sources remain in the tree only as historical/reference code and are not part of the VPK.
+
+The user-supplied `PS_Vita_SDKDoc.chm` is stored locally under ignored `local_docs/` and was
+fully extracted to `local_docs/psvita-sdk/`: 18,624 CHM entries were enumerated, the HHC TOC
+contains 1,361 nodes, the HHK index 28,366 roots, and extraction reported no warnings.
+`local_docs/` is in `.gitignore`; neither the CHM nor the extracted Sony documentation is to be
+committed, pushed, or packaged in the VPK.
+
+The following Sony SDK constraints are now explicit renderer requirements for the port:
+
+- GXM state changes and draws must occur inside a BeginScene/EndScene pair; vitaGL owns that
+  scene lifecycle for the port rather than game code reaching into a vita2d/GXM context.
+- textures, surfaces and vertex/index data consumed by the GPU require correctly mapped GPU
+  memory; shader code requires the corresponding USSE mappings. vitaGL's allocators/runtime
+  remain the owning abstraction unless a measured porting requirement needs direct GXM memory.
+- display buffers require the documented alignment/stride rules and display/GPU synchronization;
+  frame pacing must use the display/vblank path rather than CPU polling.
+- texture filtering/addressing is translated through GL texture state backed by the documented
+  GXM texture controls. GX repeat/clamp/mirror semantics must be preserved instead of silently
+  accepting unsupported sampler state.
+- GXM blending is part of fragment-program patching. vitaGL blend state is therefore treated as
+  shader/render-state semantics, not as a post-process approximation; unsupported GX TEV/blend
+  graphs remain explicit implementation work.
+
+The v3.4 vitaGL-only ARM/Vita build links and packages successfully. Hardware validation is still
+required before any new visual, timing or memory claim is marked proven.
+
+### v3.4 original `mnMain` link frontier
+
+The next runtime target was also audited without enabling it on hardware. `mnmain.c` itself now
+compiles for ARM32 and can be pulled into the Vita link. Forcing references to
+`mnMain_Scene_OnEnter()` / `mnMain_Scene_OnFrame()` exposes 50 unique unresolved symbols rather
+than an unbounded dependency graph. The inventory is saved locally under
+`build/vita/mnmain-link-frontier-v3.4.txt`.
+
+The frontier groups are actionable:
+
+- JObj traversal helpers: `lb_80011E24`, `lb_8001204C`, plus the light-list helper
+  `lb_80011AC4`.
+- main-menu input/state glue: `gm_801A36C0` and a small set of gm state helpers.
+- fog/light and EFB erase paths that still call fixed-function GX. These must be translated or
+  bypassed at the HSD-to-vitaGL boundary; they must not be implemented by reintroducing vita2d.
+- SIS text functions used by menu descriptions/names.
+- submenu entrypoints referenced by the generic menu table (Event, Sound, Data, Gallery, etc.).
+  They do not need to be enabled to bring up the main menu first; the Vita path should prune or
+  defer those transitions until each submenu dependency island is ported.
+
+This audit confirms the preferred direction: prepare native `MnMaAll` JObj/AnimJoint data like the
+Title path does, run the original main-menu GObj/update/input logic, and render its live HSD objects
+through the vitaGL replay backend. The current static menu bridge remains only until that native
+main-menu island is executable.
+
+### v3.4 artifact
+
+- `build/vita/SmashMeleeVita-v3.4-vitaGL-only.vpk`: 937026 bytes;
+  SHA-256 `25a2c8739ea6a073a4c4b2a6f1d71daf9771cfc17346b2ec44fb75a61e0260b8`.
+- `build/vita/eboot.bin`: 942675 bytes;
+  SHA-256 `7b3b65072f0836d362bcd40c38f798764f089a8590504f2ee7bdd777629a1b94`.
+- `build/vita/melee_vita`: 4616840 bytes;
+  SHA-256 `a9461c7efd11f701b3f9f9af5c66a6e7f693c8fd6719d57eb6e227145c7ea1a0`.
+
+This artifact is build-verified only; physical-Vita verification is pending.
+
+## Current facts; supersedes earlier v3.2 claims
+
+User explicitly requested vitaGL and supplied PS_Vita_SDKDoc.chm. Before this change the
+source/build used vita2d/GXM, not vitaGL. The previous v3.2 report overstated implementation:
+THP unpacking was absent from mth_player_vita.c, title model animation pointers were NULL,
+and menu_boot_vita.c captured once then repeatedly drew the same commands. The generic menu
+scene OnEnter/OnFrame is still not connected. Original assets and scene-like log labels alone
+do not establish a complete native game boot.
+
+The v3.3 transition introduced gx_replay_vitagl.c/render_vitagl.c and a shared vitaGL context
+for movie, title and menu. v3.4 closes that migration by removing the selectable vita2d backend
+from the game target entirely. Visuals, memory use and timing still require physical-Vita proof.
+
+The supplied CHM is extracted under ignored `local_docs/psvita-sdk/`; relevant libgxm,
+Display, Memory Management and Graphics Programming references are used as implementation
+constraints. Movie texture reuse and resource destruction currently use explicit completion waits
+via glFinish on vitaGL. No supplied SDK documentation is part of the repository payload or VPK.
+
+## Intro correction
+
+thp_jpeg.c converts Nintendo unstuffed entropy bytes to a baseline JPEG stream before TurboJPEG.
+It parses bounded marker segments, requires a final EOI, handles frame padding, and checks output
+capacity before writing. The previous reader would reject frame 2650 because its padded block is
+61184 bytes while the header maximum is 61152; the bounded buffer now allows the extra 32 bytes.
+The exact shared C conversion plus host TurboJPEG decoded all 3036 frames (640x480, 30 fps).
+Report: build/vita/host/movie-check.json; log: build/vita/movie-check-v3.3.log.
+This validates CPU decoding, not Vita playback cadence, sound or visual presentation.
+
+## Title runtime correction (validation in progress)
+
+hsd_anim_native.c converts bounded AnimJoint/AObj/FObj descriptors while preserving compressed
+FObj byte streams. The title now attaches real animation graphs and registers original gmtitle
+animation processes (mn_8022ED6C). Capture reads persistent live JObjs each frame, respects
+JOBJ_HIDDEN and does not reconstruct a separate static runtime graph each frame. Texture cache
+preparation sees all title geometry before the visibility-filtered captures begin.
+MatAnim, fog/lighting and the full original title/menu state manager remain incomplete.
+A dedicated ARM test checks actual AObj time/poses and stable HSD heap usage; results follow.
+
+## vitaGL renderer scope
+
+GL now performs projection/clipping, perspective interpolation, culling, depth and alpha/additive
+blending. Original GX tiled textures are decoded on CPU. Known single-stage material/custom-TEV
+bakes are retained. The recognized two-texture background graph uses two GL texture units with
+RGB multiplication and previous-alpha preservation, instead of the former GXM offscreen target.
+The prior relaxed title/material compatibility path still exists and is not general TEV support.
+Menu interaction/animation requires original mnMain integration, not a renderer switch alone.
+Current runtime.log in build/vita still belongs to WiiCompiled and is not current Melee evidence.
+
+## Previous reports (historical; use current facts above)
+
+# Porting status — 2026-09-09, v3.2 intro/title/menu integration (build OK; hardware pending)
 
 ## Current development assessment
+
+The current boot path is no longer the v2.6 bounded GS_MEMCARD probe. A fresh physical-Vita v3.1
+run reaches the original Melee initialization through `gmMainLib_8015FBA4`, loads the real SFX
+banks, attempts the original opening movie, renders the original Title assets, accepts START and
+transitions to GM_MENU. Diagnostics are file-only; the visible path is Melee. No commit or push is
+part of this work.
+
+The remaining frontier is visual/runtime fidelity rather than simply reaching the title. v3.1
+proves the title scene and START transition, but the opening movie decoder failed on THP-JPEG
+packing and GM_MENU rendered only the `MenMainBack` background layer. v3.2 fixes both of those
+frontiers locally and builds successfully, but v3.2 has not yet been validated on physical Vita.
+
+## v3.1 physical-Vita result
+
+Latest hardware log markers:
+
+- `MELEE_VITA_GAME_BOOT v3.1`.
+- `GMMAIN_FINAL_INIT_PASS source=gmmain.c mainlib_reset=1 next=GM_TITLE_original_scene`.
+- Five real SFX headers load successfully, including `main.ssm` with
+  `header=00004b70 sample=001f3780 count=246 base=0 cancel=0`.
+- Opening movie header is accepted as MTHP v2, 640x480, 30 fps, 3036 frames.
+- The v3.1 player then fails at frame 0 with TurboJPEG
+  `Unsupported marker type 0x3f` and falls back to Title.
+- Title enters through `gmtitle.c`, captures `TtlBg + TtlMoji`, and the Vita screenshot shows the
+  original 4:3 Smash Bros. title geometry rather than a diagnostic app. The visible title is still
+  incomplete: `Melee`, `START` and copyright elements are missing.
+- START is accepted at frame 1990 and the game transitions `GM_TITLE -> GM_MENU`.
+- GM_MENU proves the root cause of the incorrect second screenshot: only
+  `MenMainBack_Top_joint` builds successfully. `MenMainPanel_Top_joint`,
+  `MenMainConTop_Top_joint` and `MenMainCursor_Top_joint` are skipped by the strict native
+  converter, so v3.1 displays only the abstract animated menu background, not the real menu UI.
+
+This is the first hardware run in this project that visibly reaches the original Title and accepts
+START into GM_MENU. It is not yet a claim of a complete or interactive main menu.
+
+## v3.2 local implementation
+
+### Opening movie
+
+`MvOpen.mth` itself is valid. Frame 0 begins with a real JPEG `FFD8`; Nintendo THP entropy data does
+not use standard JPEG `FF 00` byte stuffing, which is why TurboJPEG treated entropy bytes such as
+`FF 3F` as invalid markers. The Vita player now converts each THP-JPEG payload into a standard JPEG
+stream before TurboJPEG decode, preserving real JPEG markers and stuffing entropy `FF` bytes.
+
+Independent host validation on the real `MvOpen.mth` rebuilt frame 0 to a 7901-byte standard JPEG;
+`djpeg` accepts it and decodes a 640x480 frame. This closes the exact v3.1 frame-0 decoder failure.
+The complete 3036-frame movie still requires physical-Vita validation before the intro is marked
+hardware-proven.
+
+### Title animation visibility
+
+The typed HSD animation sampler now supports JObj animation channels 11/12 (`NODE`/`BRANCH`) in
+addition to R/T/S. These channels drive visibility of title subtrees and were the missing feature
+behind the incomplete v3.1 title. On the real `GmTtAll.usd`:
+
+- `TtlMoji_Top_joint` at original frame 400: 31 joints, 41 applied channels, 0 unsupported.
+- `TtlBg_Top_joint` at original frame 130: 6 joints, 7 applied channels, 0 unsupported.
+
+v3.2 applies those sampled R/T/S + NODE/BRANCH values directly to the native HSD descriptor graph
+before GX capture. This is intended to restore the original `Melee`, `START`, copyright and other
+frame-controlled title branches. Hardware validation is still pending.
+
+### Main menu composition
+
+A host probe on the real `MnMaAll.usd` confirms the three UI roots rejected by the strict native
+converter are valid and materializable:
+
+- `MenMainPanel_Top_joint`: 106 joints, 262 triangles.
+- `MenMainConTop_Top_joint`: 42 joints, 14 triangles.
+- `MenMainCursor_Top_joint`: 14 joints, 127 triangles.
+
+Their AnimJoint graphs also sample at frame 0 with 0 unsupported animation channels after the
+NODE/BRANCH fix. v3.2 keeps the hardware-proven GX replay for `MenMainBack`, then draws the original
+Panel/ConTop/Cursor geometry and textures above it in the same original 4:3 camera. This removes the
+v3.1 background-only failure.
+
+This is still an intermediate bridge, not yet full execution of `mnMain_Scene_OnEnter()` /
+`mnMain_Scene_OnFrame()`. The original menu code additionally instantiates per-option cursor objects,
+applies sub-joint hover frames, updates `hovered_selection`, handles UP/DOWN/CROSS/B and performs
+scene transitions. Full main-menu interactivity remains the next runtime milestone. Advanced MatAnim
+coverage is also incomplete and must not be described as fully faithful yet.
+
+### v3.2 build validation
+
+- `make -f Makefile.vita`: exit 0 through VELF, SELF and VPK packaging.
+- Current worktree VPK: `build/vita/SmashMeleeVita-assets.vpk`, 611910 bytes.
+- SHA-256: `a3cbf2731591d59fa86f7584415a3e60d2fcc1c83c64b87be3492dc8d1cfa5cd`.
+- Existing ARM EABI enum warnings remain; no new link failure is present.
+- v3.2 is not yet physical-Vita verified. Do not treat the build result as proof that the full intro
+  or complete main menu now renders correctly on hardware.
+
+## Next physical-Vita check
+
+1. Confirm fresh log starts `MELEE_VITA_GAME_BOOT v3.2`.
+2. Opening must progress beyond frame 0 without `GAME_OPENING_FAIL ... marker type 0x3f`; capture the
+   first later-frame failure if one appears.
+3. If the intro completes or is skipped, Title must show the missing frame-controlled elements and
+   still accept START.
+4. GM_MENU must show Panel/ConTop/Cursor above `MenMainBack`, not the background-only v3.1 screen.
+5. Return the fresh `runtime.log` plus screenshots. The next code step is then full
+   `mnMain_Scene_OnEnter`/OnFrame integration and real menu navigation, not another diagnostic UI.
+
+## Historical v2.6 development assessment
 
 The former dirty GS_MEMCARD entry attempt did not link. It now links and ARM tests execute
 original gm_Scene_MemCard_OnEnter successfully, loading LbMcGame, NtMemAc, NtMsgWin and
@@ -53,7 +913,7 @@ Retrieve ux0:data/SmashMeleeVita/runtime.log after launch. SELECT+START exits.
 - `build/vita/melee_vita`: 1209744 bytes; SHA-256 `2d077b89f3b0d68f140eaf6b5b7355b61f81173dcfa87b721224e33f386f1bb1`.
 - `build/vita/eboot.bin`: 184215 bytes; SHA-256 `35b16204dba9d94ccc11751f439e4d81c335d8f0ee905921201321b514dc4f80`.
 
-## Remaining phases toward actual game boot
+## Historical v2.6 remaining phases toward actual game boot
 
 1. Physical Vita validation of the new heap reset, archives, camera and GObj entry.
 2. Complete GS_MEMCARD OnFrame dependencies and native typed message model/animation/SIS
@@ -388,7 +1248,7 @@ multi-texture state, audio, the original menu state machine and gameplay remain 
   warning remains an ABI item to eliminate rather than being treated as harmless indefinitely.
 - ARM harness models libc services and vblank wait returns; it executes the port OS/VI
   state code. It does not emulate the Vita GPU, display timing or physical input. This is compiler/ABI evidence, not hardware proof.
-- VPK/asset ZIP integrity checks passed. VPK contains only eboot.bin and sce_sys/param.sfo.
+- VPK integrity checks pass. Current packages include `eboot.bin`, `sce_sys/param.sfo` and the supplied LiveArea icon/pic/background/startup/template assets.
 
 Reports: `build/vita/host/archive-audit.json`, `build/vita/host/menu-textures/report.json`.
 Preview: `build/vita/host/menu-textures/contact-sheet.png`.

@@ -513,6 +513,12 @@ void HSD_SetEraseColor(u8 r, u8 g, u8 b, u8 a)
 void HSD_EraseRect(f32 top, f32 bottom, f32 left, f32 right, f32 z,
                    int enable_color, int enable_alpha, int enable_depth)
 {
+#ifdef MELEE_VITA_PLATFORM
+    (void)top; (void)bottom; (void)left; (void)right; (void)z;
+    (void)enable_color; (void)enable_alpha; (void)enable_depth;
+    /* vitaGL owns framebuffer/depth clears for menu capture/replay. */
+    return;
+#endif
     GXTexObj texobj;
     static u8 depth_image[] ATTRIBUTE_ALIGN(32) = {
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,

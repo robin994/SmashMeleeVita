@@ -10,6 +10,7 @@
 #include "lblanguage.h"
 #include <dolphin/ai.h>
 #include <dolphin/ar.h>
+#include <dolphin/dvd.h>
 #include <dolphin/ax.h>
 #include <dolphin/axfx.h>
 #include <melee/cm/camera.h>
@@ -1547,6 +1548,24 @@ static int fn_80026650(void)
     return -1;
 }
 
+static void fn_80026C04(int arg0, int unused);
+
+static int lbAudioAx_StartSfxLoad(int slot)
+{
+    int result;
+
+    strcpy(&cur_ssm_file[ssm_stem_pos], ssm_files[slot]);
+#ifdef MELEE_VITA_PLATFORM
+    /* Vita DevCom completes DVD requests synchronously. Seed the entry id
+     * before HSD_SynthSFXLoad() so its completion callback can find this slot
+     * even when it runs before HSD_SynthSFXLoad() returns. */
+    lbl_80433A64[slot] = DVDConvertPathToEntrynum(cur_ssm_file);
+#endif
+    result = HSD_SynthSFXLoad(cur_ssm_file, 2, fn_80026C04, 0);
+    lbl_80433A64[slot] = result;
+    return result;
+}
+
 static void fn_800267B0(void)
 {
     int j, i;
@@ -1673,8 +1692,7 @@ static void fn_80026C04(int arg0, int unused)
 
     slot = fn_80026650();
     if (slot != -1) {
-        strcpy(&cur_ssm_file[ssm_stem_pos], ssm_files[slot]);
-        lbl_80433A64[slot] = HSD_SynthSFXLoad(cur_ssm_file, 2, fn_80026C04, 0);
+        lbAudioAx_StartSfxLoad(slot);
     }
 }
 
@@ -1774,9 +1792,69 @@ void lbAudioAx_8002702C(u32 flags, u64 mask)
     }
 }
 
+#ifdef MELEE_VITA_PLATFORM
+void lbAudioAx_VitaSfxStateTrace(const char* tag)
+{
+    int desired_invalid = 0, requested_invalid = 0;
+    int actual_unloaded = 0, actual_loading = 0, actual_ready = 0, actual_invalid = 0;
+    for (int i = 0; i < 55; ++i) {
+        if (lbl_804337C4[i] != -1 && lbl_804337C4[i] != 1) desired_invalid++;
+        if (lbl_804338A4[i] != -1 && lbl_804338A4[i] != 1) requested_invalid++;
+        if (lbl_80433984[i] == -1) actual_unloaded++;
+        else if (lbl_80433984[i] == 1) actual_loading++;
+        else if (lbl_80433984[i] == 2) actual_ready++;
+        else actual_invalid++;
+    }
+    OSReport("SFX_STATE_TRACE tag=%s desired_invalid=%d requested_invalid=%d actual_unloaded=%d actual_loading=%d actual_ready=%d actual_invalid=%d\n",
+             tag ? tag : "?", desired_invalid, requested_invalid, actual_unloaded,
+             actual_loading, actual_ready, actual_invalid);
+}
+
+static void lbAudioAx_VitaNormalizeSfxState(void)
+{
+    int desired_fixed = 0;
+    int requested_fixed = 0;
+    int actual_fixed = 0;
+    int entry_fixed = 0;
+
+    /* These tables are state enums encoded as ints. Zero is never written by
+     * the original state machine: desired/requested are {-1, 1}, while actual
+     * is {-1, 1, 2}. Treat any other value as unloaded rather than letting a
+     * zeroed table make every SSM look resident. Keep the budget assert live. */
+    for (int i = 0; i < 55; ++i) {
+        if (lbl_804337C4[i] != -1 && lbl_804337C4[i] != 1) {
+            lbl_804337C4[i] = -1;
+            desired_fixed++;
+        }
+        if (lbl_804338A4[i] != -1 && lbl_804338A4[i] != 1) {
+            lbl_804338A4[i] = -1;
+            requested_fixed++;
+        }
+        if (lbl_80433984[i] != -1 && lbl_80433984[i] != 1 &&
+            lbl_80433984[i] != 2)
+        {
+            lbl_80433984[i] = -1;
+            actual_fixed++;
+        }
+        if (lbl_80433A64[i] == 0) {
+            lbl_80433A64[i] = -1;
+            entry_fixed++;
+        }
+    }
+
+    if (desired_fixed || requested_fixed || actual_fixed || entry_fixed) {
+        OSReport("SFX_STATE_REPAIR desired=%d requested=%d actual=%d entry=%d\n",
+                 desired_fixed, requested_fixed, actual_fixed, entry_fixed);
+    }
+}
+#endif
+
 static inline void lbAudioAx_80027168_inline(void)
 {
     int i;
+#ifdef MELEE_VITA_PLATFORM
+    lbAudioAx_VitaNormalizeSfxState();
+#endif
     for (i = 0; i < 55; i++) {
         if (s32_arr_803BB5D0[i][1] != 5 && lbl_80433984[i] == 2) {
             lbl_80433984[i] = 1;
@@ -1788,8 +1866,7 @@ static inline void lbAudioAx_80027168_inline_2(void)
 {
     int slot = fn_80026650();
     if (slot != -1) {
-        strcpy(&cur_ssm_file[ssm_stem_pos], ssm_files[slot]);
-        lbl_80433A64[slot] = HSD_SynthSFXLoad(cur_ssm_file, 2, fn_80026C04, 0);
+        lbAudioAx_StartSfxLoad(slot);
     }
 }
 
@@ -1821,6 +1898,12 @@ void lbAudioAx_80027168(void)
     fn_800267B0();
 
     if (lbl_804D6438 < lbl_804D6448 + lbl_804D6450) {
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("FGM_BUDGET_FAIL capacity=%u loaded=%u pending=%u total=%u\n",
+                 (unsigned) lbl_804D6438, (unsigned) lbl_804D6448,
+                 (unsigned) lbl_804D6450,
+                 (unsigned) (lbl_804D6448 + lbl_804D6450));
+#endif
         OSReport("******** CAUTION ********\n"
                  "FGM load size is over\n");
         HSD_ASSERT(0xDB3, 0);
@@ -2127,10 +2210,25 @@ void lbAudioAx_8002838C(void)
     lbl_804D3870 = lbl_804D6438;
 
 #ifdef MELEE_VITA_AUDIO_BOOT_PROBE
-    /* Promote the next original boundary as a real dependency: AXDriver owns
-       HSD_SynthInit and callback registration. Aux effects/bank loads remain
-       a later fail-closed boundary until the core mixer is validated. */
+    /* Keep the unimplemented DSP aux effects disabled on Vita, but preserve
+       the original SFX bank layout. The SSM loader depends on these real ARAM
+       ranges being allocated before any boot audio is requested. */
     AXDriver_8038E498(AX_MAX_VOICES, 0, 0x40, lbl_804D3870);
+    HSD_SynthSFXAllocateBank(lbl_804D643C);
+    HSD_SynthSFXAllocateBank(lbl_804D6440);
+    HSD_SynthSFXAllocateBank(lbl_804D6444);
+
+    for (int i = 0; i < 56; i++) {
+        lbl_804337C4[i] = -1;
+        lbl_804338A4[i] = -1;
+        lbl_80433984[i] = -1;
+        lbl_80433A64[i] = -1;
+    }
+    lbl_804D3878 = -1;
+    lbl_804D6448 = 0;
+    lbl_804D644C = 0;
+    lbl_804D6450 = 0;
+
     mv_audio_boot_record(lbl_804D643C, lbl_804D6440, lbl_804D6444,
                          lbl_804D6438);
     return;

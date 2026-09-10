@@ -241,11 +241,23 @@ bool un_80304780(void)
     { 7, 65 }, { 6, 66 }, { 5, 67 }, { 4, 68 }, { 3, 69 },
     { 2, 70 }, { 0, 73 }, { 1, 88 }, { 8, 83 },
 };
+#ifdef MELEE_VITA_PLATFORM
+/* Keep the exact original GALE01 BSS relationships independent of
+ * -fdata-sections/linker ordering. */
+u8 Toy_VitaBss_804A26B8[0x404] __attribute__((aligned(4)));
+#define _Toy_804A26B8 \
+    (*(struct _Toy_804A26B8_t*) (void*) (Toy_VitaBss_804A26B8 + 0x000))
+#define _Toy_devtext_buf_804A26C4 \
+    (*(char (*)[0x8C]) (void*) (Toy_VitaBss_804A26B8 + 0x00C))
+#define _Toy_devtext_buf_804A2750 \
+    (*(char (*)[0xFC]) (void*) (Toy_VitaBss_804A26B8 + 0x098))
+#else
 /* 4A26B8 */ static struct _Toy_804A26B8_t _Toy_804A26B8;
 /* 4A26C4 */ static char _Toy_devtext_buf_804A26C4[0x8C];
 /* 4A2750 */ static char _Toy_devtext_buf_804A2750[0xFC];
 /* 4A284C */ u16 Toy_804A284C[302];
 /* 4A2AA8 */ ToyAnimState Toy_804A2AA8;
+#endif
 /* 4D5A40 */ static GXColor _Toy_color_E2E2E2FF = { 0xE2, 0xE2, 0xE2, 0xFF };
 /* 4D5A44 */ static GXColor _Toy_color_FF8020FF = { 0xFF, 0x80, 0x20, 0xFF };
 

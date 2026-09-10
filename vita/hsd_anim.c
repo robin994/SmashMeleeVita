@@ -198,7 +198,7 @@ static int channel_value(MvFObjState *fobj, float *value, uint8_t *has_value)
 static int apply_joint_channel(void *opaque, uint8_t type, float value)
 {
     MvAnimJointSample *sample = opaque;
-    if (type < 1 || type > 10 || type == 4) return 1;
+    if (type < 1 || type > 12 || type == 4) return 1;
     if (!isfinite(value)) return -1;
     sample->channels[type - 1] = value;
     sample->channel_mask |= (uint16_t)(1u << (type - 1));

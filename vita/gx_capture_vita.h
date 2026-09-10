@@ -173,6 +173,9 @@ int mv_gx_material_custom_tev_cpu_bakeable(const MvGxMaterialState *material);
 /* Exact frame-0 MenMainBack two-TObj graph accepted by the offscreen replay:
  * stage0 MODULATE RGB/A, stage1 MODULATE RGB with alpha preserved. */
 int mv_gx_material_multitex_offscreen_bakeable(const MvGxMaterialState *material);
+/* Two-layer HSD MODULATE subset that vitaGL can sample directly with
+ * independent UV matrices.  This is broader than the legacy offscreen baker. */
+int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *material);
 /* Writes up to max_records custom-TEV records. Each record is 9 u32 words:
  * command index followed by the exact 32-byte HSD_TObjTev payload. */
 uint32_t mv_gx_capture_custom_tev_records(uint32_t *out, uint32_t max_records);

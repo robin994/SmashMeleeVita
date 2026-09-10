@@ -2572,8 +2572,11 @@ void mnSnap_80257F24(void)
         s32* photo_count = snap->photo_count;
         photo_count[1] = zero;
     }
-    /* Preserve register allocation during archive setup. */
+    /* Preserve the original register-allocation read only when this is a
+     * concrete HSD archive. Vita uses a lazy native MnMaAll proxy token. */
+#ifndef MELEE_VITA_PLATFORM
     (void) mn_804D6BB8->public_info->offset;
+#endif
     snap->card_status[0] = zero;
     {
         s16* card_status = mnSnap_GetCardStatus(snap);

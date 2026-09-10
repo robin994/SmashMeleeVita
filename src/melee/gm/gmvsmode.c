@@ -258,3 +258,11 @@ void onExitResults(GameModeState* state)
         gm_801623A4(&gmVsMelee_ResultsEnterData.match_end);
     }
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmvsmode = {
+    GM_VS, "GM_VS", gmVsMelee_Mode_OnInit, gmVsMelee_Mode_OnLoad, onEnterCss, onExitCss, onEnterSss, onExitSss
+};
+#endif

@@ -174,3 +174,11 @@ void gm_Mode_SlowMo_OnLoad(void)
 {
     gmVsMelee_ResetKOCounts();
 }
+
+#ifdef MELEE_VITA_PLATFORM
+#include "mode_route_vita.h"
+/* Bind the original callbacks without retaining unrelated results states. */
+const MvModeRoute mv_route_gmslomo = {
+    GM_SLOMO_VS, "GM_SLOMO_VS", gm_Mode_SlowMo_OnInit, gm_Mode_SlowMo_OnLoad, gm_801BA50C, gm_801BA538, gm_801BA560, gm_801BA588
+};
+#endif
