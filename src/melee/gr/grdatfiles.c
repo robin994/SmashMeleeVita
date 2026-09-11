@@ -10,6 +10,12 @@
 #include <sysdolphin/baselib/particle.h>
 #include <sysdolphin/baselib/psstructs.h>
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_stage_archive_prepare(HSD_Archive*, UnkStageDat*, GroundParam*,
+                                     MapCollData*, struct GroundItemData**);
+extern void mv_stage_archive_prepare_raw(void*, size_t, const char*);
+#endif
+
 /* 1C6228 */ static void grDatFiles_801C6228(UnkStageDat*);
 /* 1C62B4 */ static UnkArchiveStruct* grDatFiles_801C62B4(void);
 
@@ -23,6 +29,12 @@ void grDatFiles_801C5FC0(HSD_Archive* archive, void* data, size_t length)
 {
     HSD_Archive* map_ptcl;
     HSD_Archive* map_texg;
+#ifdef MELEE_VITA_PLATFORM
+    /* Stage archives loaded through lbdvd type 4 bypass lbArchive's raw hook.
+     * Nativeize HSD descriptor scalars before HSD_ArchiveParse relocates the
+     * pointer fields, otherwise the stage becomes a mixed-endian graph. */
+    mv_stage_archive_prepare_raw(data, length, "grDatFiles_async");
+#endif
     lbArchive_InitializeDAT(archive, data, length);
     map_ptcl = HSD_ArchiveGetPublicAddress(archive, "map_ptcl");
     map_texg = HSD_ArchiveGetPublicAddress(archive, "map_texg");
@@ -69,6 +81,13 @@ void grDatFiles_801C6038(void* arg0, s32 arg1, s32 arg2)
                 HSD_ArchiveGetPublicAddress(sp14, "quake_model_set");
         }
         temp_r3->unk0 = sp14;
+#ifdef MELEE_VITA_PLATFORM
+        if (arg1 == 0) {
+            mv_stage_archive_prepare(sp14, temp_r3->unk4, stage_info.param,
+                                     stage_info.coll_data,
+                                     stage_info.itemdata);
+        }
+#endif
         if (stage_info.map_ptcl != NULL && stage_info.map_texg != NULL) {
             if (phi_r28 != 0) {
                 psInitDataBankLoad(0x40, stage_info.map_ptcl,
@@ -155,6 +174,11 @@ UnkArchiveStruct* grDatFiles_801C6478(void* data, s32 length)
     UnkArchiveStruct* arc;
 
     HSD_Archive* archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
+#ifdef MELEE_VITA_PLATFORM
+    /* Dynamic stage archives use the same direct parse path. */
+    mv_stage_archive_prepare_raw(data, (size_t) length,
+                                 "grDatFiles_dynamic");
+#endif
     lbArchive_InitializeDAT(archive, data, length);
     arc = grDatFiles_801C62B4();
     HSD_ASSERT(290, arc);

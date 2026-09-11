@@ -206,6 +206,11 @@ typedef struct {
 } NativeEnvelopePatch;
 
 typedef struct {
+    HSD_PObjDesc *desc;
+    uint32_t joint_offset;
+} NativeSkinPatch;
+
+typedef struct {
     const MvDat *dat;
     MvNativeHsd *out;
     NativeEntry *entries;
@@ -214,6 +219,9 @@ typedef struct {
     size_t owned_count, owned_capacity, owned_bytes;
     NativeEnvelopePatch *envelope_patches;
     size_t envelope_patch_count, envelope_patch_capacity;
+    NativeSkinPatch *skin_patches;
+    size_t skin_patch_count, skin_patch_capacity;
+    int raw_validation;
     int status;
 } NativeBuild;
 
@@ -338,6 +346,43 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset);
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset);
 static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset);
 
+static int validate_raw_spline(const MvDat *dat, uint32_t offset)
+{
+    const uint8_t *p = mv_dat_span(dat, offset, 24);
+    if (!p) return -1;
+    uint8_t type = p[0];
+    int16_t numcv = (int16_t)mv_be16(p + 2);
+    float tension = be_float(p + 4);
+    float total_length = be_float(p + 0x0c);
+    if (type > 3 || numcv < 2 || numcv > 4096 || !isfinite(tension) ||
+        !isfinite(total_length) || total_length < 0.0f)
+        return -1;
+
+    size_t cv_count = type == 0 ? (size_t)numcv
+                      : type == 1 ? (size_t)numcv * 3u - 2u
+                                  : (size_t)numcv + 2u;
+    uint32_t target;
+    if (mv_dat_pointer(dat, offset + 8, &target) != 1) return -1;
+    const uint8_t *cv = mv_dat_span(dat, target, cv_count * 3u * sizeof(float));
+    if (!cv) return -1;
+    for (size_t i = 0; i < cv_count * 3u; ++i)
+        if (!isfinite(be_float(cv + i * 4))) return -1;
+
+    if (mv_dat_pointer(dat, offset + 0x10, &target) != 1) return -1;
+    const uint8_t *lengths = mv_dat_span(dat, target, (size_t)numcv * sizeof(float));
+    if (!lengths) return -1;
+    for (size_t i = 0; i < (size_t)numcv; ++i)
+        if (!isfinite(be_float(lengths + i * 4))) return -1;
+
+    size_t poly_count = ((size_t)numcv - 1u) * 5u;
+    if (mv_dat_pointer(dat, offset + 0x14, &target) != 1) return -1;
+    const uint8_t *poly = mv_dat_span(dat, target, poly_count * sizeof(float));
+    if (!poly) return -1;
+    for (size_t i = 0; i < poly_count; ++i)
+        if (!isfinite(be_float(poly + i * 4))) return -1;
+    return 0;
+}
+
 static int add_envelope_patch(NativeBuild *b, HSD_EnvelopeDesc *desc,
                               uint32_t joint_offset)
 {
@@ -346,6 +391,19 @@ static int add_envelope_patch(NativeBuild *b, HSD_EnvelopeDesc *desc,
         return -1;
     }
     NativeEnvelopePatch *patch = &b->envelope_patches[b->envelope_patch_count++];
+    patch->desc = desc;
+    patch->joint_offset = joint_offset;
+    return 0;
+}
+
+static int add_skin_patch(NativeBuild *b, HSD_PObjDesc *desc,
+                          uint32_t joint_offset)
+{
+    if (b->skin_patch_count >= b->skin_patch_capacity) {
+        b->status = -1;
+        return -1;
+    }
+    NativeSkinPatch *patch = &b->skin_patches[b->skin_patch_count++];
     patch->desc = desc;
     patch->joint_offset = joint_offset;
     return 0;
@@ -425,6 +483,20 @@ static int resolve_envelope_patches(NativeBuild *b)
         NativeEntry *joint = find_entry(b, NK_JOINT, patch->joint_offset);
         if (!joint || joint->state != 2 || !joint->ptr) return -1;
         patch->desc->joint = joint->ptr;
+    }
+    return 0;
+}
+
+static int resolve_skin_patches(NativeBuild *b)
+{
+    for (size_t i = 0; i < b->skin_patch_count; ++i) {
+        NativeSkinPatch *patch = &b->skin_patches[i];
+        NativeEntry *joint = find_entry(b, NK_JOINT, patch->joint_offset);
+        /* A shared-skin reference must resolve to a JObj that belongs to the
+           structural child/next tree. Merely converting a detached descriptor
+           would not make HSD_IDGetData() able to resolve it at runtime. */
+        if (!joint || joint->state != 2 || !joint->ptr) return -1;
+        patch->desc->u.joint = joint->ptr;
     }
     return 0;
 }
@@ -696,6 +768,8 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
             if (!b->status) b->status = -1;
             return NULL;
         }
+    } else if (pobj_type == 0) {
+        if (result && add_skin_patch(b, out, target)) return NULL;
     } else if (result) {
         mark_unsupported(b, MV_NATIVE_UNSUPPORTED_POBJ_UNION,
                          offset, target);
@@ -714,7 +788,6 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
         b->status = -1;
         return NULL;
     }
-    if (pobj_type != MV_POBJ_ENVELOPE) out->u.joint = NULL;
     entry->state = 2;
     ++b->out->pobj_count;
     return out;
@@ -757,12 +830,20 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     if (!p || class_name(b->dat, offset, &out->class_name) < 0) { b->status = -1; return NULL; }
     out->flags = mv_be32(p + 4);
     uint32_t unsupported_flags = out->flags &
-        (MV_JOBJ_PTCL | MV_JOBJ_INSTANCE | MV_JOBJ_SPLINE |
-         MV_JOBJ_USE_QUATERNION | MV_JOBJ_JOINT_MASK |
-         MV_JOBJ_USER_DEF_MTX | MV_JOBJ_PBILLBOARD);
+        (MV_JOBJ_PTCL | MV_JOBJ_INSTANCE | MV_JOBJ_USE_QUATERNION |
+         MV_JOBJ_JOINT_MASK | MV_JOBJ_USER_DEF_MTX);
+    if (!b->raw_validation) {
+        unsupported_flags |= out->flags & (MV_JOBJ_SPLINE | MV_JOBJ_PBILLBOARD);
+    }
     const uint32_t billboard = out->flags & MV_JOBJ_BILLBOARD_FIELD;
-    if (billboard && billboard != MV_JOBJ_BILLBOARD)
-        unsupported_flags |= billboard;
+    if (billboard) {
+        if (!b->raw_validation) {
+            if (billboard != MV_JOBJ_BILLBOARD) unsupported_flags |= billboard;
+        } else if (billboard != 0x200u && billboard != 0x400u &&
+                   billboard != 0x600u && billboard != 0x800u) {
+            unsupported_flags |= billboard;
+        }
+    }
     if (unsupported_flags) {
         mark_unsupported(b, MV_NATIVE_UNSUPPORTED_JOBJ_FLAGS,
                          offset, out->flags);
@@ -777,7 +858,15 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     if (result && !(out->next = build_joint(b, target))) return NULL;
     result = pointer_offset(b->dat, offset + 16, &target);
     if (result < 0) { b->status = -1; return NULL; }
-    if (result && !(out->u.dobjdesc = build_dobj(b, target))) return NULL;
+    if (out->flags & MV_JOBJ_SPLINE) {
+        if (!b->raw_validation || result != 1 || validate_raw_spline(b->dat, target)) {
+            if (!b->status) b->status = -1;
+            return NULL;
+        }
+        out->u.spline = (void *)(uintptr_t) mv_dat_span(b->dat, target, 24);
+    } else if (result && !(out->u.dobjdesc = build_dobj(b, target))) {
+        return NULL;
+    }
     out->rotation.x = be_float(p + 0x14); out->rotation.y = be_float(p + 0x18); out->rotation.z = be_float(p + 0x1c);
     out->scale.x = be_float(p + 0x20); out->scale.y = be_float(p + 0x24); out->scale.z = be_float(p + 0x28);
     out->position.x = be_float(p + 0x2c); out->position.y = be_float(p + 0x30); out->position.z = be_float(p + 0x34);
@@ -812,6 +901,7 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
 
 static void release_build(NativeBuild *b, int keep_owned)
 {
+    free(b->skin_patches);
     free(b->envelope_patches);
     free(b->entries);
     if (!keep_owned) {
@@ -820,17 +910,20 @@ static void release_build(NativeBuild *b, int keep_owned)
     }
 }
 
-int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *out)
+static int mv_hsd_native_build_at_mode(const MvDat *dat, uint32_t root_offset,
+                                       MvNativeHsd *out, int raw_validation)
 {
     if (!dat || !out || !dat->pointer_bits || root_offset > dat->data_size) return -1;
     memset(out, 0, sizeof(*out));
-    NativeBuild b = {.dat = dat, .out = out};
+    NativeBuild b = {.dat = dat, .out = out, .raw_validation = raw_validation};
     /* Entries must not move while recursive builders retain an entry pointer. */
     b.entries = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.entries));
     b.owned = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.owned));
     b.envelope_patches = calloc(MV_NATIVE_MAX_NODES,
                                 sizeof(*b.envelope_patches));
-    if (!b.entries || !b.owned || !b.envelope_patches) {
+    b.skin_patches = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.skin_patches));
+    if (!b.entries || !b.owned || !b.envelope_patches || !b.skin_patches) {
+        free(b.skin_patches);
         free(b.envelope_patches);
         free(b.entries);
         free(b.owned);
@@ -839,8 +932,10 @@ int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *
     b.entry_capacity = MV_NATIVE_MAX_NODES;
     b.owned_capacity = MV_NATIVE_MAX_NODES;
     b.envelope_patch_capacity = MV_NATIVE_MAX_NODES;
+    b.skin_patch_capacity = MV_NATIVE_MAX_NODES;
     out->root = build_joint(&b, root_offset);
     if (!b.status && resolve_envelope_patches(&b)) b.status = -1;
+    if (!b.status && resolve_skin_patches(&b)) b.status = -1;
     int result = b.status;
     if (!result && !out->root) result = -1;
     if (result) {
@@ -867,6 +962,17 @@ int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *
     out->storage = storage;
     release_build(&b, 1);
     return 0;
+}
+
+int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *out)
+{
+    return mv_hsd_native_build_at_mode(dat, root_offset, out, 0);
+}
+
+int mv_hsd_native_validate_raw_at(const MvDat *dat, uint32_t root_offset,
+                                  MvNativeHsd *out)
+{
+    return mv_hsd_native_build_at_mode(dat, root_offset, out, 1);
 }
 
 int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out)

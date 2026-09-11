@@ -1275,6 +1275,14 @@ void efAsync_OnLoad(HSD_Archive* archive, u8* data, u32 length, int index)
 {
     EF_DAT_Entry* result;
 
+#ifdef MELEE_VITA_PLATFORM
+    extern void mv_effect_archive_prepare_raw(void*, size_t, const char*);
+    /* lbdvd type-3 preloads bypass lbArchive's PREPARE_RAW hook, exactly like
+     * the stage type-4 path did before v3.37. Convert HSD/effect scalars before
+     * archive relocation so async and sync effect loads have identical ABI. */
+    mv_effect_archive_prepare_raw(data, length,
+                                  efAsync_DatEntries[index].ef_DAT_file);
+#endif
     lbArchive_InitializeDAT(archive, data, length);
     result = HSD_ArchiveGetPublicAddress(
         archive, efAsync_DatEntries[index].effDataTable_name);

@@ -629,8 +629,12 @@ static inline HSD_JObj* JObjLoadJointSub(HSD_Joint* joint, HSD_JObj* parent)
 s32 JObjLoad(HSD_JObj* jobj, HSD_Joint* joint, HSD_JObj* parent)
 {
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    if (joint->flags & (JOBJ_INSTANCE | JOBJ_SPLINE | JOBJ_PTCL)) {
-        HSD_Panic(__FILE__, __LINE__, "load-only JObj requires rigid tree\n");
+    /* Spline descriptors are now pre-nativeized on Vita and are needed by
+       legitimate HSD_A_J_PATH effect animations. Instance and particle union
+       payloads still require dedicated ownership/reference adapters. */
+    if (joint->flags & (JOBJ_INSTANCE | JOBJ_PTCL)) {
+        HSD_Panic(__FILE__, __LINE__,
+                  "load-only JObj instance/particle tree unsupported\n");
     }
 #endif
     if (!(joint->flags & JOBJ_INSTANCE)) {

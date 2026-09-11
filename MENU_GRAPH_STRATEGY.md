@@ -1,5 +1,54 @@
 # Full Menu Graph Strategy - PS Vita
 
+## 2026-09-11 — v3.41: fix the GrKg stage spline rejection after CSS
+
+Latest physical input is `build/vita-full/runtime.log` (v3.40), plus
+`psp2core-1789127215-0x001a7327b5-eboot.bin.psp2dmp`. The log reaches Classic CSS
+exit (character kind 8), loads EfCoData and EfMnData successfully, and then
+panics at `stage_archive_vita.c:1256`: map 1, root `0x3afe8`, JObj `0x3b410`,
+flags `0x4008`. These exact offsets identify `GrKg.dat`. This is a valid
+`JOBJ_SPLINE | JOBJ_CLASSICAL_SCALE`, not a corrupt descriptor. The supplied
+gzip coredump was decoded as an ARM ELF core (`latest-core.elf`); its main-thread
+PC is `0x8136b3ea`, LR `0x8136b3b7`, and kill arguments carry signal 6, consistent
+with the logged HSD_Panic -> abort path. No GPU-fault conclusion is drawn.
+
+Root cause: the stage preflight still called the strict compact-menu builder
+`mv_hsd_native_build_at`, although the effect path already used
+`mv_hsd_native_validate_raw_at`. The raw stage walker and original JObj loader
+already support typed splines. Stage preflight now uses the raw validator too;
+compact menu-proxy restrictions are unchanged. Stage success telemetry now
+includes `splines=`. No assertion was removed and no scene was bypassed.
+
+Validation:
+- `vita/tools/test_stage_spline.py` on the linked ARM ELF: PASS. Reproduces the
+  strict proxy rejection, accepts the same root through raw validation, rejects
+  a corrupted spline count, nativeizes and relocates the real archive, then
+  executes original `HSD_JObjLoadJoint` and `HSD_JObjRemoveAll` successfully.
+- `vita/tools/test_stage_raw.py`: 68/76 retail stage archives pass nativeization,
+  relocation-field preservation and metadata preservation. Seven large stages
+  required a larger emulator instruction budget and pass when the same call is
+  resumed. Eight genuine unsupported layouts remain; this is not a whole-game
+  success claim. Full details: `build/vita-full/v3.41-verification.json`.
+- Remaining audit failures: GrNSr.dat: stage raw HSD graph unsupported; GrPs.dat: stage raw JObj pointer invalid; GrPs.usd: stage raw JObj pointer invalid; GrPs1.dat: stage raw JObj pointer invalid; GrPs2.dat: stage raw JObj pointer invalid; GrPs3.dat: stage raw JObj pointer invalid; GrPs4.dat: stage raw JObj pointer invalid; GrSt.dat: stage raw HSD graph unsupported.
+  Pokémon Stadium variants contain non-relocated `0xffffffff` map-root slots;
+  their runtime semantics must be integrated before accepting them. Do not
+  classify these assets as missing/corrupt or silently turn the slots into NULL.
+- Build/link/VELF/SELF/VPK exit 0. ZIP CRC, APP_VER 00.51 and packaged eboot match
+  verified. Existing linker enum-size warnings remain.
+- VPK: `build/vita-full/SmashMeleeVita-v3.41-stage-spline.vpk`, 3185566 bytes.
+  SHA-256: `f2555ba94278e74c4ac29db29b88cb58b9b535d5660c8601b472b8302c2f6276`.
+- Logs: `v3.41-build.log`, `stage-spline-regression.log`, `stage-raw-check.log`,
+  `stage-remaining-rejections.log` in `build/vita-full`.
+
+Next physical test: install v3.41, repeat Classic -> same character -> START.
+Expected: the old GrKg map-1 panic disappears and
+`VITA_STAGE_HSD_RAW_NATIVE_PASS ... splines=...` appears. Collect the resulting
+log/core for whatever follows; no v3.41 device validation has occurred here.
+Continue full native/vitaGL integration; do not reintroduce artificial frontier
+pauses. Remaining stage formats and subsequent gameplay callbacks are still
+work to do; this update does not claim a playable match.
+
+
 ## Active integration — supersedes v3.22 frontier policy
 
 User direction: integrate missing original scene code; no artificial paused

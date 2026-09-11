@@ -139,6 +139,28 @@
 /* 1C55AC */ static void Ground_801C55AC(Ground*);
 /* 1C5878 */ static void Ground_801C5878(void);
 
+/* StageCallbacks is initialized with the original PPC u32 masks (b0 == bit 31,
+ * b1 == bit 30, b2 == bit 29).  ARM's u8 bitfield allocation is LSB-first, so
+ * reading flags_b* directly reverses the meaning of these static tables. */
+static inline bool Ground_StageCallbackFlag(const StageCallbacks* callbacks,
+                                            unsigned bit)
+{
+#ifdef MELEE_VITA_PLATFORM
+    return bit < 8 && (callbacks->flags & (1U << (31U - bit))) != 0;
+#else
+    switch (bit) {
+    case 0:
+        return callbacks->flags_b0 == 1;
+    case 1:
+        return callbacks->flags_b1 == 1;
+    case 2:
+        return callbacks->flags_b2 == 1;
+    default:
+        return false;
+    }
+#endif
+}
+
 /* 49E6C8 */ StageInfo stage_info;
 
 /* 3DFEA8 */ static StageData Ground_StageData = {
@@ -890,7 +912,8 @@ Ground_GObj* Ground_GetStageGObj(int map_id)
             OSReport("%s:%d: couldn t get jobj\n", __FILE__, 0x55D);
             return NULL;
         }
-        if (stage_datas[stageinfo->grkind]->callbacks[map_id].flags_b2 == 1 &&
+        if (Ground_StageCallbackFlag(
+                &stage_datas[stageinfo->grkind]->callbacks[map_id], 2) &&
             archive->unk4->unk8[map_id].x10 != NULL)
         {
             HSD_GObj* temp_r23_2 = GObj_Create(17, 19, 0);
@@ -1098,7 +1121,7 @@ static inline HSD_FogDesc* foo(void)
     grDatFiles_GetArchive();
     for (i = 0; i < temp_r30; i++) {
         phi_r29 = &temp_r29[i];
-        if (phi_r29->flags_b1 == 1) {
+        if (Ground_StageCallbackFlag(phi_r29, 1)) {
             return grDatFiles_801C6330(i)->unk4->unk8[i].x1C;
         }
     }
@@ -2523,6 +2546,17 @@ bool Ground_801C43C4(void* arg0)
                 }
             }
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_STAGE_SHADOW_LOOKUP_FAIL arg=%p table=%p count=%d stride=%u\n",
+                 arg0, tmp->unk20, max,
+                 (unsigned) sizeof(struct GroundShadowEntry));
+        for (i = 0; i != max; ++i) {
+            struct GroundShadowEntry* entry = &tmp->unk20[i];
+            const u8* flag_byte = (const u8*) entry + sizeof(entry->unk0);
+            OSReport("VITA_STAGE_SHADOW_ENTRY index=%d anim=%p flag=%u raw=%02x\n",
+                     i, entry->unk0, entry->flag, *flag_byte);
+        }
+#endif
         HSD_ASSERT(3652, 0);
     }
     return false;
@@ -2663,9 +2697,20 @@ void Ground_801C466C(void)
     count = archive->unk4->unkC;
     archive = grDatFiles_GetArchive();
     for (i = 0; i < count; i++) {
-        if (callbacks->flags_b0 == 1) {
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_STAGE_CALLBACK_FLAGS map=%d flags=%08x light=%u fog=%u camera=%u\n",
+                 i, callbacks->flags,
+                 Ground_StageCallbackFlag(callbacks, 0),
+                 Ground_StageCallbackFlag(callbacks, 1),
+                 Ground_StageCallbackFlag(callbacks, 2));
+#endif
+        if (Ground_StageCallbackFlag(callbacks, 0)) {
             archive = grDatFiles_801C6330(i);
             selected = Ground_801C20E0(archive, archive->unk4->unk8[i].x18);
+#ifdef MELEE_VITA_PLATFORM
+            OSReport("VITA_STAGE_LIGHT_SELECT map=%d archive=%p lights=%p fallback=0\n",
+                     i, archive, selected);
+#endif
             goto light_selected;
         }
         callbacks++;
@@ -2673,6 +2718,10 @@ void Ground_801C466C(void)
     selected = NULL;
 light_selected:
     if ((r28_carrier.lights = selected) == NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_STAGE_LIGHT_SELECT map=-1 archive=%p lights=%p fallback=1\n",
+                 grDatFiles_GetArchive(), Ground_803E06C8);
+#endif
         r28_carrier.lights = Ground_803E06C8;
     }
     temp_r3 = GObj_Create(0xD, 3, 0);

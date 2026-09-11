@@ -287,17 +287,16 @@ static s32 PObjLoad(HSD_PObj* pobj, HSD_PObjDesc* desc)
     pobj->display = desc->display;
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
     /* The Vita native converter now supports the bounded envelope descriptor
-       subset used by MnMaAll.  Keep shape animation and shared-skin refs
-       fail-closed until their native adapters exist. */
+       subset used by MnMaAll plus shared-skin JObj references. Shape animation
+       remains fail-closed until its native adapter exists. */
     switch (pobj_type(pobj)) {
     case POBJ_ENVELOPE:
         pobj->u.envelope_list = loadEnvelopeDesc(desc->u.envelope_p);
         break;
     case POBJ_SKIN:
-        if (desc->u.joint != NULL) {
-            HSD_Panic(__FILE__, __LINE__,
-                      "load-only shared-skin PObj requires native adapter\n");
-        }
+        /* HSD_JObjLoadJoint() registers descriptor identity in the ID table.
+           Resolve the optional shared vertex JObj in HSD_PObjResolveRefs(),
+           after the complete structural tree has been loaded. */
         pobj->u.jobj = NULL;
         break;
     default:
@@ -425,9 +424,19 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
         resolveEnvelope(pobj->u.envelope_list, pdesc->u.envelope_p);
         break;
     case POBJ_SKIN:
+        HSD_JObjUnrefThis(pobj->u.jobj);
+        pobj->u.jobj = NULL;
         if (pdesc->u.joint != NULL) {
-            HSD_Panic(__FILE__, __LINE__,
-                      "load-only shared-skin refs require native adapter\n");
+            pobj->u.jobj = HSD_IDGetData((u32) pdesc->u.joint, NULL);
+            if (pobj->u.jobj == NULL) {
+                OSReport("VITA_POBJ_SHARED_SKIN_RESOLVE_FAIL desc=%p joint_desc=%p\n",
+                         pdesc, pdesc->u.joint);
+                HSD_Panic(__FILE__, __LINE__,
+                          "load-only shared-skin JObj missing from ID table\n");
+            }
+            HSD_JObjRefThis(pobj->u.jobj);
+            OSReport("VITA_POBJ_SHARED_SKIN_RESOLVE_PASS desc=%p joint_desc=%p joint=%p\n",
+                     pdesc, pdesc->u.joint, pobj->u.jobj);
         }
         break;
     default:
@@ -1293,8 +1302,26 @@ int HSD_PObjCaptureRigid(HSD_PObj* pobj, Mtx pmtx)
 int HSD_PObjCaptureVita(HSD_PObj* pobj, HSD_JObj* owner, Mtx pmtx)
 {
     if (pobj == NULL || owner == NULL || pmtx == NULL) return -1;
-    if (pobj_type(pobj) == POBJ_SKIN)
-        return HSD_PObjCaptureRigid(pobj, pmtx);
+    if (pobj_type(pobj) == POBJ_SKIN) {
+        if (pobj->u.jobj == NULL)
+            return HSD_PObjCaptureRigid(pobj, pmtx);
+
+        switch (pobj->flags & (POBJ_CULLFRONT | POBJ_CULLBACK)) {
+        case 0: GXSetCullMode(GX_CULL_NONE); break;
+        case POBJ_CULLFRONT: GXSetCullMode(GX_CULL_FRONT); break;
+        case POBJ_CULLBACK: GXSetCullMode(GX_CULL_BACK); break;
+        case POBJ_CULLFRONT | POBJ_CULLBACK: return 0;
+        }
+        /* The load-only capture pipeline precomputes every JObj world matrix.
+           Shared-skin display lists select PNMTX0 (owner) or PNMTX1 (shared
+           vertex source) per vertex, matching SetupSharedVtxModelMtx without
+           re-enabling the original GX renderer. */
+        GXSetCurrentMtx(GX_PNMTX0);
+        GXLoadPosMtxImm(pmtx, GX_PNMTX0);
+        GXLoadPosMtxImm(pobj->u.jobj->mtx, GX_PNMTX1);
+        PObjDispSimplePrimitive(pobj, 0);
+        return 0;
+    }
     if (pobj_type(pobj) != POBJ_ENVELOPE || pobj->u.envelope_list == NULL)
         return -1;
 

@@ -8,7 +8,7 @@ set(CMAKE_C_STANDARD 11)
 option(MELEE_VITA_FULL_GAMEPLAY_SCENE
   "Link and enter the complete retail GS_VS/GS_TRAINING runtime frontier" ON)
 option(MELEE_VITA_SKIP_CLASSIC_INTRO
-  "Temporarily bypass the Classic GS_INTRO_EASY presentation and enter the first retail match" ON)
+  "Temporarily bypass the Classic GS_INTRO_EASY presentation and enter the first retail match" OFF)
 add_library(melee_portable OBJECT ../src/sysdolphin/baselib/random.c
   ../extern/dolphin/src/dolphin/pad/PadClamp.c)
 target_include_directories(melee_portable PRIVATE ../src ../extern/dolphin/include)
@@ -66,7 +66,7 @@ target_compile_definitions(melee_hsd_runtime PRIVATE MELEE_VITA_PLATFORM=1 MELEE
 target_compile_options(melee_hsd_runtime PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
 
 add_library(melee_game_boot STATIC
-  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c game_boot_support_vita.c gmopening_state_vita.c scene_archive_vita.c
+  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c game_boot_support_vita.c gmopening_state_vita.c scene_archive_vita.c stage_archive_vita.c gameplay_archive_vita.c
   ../src/melee/gm/gmmain.c
   ../src/melee/gm/gm_1A3F.c
   ../src/melee/gm/gm_1A36.c
@@ -257,7 +257,7 @@ target_link_libraries(melee_vita vitaGL vitashark SceShaccCgExt SceShaccCg_stub
   SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceSysmodule_stub SceAppMgr_stub)
 vita_create_self(eboot.bin melee_vita UNSAFE)
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 00.40 NAME "Melee Vita Runtime"
+  VERSION 00.54 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

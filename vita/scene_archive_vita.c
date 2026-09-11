@@ -41,6 +41,10 @@ static void world(HSD_Archive* a, HSD_WObjDesc* w)
     vector(a,&w->pos);
 }
 extern void mv_event_menu_archive_prepare(HSD_Archive*);
+extern void mv_stage_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_effect_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_fighter_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_gameplay_archive_prepare_raw(void*, size_t, const char*);
 
 typedef struct {
     int ready;
@@ -84,6 +88,50 @@ static int dat_public_offset(const MvDat *dat, const char *wanted, uint32_t *out
     return -1;
 }
 
+static void classic_easy_swap_float_records(uint8_t *data, uint32_t offset,
+                                            unsigned count, unsigned stride,
+                                            unsigned words)
+{
+    for (unsigned i = 0; i < count; ++i) {
+        for (unsigned j = 0; j < words; ++j)
+            swap32(data + offset + i * stride + j * sizeof(uint32_t));
+    }
+}
+
+static void classic_easy_prepare_raw(void *bytes, size_t size,
+                                     const char *filename)
+{
+    if (!filename || (strcmp(filename, "GmIntEz.dat") != 0 &&
+                      strcmp(filename, "GmIntEz.usd") != 0))
+        return;
+
+    MvDat dat;
+    if (mv_dat_open(&dat, bytes, size))
+        HSD_Panic(__FILE__, __LINE__, "Classic Easy table DAT parse failed");
+
+    uint32_t root = 0;
+    if (dat_public_offset(&dat, "gmIntroEasyTable", &root) || root != 0 ||
+        dat.data_size != 0x9B8 || dat.relocation_count != 0) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "Classic Easy table layout mismatch");
+    }
+
+    uint8_t *data = (uint8_t *) (uintptr_t) dat.data;
+    /* gmIntroEasyTable is a scalar-only 0x9B8-byte root.  Convert only the
+     * typed float fields from gm_1832.c; the non-zero padding/byte regions are
+     * intentionally preserved byte-for-byte. */
+    classic_easy_swap_float_records(data, 0x000, 1, 0x06C, 27);
+    classic_easy_swap_float_records(data, 0x06C, 28, 0x01C, 5);
+    classic_easy_swap_float_records(data, 0x37C, 25, 0x014, 3);
+    classic_easy_swap_float_records(data, 0x57C, 3, 0x030, 12);
+    classic_easy_swap_float_records(data, 0x630, 1, 0x078, 30);
+    classic_easy_swap_float_records(data, 0x6A8, 28, 0x01C, 5);
+
+    OSReport("VITA_CLASSIC_EASY_TABLE_NATIVE_PASS file=%s floats=448 bytes=%u\n",
+             filename, dat.data_size);
+    mv_dat_close(&dat);
+}
+
 static void intro_native_release(MvIntroNativeScene *n)
 {
     if (!n) return;
@@ -95,6 +143,21 @@ static void intro_native_release(MvIntroNativeScene *n)
 
 void mv_boot_archive_prepare_raw(void *bytes, size_t size, const char *filename)
 {
+    mv_gameplay_archive_prepare_raw(bytes, size, filename);
+    /* Stage archives need their nested HSD descriptor scalars converted while
+     * relocation fields are still raw GameCube offsets. Pointer relocation is
+     * then left to HSD_ArchiveParse exactly as upstream expects. */
+    mv_stage_archive_prepare_raw(bytes, size, filename);
+    /* Fighter/effect DATs use the same mixed-endian HSD descriptors but expose
+     * them through eff*DataTable rather than map_head. Nativeize those graphs
+     * at the same pre-relocation boundary. */
+    mv_effect_archive_prepare_raw(bytes, size, filename);
+    /* Costume/model DATs expose Ply*5K_Share_joint and optional MatAnim roots.
+     * They are heavily preloaded through lbdvd type 2, so they need the same
+     * scalar conversion before pointer relocation. */
+    mv_fighter_archive_prepare_raw(bytes, size, filename);
+    classic_easy_prepare_raw(bytes, size, filename);
+
     int index = intro_name_index(filename);
     if (index < 0) return;
     MvIntroNativeScene *n = &intro_native[index];

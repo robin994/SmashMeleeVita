@@ -378,6 +378,18 @@ void* lbDvd_GetPreloadedArchive(ssize_t entry_num)
 
         switch (type) {
         case 2:
+#ifdef MELEE_VITA_PLATFORM
+            {
+                extern void mv_boot_archive_prepare_raw(void*, size_t,
+                                                        const char*);
+                /* Generic preloaded DATs (notably fighter costume archives)
+                 * bypass lbArchive_LoadSymbols and therefore its raw hook.
+                 * Inspect the public roots before relocation; unknown archive
+                 * schemas are left untouched. */
+                mv_boot_archive_prepare_raw(entry->raw_data->addr, entry->size,
+                                            NULL);
+            }
+#endif
             lbArchive_InitializeDAT((HSD_Archive*) entry->archive->addr,
                                     (u8*) entry->raw_data->addr, entry->size);
             break;

@@ -34,3 +34,7 @@ int mv_anim_joint_sample_frame0(const MvDat *dat, uint32_t anim_joint,
                                 MvAnimJointSample *sample);
 int mv_aobj_sample(const MvDat *dat, uint32_t aobj_desc, float frame,
                    MvAObjSample *sample);
+/* Validate one JObj AObj stream without resolving an optional serialized
+   obj_id reference.  This is used by raw in-place nativeizers before archive
+   relocation; the pointer itself is validated separately and left untouched. */
+int mv_aobj_validate_jobj(const MvDat *dat, uint32_t aobj_desc);

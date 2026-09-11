@@ -430,6 +430,8 @@ static void psInitDataBankLocateVita(void* cmd_bank, void* tex_bank,
         OSPanic(__FILE__, __LINE__, "null particle bank");
     }
     if (ps_vita_bank_is_native(cmd_bank, tex_bank)) {
+        OSReport("VITA_PS_BANK_NATIVE_REUSE cmd=%p tex=%p version=%u\n",
+                 cmd_bank, tex_bank, ps_vita_native16(cmd_bank));
         return;
     }
 

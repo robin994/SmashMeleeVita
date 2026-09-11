@@ -7,10 +7,20 @@
 /* Typed immutable conversion; compressed FObj values are already little-endian
  * byte streams in the original format and must not be swapped. */
 typedef struct { uint32_t offset; unsigned type, busy; void *value; } Entry;
-typedef struct { const MvDat *dat; MvNativeAnim *out; int error; } Context;
+typedef struct {
+    const MvDat *dat;
+    MvNativeAnim *out;
+    int error;
+    int allow_obj_refs;
+} Context;
 static float scalar(const uint8_t *p)
 { uint32_t u=mv_be32(p); float f; memcpy(&f,&u,4); return f; }
 static void *convert(Context*, uint32_t, unsigned, unsigned);
+
+static int jobj_fobj_type_supported(uint8_t type)
+{
+    return (type >= 1 && type <= 12) || (type >= 20 && type <= 42);
+}
 static void *reference(Context *c, uint32_t field, unsigned type, unsigned depth)
 {
     uint32_t offset;
@@ -39,19 +49,25 @@ static void *convert(Context *c, uint32_t offset, unsigned type, unsigned depth)
         a->aobjdesc=reference(c,offset+8,2,depth);a->flags=mv_be32(p+16);
         if(mv_dat_pointer(c->dat,offset+12,&unused)!=0) c->error=-2;
     } else if(type==2) {
-        HSD_AObjDesc *a=e->value;
+        HSD_AObjDesc *a=e->value; uint32_t obj_target;
         a->flags=mv_be32(p);a->end_frame=scalar(p+4);
         a->fobjdesc=reference(c,offset+8,3,depth);
-        if(mv_be32(p+12)!=0 || !isfinite(a->end_frame) || a->end_frame<0) c->error=-2;
+        int obj_ref=mv_dat_pointer(c->dat,offset+12,&obj_target);
+        if(obj_ref<0 || (obj_ref==1 && !c->allow_obj_refs) ||
+           !isfinite(a->end_frame) || a->end_frame<0) c->error=-2;
+        /* A validation-only build never escapes to HSD_AObjLoadDesc, so do not
+           manufacture a native obj_id pointer here.  The raw archive nativeizer
+           validates/converts that referenced JObj separately and leaves the
+           relocation field untouched for HSD_ArchiveParse. */
+        a->obj_id=0;
         /* Validate the compressed streams with the independent bounded reader. */
-        MvAObjSample sample;
-        if(mv_aobj_sample(c->dat,offset,a->end_frame,&sample)) c->error=-2;
+        if(mv_aobj_validate_jobj(c->dat,offset)) c->error=-2;
     } else {
         HSD_FObjDesc *f=e->value;uint32_t stream;
         f->next=reference(c,offset,3,depth);f->length=mv_be32(p+4);f->startframe=scalar(p+8);
         f->type=p[12];f->frac_value=p[13];f->frac_slope=p[14];
         if(!isfinite(f->startframe) || f->startframe < -32768 || f->startframe > 32767 ||
-           f->type<1 || f->type>12 || f->type==4 ||
+           !jobj_fobj_type_supported(f->type) ||
            mv_dat_pointer(c->dat,offset+16,&stream)!=1 ||
            !(f->ad=(uint8_t*)mv_dat_span(c->dat,stream,f->length))) c->error=-2;
     }
@@ -69,10 +85,24 @@ int mv_native_anim_build_at(const MvDat *dat,uint32_t root_offset,MvNativeAnim *
     if(!dat || !out || root_offset > dat->data_size) return -1;
     memset(out,0,sizeof(*out));out->entries=calloc(LIMIT,sizeof(Entry));
     if(!out->entries) return -1;
-    Context c={dat,out,0};
+    Context c={dat,out,0,0};
     out->root=convert(&c,root_offset,1,0);
     if(!out->root || c.error) { int r=c.error?c.error:-1;mv_native_anim_free(out);return r; }
     return 0;
+}
+
+int mv_native_anim_validate_at(const MvDat *dat, uint32_t root_offset)
+{
+    if(!dat || root_offset > dat->data_size) return -1;
+    MvNativeAnim out;
+    memset(&out,0,sizeof(out));
+    out.entries=calloc(LIMIT,sizeof(Entry));
+    if(!out.entries) return -1;
+    Context c={dat,&out,0,1};
+    out.root=convert(&c,root_offset,1,0);
+    int result=(!out.root || c.error) ? (c.error ? c.error : -1) : 0;
+    mv_native_anim_free(&out);
+    return result;
 }
 int mv_native_anim_build(const MvDat *dat,const char *name,MvNativeAnim *out)
 {

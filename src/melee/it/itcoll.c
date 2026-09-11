@@ -1018,6 +1018,10 @@ void it_8027163C(Item_GObj* item_gobj)
     it_dynams = (ItCollDynamics*) article->x14_dynamics;
     if (it_hurtbox != NULL) {
         if (it_hurtbox->count > 2) {
+#ifdef MELEE_VITA_PLATFORM
+            OSReport("VITA_ITEM_HURTBOX_COUNT_INVALID kind=%d article=%p hurt=%p count=%d\n",
+                     item->kind, article, it_hurtbox, it_hurtbox->count);
+#endif
             HSD_ASSERTREPORT(0x3F4, 0, "item hit num over!\n");
         }
         cnt = 0U;
@@ -1047,6 +1051,10 @@ void it_8027163C(Item_GObj* item_gobj)
     }
     if (it_dynams != NULL) {
         if (it_dynams->count > 2) {
+#ifdef MELEE_VITA_PLATFORM
+            OSReport("VITA_ITEM_DYNAMICS_COUNT_INVALID kind=%d article=%p dynamics=%p count=%d\n",
+                     item->kind, article, it_dynams, it_dynams->count);
+#endif
             HSD_ASSERTREPORT(0x415, 0, "item dynamics hit num over!\n");
         }
         cnt = 0U;

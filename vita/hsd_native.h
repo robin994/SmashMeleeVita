@@ -66,6 +66,13 @@ enum {
    an explicitly unsupported HSD descriptor type, and -1 for malformed data or
    allocation failure. No necessary descriptor is silently replaced by NULL. */
 int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *out);
+/* Validation graph for pre-relocation raw archives. It accepts HSD features
+   whose serialized scalar layout is supported by the raw nativeizer (notably
+   spline JObjs and the standard V/H/R billboard modes) even when the compact
+   standalone native-proxy renderer does not model them. Never pass this graph
+   to runtime loaders; callers must free it after validation/statistics. */
+int mv_hsd_native_validate_raw_at(const MvDat *dat, uint32_t root_offset,
+                                  MvNativeHsd *out);
 int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out);
 void mv_hsd_native_free(MvNativeHsd *graph);
 int mv_hsd_native_stats(const MvDat *dat, const char *root_name,
