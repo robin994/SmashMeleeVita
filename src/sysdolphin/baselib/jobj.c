@@ -1576,12 +1576,14 @@ void JObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_jobj",
                      sizeof(HSD_JObjInfo), sizeof(HSD_JObj));
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    /* Vita renders through the HSD capture -> vitaGL path, but live game
-       logic still calls HSD_JObjSetupMatrix() while animating menu objects.
-       Install the authentic matrix builder without enabling the GX display
-       callbacks that remain owned by the Vita capture backend. */
+    /* The Vita port now reaches retail game scenes that invoke the original
+       HSD display walk. Keep the load-only ownership/release policy, but
+       expose the authentic render callbacks so their GX traffic can be
+       captured by the Vita backend. */
     HSD_JOBJ_INFO(&hsdJObj)->load = JObjLoad;
     HSD_JOBJ_INFO(&hsdJObj)->make_mtx = HSD_JObjMakeMatrix;
+    HSD_JOBJ_INFO(&hsdJObj)->make_pmtx = HSD_JObjMakePositionMtx;
+    HSD_JOBJ_INFO(&hsdJObj)->disp = HSD_JObjDispSub;
 #else
     HSD_CLASS_INFO(&hsdJObj)->init = JObjInit;
     HSD_CLASS_INFO(&hsdJObj)->release = JObjRelease;

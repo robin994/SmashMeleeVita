@@ -45,6 +45,7 @@ extern void mv_stage_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_effect_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_fighter_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_gameplay_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_pause_scene_archive_prepare_raw(void*, size_t, const char*);
 
 typedef struct {
     int ready;
@@ -156,6 +157,10 @@ void mv_boot_archive_prepare_raw(void *bytes, size_t size, const char *filename)
      * They are heavily preloaded through lbdvd type 2, so they need the same
      * scalar conversion before pointer relocation. */
     mv_fighter_archive_prepare_raw(bytes, size, filename);
+    /* Ordinary SceneDesc archives can contain HSD graphs that are not exposed
+     * through stage/fighter/effect public roots.  GmPause is the first retail
+     * gameplay archive to hit this path on hardware. */
+    mv_pause_scene_archive_prepare_raw(bytes, size, filename);
     classic_easy_prepare_raw(bytes, size, filename);
 
     int index = intro_name_index(filename);

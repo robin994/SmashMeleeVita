@@ -3,9 +3,31 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "hsd_data.h"
+
+extern void mv_hsd_joint_graph_prepare_raw(void* bytes, size_t size,
+                                           uint32_t root_offset,
+                                           const char* filename,
+                                           const char* label);
+extern void mv_hsd_anim_graph_prepare_raw(void* bytes, size_t size,
+                                          uint32_t root_offset,
+                                          const char* filename,
+                                          const char* label);
+extern void mv_hsd_graph_set_prepare_raw(void* bytes, size_t size,
+                                         const uint32_t* joint_roots,
+                                         size_t joint_count,
+                                         const uint32_t* anim_roots,
+                                         size_t anim_count,
+                                         const uint32_t* matanim_roots,
+                                         size_t matanim_count,
+                                         const uint32_t* shape_roots,
+                                         size_t shape_count,
+                                         const char* filename,
+                                         const char* label);
 
 static void gp_fail(const char* kind, const char* detail, uint32_t off)
 {
@@ -61,6 +83,16 @@ static void gp_swap32(MvDat* dat, uint32_t off, const char* kind,
     memcpy(&v, p, sizeof(v));
     v = __builtin_bswap32(v);
     memcpy(p, &v, sizeof(v));
+}
+
+static void gp_store32_native(MvDat* dat, uint32_t off, uint32_t value,
+                              const char* kind, const char* detail)
+{
+    if (gp_is_pointer(dat, off)) {
+        gp_fail(kind, "attempted native scalar store on relocation", off);
+    }
+    uint8_t* p = gp_span(dat, off, 4, kind, detail);
+    memcpy(p, &value, sizeof(value));
 }
 
 static size_t gp_target_span(const MvDat* dat, uint32_t target)
@@ -121,6 +153,274 @@ static void gp_swap_words(MvDat* dat, uint32_t off, size_t bytes,
     for (size_t i = 0; i < bytes; i += 4) {
         gp_swap32(dat, off + (uint32_t) i, kind, detail);
     }
+}
+
+typedef struct GpColorCommandContext {
+    MvDat* dat;
+    uint32_t* seen;
+    size_t seen_count;
+    size_t seen_cap;
+    unsigned histogram[24];
+} GpColorCommandContext;
+
+static int gp_color_seen(GpColorCommandContext* ctx, uint32_t off)
+{
+    for (size_t i = 0; i < ctx->seen_count; ++i) {
+        if (ctx->seen[i] == off) return 1;
+    }
+    if (ctx->seen_count >= ctx->seen_cap) {
+        gp_fail("PlCo", "ColorOverlay command graph too large", off);
+    }
+    ctx->seen[ctx->seen_count++] = off;
+    return 0;
+}
+
+static uint32_t gp_color_word(MvDat* dat, uint32_t off, const char* detail)
+{
+    return mv_be32(gp_span(dat, off, 4, "PlCo", detail));
+}
+
+static void gp_color_store(GpColorCommandContext* ctx, uint32_t off,
+                           uint32_t value, const char* detail)
+{
+    gp_store32_native(ctx->dat, off, value, "PlCo", detail);
+}
+
+static uint32_t gp_pack_op_value26(uint32_t raw)
+{
+    return (raw >> 26) | ((raw & 0x03ffffffu) << 6);
+}
+
+static void gp_color_convert_script(GpColorCommandContext* ctx, uint32_t off,
+                                    unsigned depth)
+{
+    if (depth > 64) gp_fail("PlCo", "ColorOverlay command recursion", off);
+    for (;;) {
+        if (gp_color_seen(ctx, off)) return;
+        uint32_t raw = gp_color_word(ctx->dat, off, "ColorOverlay command");
+        uint32_t opcode = raw >> 26;
+        if (opcode >= 24) gp_fail("PlCo", "ColorOverlay opcode", off);
+        ++ctx->histogram[opcode];
+
+        switch (opcode) {
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 6:
+        case 8:
+            gp_color_store(ctx, off, gp_pack_op_value26(raw),
+                           "ColorOverlay generic command");
+            if (opcode == 0 || opcode == 6) return;
+            off += 4;
+            break;
+        case 5:
+        case 7: {
+            gp_color_store(ctx, off, gp_pack_op_value26(raw),
+                           "ColorOverlay pointer command");
+            uint32_t target = 0;
+            if (gp_pointer(ctx->dat, off + 4, &target, "PlCo",
+                           "ColorOverlay command pointer") != 1)
+                gp_fail("PlCo", "ColorOverlay command pointer missing", off + 4);
+            gp_color_convert_script(ctx, target, depth + 1);
+            if (opcode == 7) return;
+            off += 8;
+            break;
+        }
+        case 9: {
+            uint32_t id = raw >> 26;
+            uint32_t param1 = (raw >> 18) & 0xffu;
+            uint32_t param2 = raw & 0x3ffffu;
+            gp_color_store(ctx, off, id | (param1 << 6) | (param2 << 14),
+                           "ColorOverlay bg-flash command");
+            off += 4;
+            break;
+        }
+        case 10:
+            gp_color_store(ctx, off, opcode, "ColorOverlay end command");
+            return;
+        case 11:
+        case 15:
+        case 19: {
+            uint32_t timer = raw & 0x03ffffffu;
+            gp_color_store(ctx, off, opcode | (timer << 6),
+                           "ColorOverlay timer command");
+            off += (opcode == 11 ? 4 : 8);
+            break;
+        }
+        case 12:
+        case 14:
+        case 17:
+        case 18:
+        case 20:
+            gp_color_store(ctx, off, opcode, "ColorOverlay simple command");
+            off += (opcode == 14 || opcode == 18 ? 8 : 4);
+            break;
+        case 13: {
+            uint32_t light_enable = (raw >> 25) & 1u;
+            uint32_t spare = (raw >> 24) & 1u;
+            uint32_t x = (raw >> 12) & 0xfffu;
+            uint32_t yz = raw & 0xfffu;
+            gp_color_store(ctx, off,
+                           opcode | (light_enable << 6) | (spare << 7) |
+                               (x << 8) | (yz << 20),
+                           "ColorOverlay light-rotation command");
+            off += 8;
+            break;
+        }
+        case 16: {
+            uint32_t x = (raw >> 13) & 0x1fffu;
+            uint32_t yz = raw & 0x1fffu;
+            gp_color_store(ctx, off, opcode | (x << 6) | (yz << 19),
+                           "ColorOverlay light-direction command");
+            off += 4;
+            break;
+        }
+        case 21: {
+            (void) gp_span(ctx->dat, off, 20, "PlCo", "ColorOverlay GFX command");
+            uint32_t bone = (raw >> 18) & 0xffu;
+            uint32_t common = (raw >> 17) & 1u;
+            uint32_t destroy = (raw >> 16) & 1u;
+            uint32_t use_unk = (raw >> 15) & 1u;
+            uint32_t tail = raw & 0x7fffu;
+            gp_color_store(ctx, off,
+                           opcode | (bone << 6) | (common << 14) |
+                               (destroy << 15) | (use_unk << 16) | (tail << 17),
+                           "ColorOverlay GFX command word0");
+            for (uint32_t i = 1; i < 5; ++i) {
+                uint32_t w = gp_color_word(ctx->dat, off + i * 4,
+                                           "ColorOverlay GFX payload");
+                uint32_t native = (w >> 16) | ((w & 0xffffu) << 16);
+                gp_color_store(ctx, off + i * 4, native,
+                               "ColorOverlay GFX payload");
+            }
+            off += 20;
+            break;
+        }
+        case 22: {
+            (void) gp_span(ctx->dat, off, 12, "PlCo", "ColorOverlay SFX command");
+            uint32_t behavior = (raw >> 18) & 0xffu;
+            uint32_t unknown = raw & 0x3ffffu;
+            gp_color_store(ctx, off,
+                           opcode | (behavior << 6) | (unknown << 14),
+                           "ColorOverlay SFX command word0");
+            uint32_t sfx = gp_color_word(ctx->dat, off + 4,
+                                         "ColorOverlay SFX id");
+            gp_color_store(ctx, off + 4, sfx, "ColorOverlay SFX id");
+            uint32_t params = gp_color_word(ctx->dat, off + 8,
+                                            "ColorOverlay SFX params");
+            uint32_t padding = params >> 16;
+            uint32_t volume = (params >> 8) & 0xffu;
+            uint32_t panning = params & 0xffu;
+            gp_color_store(ctx, off + 8,
+                           padding | (volume << 16) | (panning << 24),
+                           "ColorOverlay SFX params");
+            off += 12;
+            break;
+        }
+        case 23: {
+            if ((raw & 0x1ffffu) != 0)
+                gp_fail("PlCo", "ColorOverlay opcode23 padding", off);
+            uint32_t arg1 = (raw >> 25) & 1u;
+            uint32_t arg2 = (raw >> 17) & 0xffu;
+            gp_color_store(ctx, off, opcode | (arg1 << 6) | (arg2 << 7),
+                           "ColorOverlay fighter command");
+            off += 4;
+            break;
+        }
+        default:
+            gp_fail("PlCo", "ColorOverlay unsupported opcode", off);
+        }
+    }
+}
+
+static void plco_convert_color_commands(MvDat* dat, uint32_t p6, uint32_t p7)
+{
+    if (gp_target_span(dat, p6) != 0x3d8 || gp_target_span(dat, p7) != 0x30)
+        gp_fail("PlCo", "ColorOverlay table span", p6);
+    GpColorCommandContext ctx = { 0 };
+    ctx.dat = dat;
+    ctx.seen_cap = 4096;
+    ctx.seen = calloc(ctx.seen_cap, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) gp_fail("PlCo", "ColorOverlay seen allocation", p6);
+
+    const uint32_t tables[2] = { p6, p7 };
+    const size_t spans[2] = { 0x3d8, 0x30 };
+    for (int t = 0; t < 2; ++t) {
+        for (size_t off = 0; off < spans[t]; off += 8) {
+            uint32_t script = 0;
+            int r = gp_pointer(dat, tables[t] + (uint32_t) off, &script,
+                               "PlCo", "ColorOverlay script");
+            if (r == 1) gp_color_convert_script(&ctx, script, 0);
+        }
+    }
+    OSReport("VITA_PLCO_COLOR_COMMAND_NATIVE_PASS commands=%u op3=%u op4=%u op5=%u op7=%u op10=%u op11=%u op13=%u op18=%u op19=%u op21=%u op22=%u op23=%u\n",
+             (unsigned) ctx.seen_count, ctx.histogram[3], ctx.histogram[4],
+             ctx.histogram[5], ctx.histogram[7], ctx.histogram[10],
+             ctx.histogram[11], ctx.histogram[13], ctx.histogram[18],
+             ctx.histogram[19], ctx.histogram[21], ctx.histogram[22],
+             ctx.histogram[23]);
+    free(ctx.seen);
+}
+
+static void plco_convert_cpu_tables(MvDat* dat, uint32_t root)
+{
+    if (gp_target_span(dat, root) != 0x30)
+        gp_fail("PlCo", "CPU root span", root);
+    uint32_t table[10];
+    for (uint32_t i = 0; i < 10; ++i) {
+        if (gp_pointer(dat, root + i * 4, &table[i], "PlCo", "CPU root pointer") != 1)
+            gp_fail("PlCo", "CPU root pointer missing", root + i * 4);
+    }
+    if (gp_target_span(dat, table[0]) != 0xf8)
+        gp_fail("PlCo", "CPU cmdscript pointer table span", table[0]);
+    for (uint32_t off = 0; off < 0xf8; off += 4) {
+        uint32_t ignored = 0;
+        (void) gp_pointer(dat, table[0] + off, &ignored, "PlCo", "CPU cmdscript pointer");
+    }
+
+    uint32_t seen[256];
+    size_t seen_count = 0;
+    unsigned lists = 0;
+    unsigned entries = 0;
+    for (uint32_t field = 1; field <= 7; ++field) {
+        if (gp_target_span(dat, table[field]) != 0x80)
+            gp_fail("PlCo", "CPU attack pointer table span", table[field]);
+        for (uint32_t i = 0; i < 32; ++i) {
+            uint32_t list = 0;
+            int r = gp_pointer(dat, table[field] + i * 4, &list, "PlCo",
+                               "CPU attack list");
+            if (r != 1) continue;
+            int duplicate = 0;
+            for (size_t s = 0; s < seen_count; ++s) {
+                if (seen[s] == list) { duplicate = 1; break; }
+            }
+            if (duplicate) continue;
+            if (seen_count >= sizeof(seen) / sizeof(seen[0]))
+                gp_fail("PlCo", "CPU attack list count", list);
+            seen[seen_count++] = list;
+            ++lists;
+
+            uint32_t count = 0;
+            for (; count < 64; ++count) {
+                uint32_t rec = list + count * 0x24;
+                uint8_t* raw = gp_span(dat, rec, 0x24, "PlCo", "CPU attack record");
+                uint32_t cmd = mv_be32(raw);
+                if (cmd == 0) break;
+                gp_swap_words(dat, rec, 0x24, "PlCo", "CPU attack record");
+            }
+            if (count == 64) gp_fail("PlCo", "CPU attack list unterminated", list);
+            entries += count;
+        }
+    }
+    if (gp_target_span(dat, table[8]) != 0x80 ||
+        gp_target_span(dat, table[9]) != 0x18)
+        gp_fail("PlCo", "CPU float-table spans", table[8]);
+    gp_swap_words(dat, table[8], 0x80, "PlCo", "CPU fighter reach");
+    gp_swap_words(dat, table[9], 0x18, "PlCo", "CPU weapon reach");
+    OSReport("VITA_PLCO_CPU_NATIVE_PASS lists=%u entries=%u fighter_reach=32 weapon_reach=6\n",
+             lists, entries);
 }
 
 static int gp_mark_unique(uint32_t* values, size_t* count, size_t capacity,
@@ -297,15 +597,17 @@ static void fighter_convert_dynamics(MvDat* dat, uint32_t off,
 static void fighter_convert_sfx(MvDat* dat, uint32_t off, const char* root)
 {
     (void) gp_span(dat, off, 0x38, root, "FtSFX");
-    uint32_t arrays[2] = { 0, 0 };
-    int ar0 = gp_pointer(dat, off + 0x00, &arrays[0], root, "FtSFX.smash");
-    int ar1 = gp_pointer(dat, off + 0x20, &arrays[1], root, "FtSFX.x20");
-    for (uint32_t p = 0x04; p < 0x20; p += 4)
+    uint32_t arrays[3] = { 0, 0, 0 };
+    int present[3] = {
+        gp_pointer(dat, off + 0x00, &arrays[0], root, "FtSFX.smash"),
+        gp_pointer(dat, off + 0x1C, &arrays[1], root, "FtSFX.x1C"),
+        gp_pointer(dat, off + 0x20, &arrays[2], root, "FtSFX.x20"),
+    };
+    for (uint32_t p = 0x04; p < 0x1C; p += 4)
         gp_swap32(dat, off + p, root, "FtSFX scalar");
     for (uint32_t p = 0x24; p < 0x38; p += 4)
         gp_swap32(dat, off + p, root, "FtSFX scalar");
-    int present[2] = { ar0, ar1 };
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         if (present[i] != 1) continue;
         uint8_t* a = gp_span(dat, arrays[i], 8, root, "FtSFXArr");
         uint32_t n = mv_be32(a);
@@ -317,6 +619,88 @@ static void fighter_convert_sfx(MvDat* dat, uint32_t off, const char* root)
         gp_swap32(dat, arrays[i], root, "FtSFXArr.count");
         if (n != 0) gp_swap_words(dat, ids, n * 4, root, "FtSFX ids");
     }
+}
+
+static void fighter_convert_visibility(MvDat* dat, uint32_t model_num,
+                                       uint32_t vis_table, const char* root,
+                                       const char* filename)
+{
+    size_t vis_span = gp_target_span(dat, vis_table);
+    if (model_num > 11 || vis_span == 0 || vis_span > 0x80 ||
+        (vis_span % 0x10) != 0)
+    {
+        gp_fail(root, "fighter visibility table", vis_table);
+    }
+
+    uint32_t seen_lookups[128] = { 0 };
+    uint32_t seen_temps[256] = { 0 };
+    size_t lookup_count = 0;
+    size_t temp_count = 0;
+    uint32_t temp_entries = 0;
+    uint32_t byte_indices = 0;
+
+    for (size_t cell = 0; cell < vis_span / 4; ++cell) {
+        uint32_t lookup = 0;
+        int lookup_r = gp_pointer(dat, vis_table + (uint32_t) cell * 4,
+                                  &lookup, root, "visibility lookup");
+        if (lookup_r != 1 ||
+            !gp_mark_unique(seen_lookups, &lookup_count,
+                            sizeof(seen_lookups) / sizeof(seen_lookups[0]),
+                            lookup, root, "visibility lookup overflow"))
+        {
+            continue;
+        }
+
+        (void) gp_span(dat, lookup, (size_t) model_num * 8, root,
+                       "FtPartsVisLookup[]");
+        for (uint32_t model = 0; model < model_num; ++model) {
+            uint32_t rec = lookup + model * 8;
+            uint8_t* raw = gp_span(dat, rec, 8, root, "FtPartsVisLookup");
+            uint32_t count = mv_be32(raw);
+            uint32_t temps = 0;
+            int temps_r = gp_pointer(dat, rec + 4, &temps, root,
+                                     "FtPartsVisLookup.temp");
+            if (count > 32 || (count != 0 && temps_r != 1)) {
+                gp_fail(root, "FtPartsVisLookup count", rec);
+            }
+            gp_swap32(dat, rec, root, "FtPartsVisLookup count");
+
+            if (temps_r != 1 ||
+                !gp_mark_unique(seen_temps, &temp_count,
+                                sizeof(seen_temps) / sizeof(seen_temps[0]),
+                                temps, root, "TempS array overflow"))
+            {
+                continue;
+            }
+
+            (void) gp_span(dat, temps, (size_t) count * 8, root, "TempS[]");
+            for (uint32_t i = 0; i < count; ++i) {
+                uint32_t entry = temps + i * 8;
+                uint8_t* temp_raw = gp_span(dat, entry, 8, root, "TempS");
+                uint32_t index_count = mv_be32(temp_raw);
+                uint32_t indices = 0;
+                int indices_r = gp_pointer(dat, entry + 4, &indices, root,
+                                           "TempS.indices");
+                if (index_count > 256 ||
+                    (index_count != 0 && indices_r != 1))
+                {
+                    gp_fail(root, "TempS count", entry);
+                }
+                if (index_count != 0) {
+                    (void) gp_span(dat, indices, index_count, root,
+                                   "TempS byte indices");
+                }
+                gp_swap32(dat, entry, root, "TempS count");
+                ++temp_entries;
+                byte_indices += index_count;
+            }
+        }
+    }
+
+    OSReport("VITA_FIGHTER_VIS_NATIVE_PASS file=%s root=%s lookups=%u temp_arrays=%u temp_entries=%u byte_indices=%u\n",
+             filename != NULL ? filename : "?", root,
+             (unsigned) lookup_count, (unsigned) temp_count,
+             (unsigned) temp_entries, (unsigned) byte_indices);
 }
 
 static void fighter_convert(MvDat* dat, const char* root_name,
@@ -331,6 +715,16 @@ static void fighter_convert(MvDat* dat, const char* root_name,
     }
     if (r[0] != 1 || r[1] != 1 || r[2] != 1 || r[3] != 1 || r[5] != 1) {
         gp_fail(root_name, "required ftData pointers", root);
+    }
+
+    /* x5C is a complete serialized HSD_Joint graph used by ft_800C85B8() to
+     * append fighter model parts. HSD relocation fixes its pointers but not
+     * its PPC-endian descriptor scalars, so nativeize the whole graph while
+     * the relocation metadata is still available. */
+    if (r[23] == 1) {
+        mv_hsd_joint_graph_prepare_raw((void*) (uintptr_t) dat->file,
+                                       dat->file_size, t[23], filename,
+                                       "ftData.x5C");
     }
 
     (void) gp_span(dat, t[0], 0x184, root_name, "ftCo_DatAttrs");
@@ -349,12 +743,75 @@ static void fighter_convert(MvDat* dat, const char* root_name,
     }
 
     if (r[2] == 1) {
-        uint32_t ignored;
+        uint32_t vis_table = 0;
+        uint32_t tobj_table = 0;
+        uint32_t seen_tobj_indices[6];
+        size_t seen_tobj_index_count = 0;
+        uint32_t converted_tobj_arrays = 0;
+        uint32_t converted_tobj_indices = 0;
         (void) gp_span(dat, t[2], 0x15, root_name, "ftData_x8");
-        (void) gp_pointer(dat, t[2] + 0x04, &ignored, root_name, "vis_table");
-        (void) gp_pointer(dat, t[2] + 0x0C, &ignored, root_name, "tobj table");
+        uint32_t model_num = mv_be32(gp_span(dat, t[2], 4, root_name,
+                                             "model_num"));
+        int vis_table_r = gp_pointer(dat, t[2] + 0x04, &vis_table, root_name,
+                                     "vis_table");
+        uint32_t tobj_count =
+            mv_be32(gp_span(dat, t[2] + 0x08, 4, root_name,
+                            "costume tobj count"));
+        int tobj_table_r = gp_pointer(dat, t[2] + 0x0C, &tobj_table,
+                                      root_name, "tobj table");
+        if (model_num > 11 || vis_table_r != 1 || tobj_count > 5 ||
+            tobj_table_r != 1)
+        {
+            gp_fail(root_name, "costume tobj count/table", t[2] + 0x08);
+        }
+
+        fighter_convert_visibility(dat, model_num, vis_table, root_name,
+                                   filename);
+
+        size_t tobj_table_span = gp_target_span(dat, tobj_table);
+        if (tobj_table_span == 0 || tobj_table_span > 6 * sizeof(uint32_t) ||
+            (tobj_table_span & 3) != 0)
+        {
+            gp_fail(root_name, "costume tobj pointer table", tobj_table);
+        }
+        for (size_t i = 0; i < tobj_table_span / 4; ++i) {
+            uint32_t indices = 0;
+            int indices_r = gp_pointer(dat, tobj_table + (uint32_t) i * 4,
+                                       &indices, root_name,
+                                       "costume tobj index array");
+            if (indices_r != 1 ||
+                !gp_mark_unique(seen_tobj_indices, &seen_tobj_index_count,
+                                sizeof(seen_tobj_indices) /
+                                    sizeof(seen_tobj_indices[0]),
+                                indices, root_name,
+                                "too many costume tobj index arrays"))
+            {
+                continue;
+            }
+            (void) gp_span(dat, indices, (size_t) tobj_count * 2, root_name,
+                           "costume tobj indices");
+            for (uint32_t j = 0; j < tobj_count; ++j) {
+                uint8_t* p = gp_span(dat, indices + j * 2, 2, root_name,
+                                     "costume tobj index");
+                uint16_t raw;
+                memcpy(&raw, p, sizeof(raw));
+                uint16_t native = __builtin_bswap16(raw);
+                if (native > 0xFF) {
+                    gp_fail(root_name, "costume tobj index bound",
+                            indices + j * 2);
+                }
+                gp_swap16(dat, indices + j * 2, root_name,
+                          "costume tobj index");
+                converted_tobj_indices++;
+            }
+            converted_tobj_arrays++;
+        }
         gp_swap32(dat, t[2] + 0x00, root_name, "model_num");
         gp_swap32(dat, t[2] + 0x08, root_name, "costume tobj count");
+        OSReport("VITA_FIGHTER_TOBJ_INDEX_NATIVE_PASS file=%s root=%s count=%u arrays=%u indices=%u\n",
+                 filename != NULL ? filename : "?", root_name,
+                 (unsigned) tobj_count, (unsigned) converted_tobj_arrays,
+                 (unsigned) converted_tobj_indices);
     }
 
     if (t[5] <= t[3] || ((t[5] - t[3]) % 0x18) != 0) {
@@ -458,6 +915,11 @@ static void plco_convert(MvDat* dat, uint32_t root, const char* filename)
         if ((o >= 0x6DC && o < 0x6F0) || o == 0x7D8) continue;
         gp_swap32(dat, p[0] + o, "PlCo", "ftCommonData");
     }
+    if (present[1] == 1) {
+        if (gp_target_span(dat, p[1]) != 0x138)
+            gp_fail("PlCo", "item-throw attrs span", p[1]);
+        gp_swap_words(dat, p[1], 0x138, "PlCo", "item-throw attrs");
+    }
     if (present[2] == 1) gp_swap_words(dat, p[2], 0x78, "PlCo", "swing table");
     if (present[3] == 1) gp_swap_words(dat, p[3], 0x24, "PlCo", "stale table");
     if (present[4] == 1) {
@@ -479,6 +941,58 @@ static void plco_convert(MvDat* dat, uint32_t root, const char* filename)
             }
         }
     }
+    if (present[5] == 1) {
+        size_t span = gp_target_span(dat, p[5]);
+        if (span != 34 * 4)
+            gp_fail("PlCo", "special-parts pointer table", p[5]);
+        unsigned records = 0;
+        unsigned entries_total = 0;
+        for (size_t i = 0; i < 34; ++i) {
+            uint32_t rec = 0;
+            if (gp_pointer(dat, p[5] + (uint32_t) i * 4, &rec, "PlCo",
+                           "special-parts record") != 1)
+                continue;
+            uint8_t* r = gp_span(dat, rec, 8, "PlCo", "special-parts record");
+            uint32_t entries = 0;
+            int er = gp_pointer(dat, rec, &entries, "PlCo", "special-parts entries");
+            uint32_t count = mv_be32(r + 4);
+            if (count > 32 || (count != 0 && er != 1))
+                gp_fail("PlCo", "special-parts count/entries", rec);
+            if (count != 0)
+                (void) gp_span(dat, entries, (size_t) count * 4, "PlCo",
+                               "special-parts byte records");
+            gp_swap32(dat, rec + 4, "PlCo", "special-parts count");
+            ++records;
+            entries_total += count;
+        }
+        OSReport("VITA_PLCO_SPECIAL_PARTS_NATIVE_PASS records=%u entries=%u\n",
+                 records, entries_total);
+    }
+    if (present[6] == 1 && present[7] == 1) {
+        plco_convert_color_commands(dat, p[6], p[7]);
+    } else if (present[6] == 1 || present[7] == 1) {
+        gp_fail("PlCo", "partial ColorOverlay tables", root);
+    }
+    if (present[9] == 1) {
+        if (gp_target_span(dat, p[9]) != 0x18)
+            gp_fail("PlCo", "model-shift table span", p[9]);
+        unsigned vectors_total = 0;
+        for (uint32_t i = 0; i < 3; ++i) {
+            uint32_t vectors = 0;
+            uint32_t field = p[9] + i * 8;
+            int vr = gp_pointer(dat, field, &vectors, "PlCo", "model-shift vectors");
+            uint32_t count = mv_be32(gp_span(dat, field + 4, 4, "PlCo",
+                                             "model-shift count"));
+            if (count > 64 || (count != 0 && vr != 1))
+                gp_fail("PlCo", "model-shift count/vectors", field);
+            gp_swap32(dat, field + 4, "PlCo", "model-shift count");
+            if (count != 0)
+                gp_swap_words(dat, vectors, (size_t) count * 8, "PlCo",
+                              "model-shift Vec2");
+            vectors_total += count;
+        }
+        OSReport("VITA_PLCO_MODEL_SHIFT_NATIVE_PASS vectors=%u\n", vectors_total);
+    }
     for (int idx = 10; idx <= 11; ++idx) {
         if (present[idx] != 1) continue;
         uint8_t* s = gp_span(dat, p[idx], 8, "PlCo", "shake table");
@@ -489,7 +1003,35 @@ static void plco_convert(MvDat* dat, uint32_t root, const char* filename)
         if (n != 0) gp_swap_words(dat, vecs, n * 8, "PlCo", "shake vectors");
     }
     if (present[12] == 1) gp_swap_words(dat, p[12], 0x9C, "PlCo", "scale modifiers");
+    if (present[13] == 1) gp_swap_words(dat, p[13], 0x3C, "PlCo", "bunnyhood modifiers");
+    if (present[14] == 1) gp_swap_words(dat, p[14], 0x24, "PlCo", "metal modifiers");
+    if (present[15] == 1) gp_swap_words(dat, p[15], 0x08, "PlCo", "gravity/weight modifiers");
+    if (present[8] == 1) {
+        if (gp_target_span(dat, p[8]) != 8)
+            gp_fail("PlCo", "common accessory roots span", p[8]);
+        uint32_t joint = 0, anim = 0;
+        if (gp_pointer(dat, p[8], &joint, "PlCo", "common accessory joint") != 1 ||
+            gp_pointer(dat, p[8] + 4, &anim, "PlCo", "common accessory anim") != 1)
+            gp_fail("PlCo", "common accessory roots", p[8]);
+        mv_hsd_joint_graph_prepare_raw((void*) (uintptr_t) dat->file,
+                                       dat->file_size, joint, filename,
+                                       "PlCo.accessory_joint");
+        mv_hsd_anim_graph_prepare_raw((void*) (uintptr_t) dat->file,
+                                      dat->file_size, anim, filename,
+                                      "PlCo.accessory_anim");
+    }
+    if (present[16] == 1) {
+        mv_hsd_joint_graph_prepare_raw((void*) (uintptr_t) dat->file,
+                                       dat->file_size, p[16], filename,
+                                       "PlCo.trophy_platform_joint");
+    }
+    if (present[20] == 1) {
+        mv_hsd_joint_graph_prepare_raw((void*) (uintptr_t) dat->file,
+                                       dat->file_size, p[20], filename,
+                                       "PlCo.common_joint_20");
+    }
     if (present[21] == 1) gp_swap_words(dat, p[21], 0x44, "PlCo", "CrowdConfig");
+    if (present[22] == 1) plco_convert_cpu_tables(dat, p[22]);
     OSReport("VITA_PLCO_NATIVE_PASS file=%s root=%08x\n",
              filename != NULL ? filename : "?", root);
 }
@@ -551,11 +1093,18 @@ static void itco_convert_hurtboxes(MvDat* dat, uint32_t off)
     }
 }
 
-static void itco_convert_model(MvDat* dat, uint32_t off)
+static void itco_convert_model(MvDat* dat, uint32_t off,
+                               uint32_t* joint_roots,
+                               size_t* joint_root_count)
 {
     uint8_t* m = gp_span(dat, off, 0x10, "ItCo", "ItemModelDesc");
-    uint32_t ignored = 0;
-    (void) gp_pointer(dat, off, &ignored, "ItCo", "ItemModelDesc.joint");
+    uint32_t joint = 0;
+    int joint_result =
+        gp_pointer(dat, off, &joint, "ItCo", "ItemModelDesc.joint");
+    if (joint_result == 1) {
+        (void) gp_mark_unique(joint_roots, joint_root_count, 128, joint,
+                              "ItCo", "item model HSD root set overflow");
+    }
     uint32_t bone_count = mv_be32(m + 4);
     int32_t attach_id = (int32_t) mv_be32(m + 8);
     if (bone_count > 100 || attach_id < -1 || attach_id > 100) {
@@ -627,7 +1176,9 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
                                  uint32_t* seen_hurts, size_t* hurt_count,
                                  uint32_t* seen_models, size_t* model_count,
                                  uint32_t* seen_dynamics, size_t* dynamics_count,
-                                 uint32_t* seen_sources, size_t* source_count)
+                                 uint32_t* seen_sources, size_t* source_count,
+                                 uint32_t* joint_roots,
+                                 size_t* joint_root_count)
 {
     uint32_t field[6] = { 0 };
     int present[6] = { 0 };
@@ -653,7 +1204,7 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
         gp_mark_unique(seen_models, model_count, 128, field[4], "ItCo",
                        "model set overflow"))
     {
-        itco_convert_model(dat, field[4]);
+        itco_convert_model(dat, field[4], joint_roots, joint_root_count);
     }
     if (present[5] == 1 &&
         gp_mark_unique(seen_dynamics, dynamics_count, 16, field[5], "ItCo",
@@ -685,8 +1236,10 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
     uint32_t seen_models[128] = { 0 };
     uint32_t seen_dynamics[16] = { 0 };
     uint32_t seen_sources[32] = { 0 };
+    uint32_t joint_roots[128] = { 0 };
     size_t article_count = 0, attr_count = 0, hurt_count = 0;
     size_t model_count = 0, dynamics_count = 0, source_count = 0;
+    size_t joint_root_count = 0;
     for (uint32_t table = 0; table < 3; ++table) {
         uint32_t root_index = table + 1;
         if (present[root_index] != 1) {
@@ -707,17 +1260,115 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
                                      seen_hurts, &hurt_count, seen_models,
                                      &model_count, seen_dynamics,
                                      &dynamics_count, seen_sources,
-                                     &source_count);
+                                     &source_count, joint_roots,
+                                     &joint_root_count);
             }
         }
     }
+    if (joint_root_count != 0) {
+        mv_hsd_graph_set_prepare_raw(
+            (void*) (uintptr_t) dat->file, dat->file_size,
+            joint_roots, joint_root_count, NULL, 0, NULL, 0, NULL, 0,
+            filename, "ItCo.ItemModelDesc");
+    }
     if (present[4] == 1)
         gp_swap_words(dat, p[4], 0x1C, "ItCo", "item global scalar table");
-    OSReport("VITA_ITCO_NATIVE_PASS file=%s root=%08x articles=%u attrs=%u hurts=%u models=%u dynamics=%u sources=%u\n",
+    OSReport("VITA_ITCO_NATIVE_PASS file=%s root=%08x articles=%u attrs=%u hurts=%u models=%u model_joints=%u dynamics=%u sources=%u\n",
              filename != NULL ? filename : "?", root,
              (unsigned) article_count, (unsigned) attr_count,
              (unsigned) hurt_count, (unsigned) model_count,
+             (unsigned) joint_root_count,
              (unsigned) dynamics_count, (unsigned) source_count);
+}
+
+void mv_fighter_figatree_prepare_raw(void* bytes, size_t size,
+                                     const char* symbol)
+{
+    MvDat dat;
+    const char* public_name = NULL;
+    uint32_t root = 0;
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0) {
+        HSD_Panic(__FILE__, __LINE__, "fighter FigaTree DAT parse failed");
+    }
+
+    int found = symbol != NULL ?
+        gp_find_public(&dat, symbol, NULL, &public_name, &root) : 0;
+    if (found <= 0 && dat.public_count == 1) {
+        if (mv_dat_public(&dat, 0, &public_name, &root) != 0) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "fighter FigaTree public root invalid");
+        }
+        found = 1;
+    }
+    if (found <= 0) {
+        OSReport("VITA_FIGATREE_INVALID symbol=%s reason=public-root count=%u\n",
+                 symbol != NULL ? symbol : "?", dat.public_count);
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter FigaTree public root missing");
+    }
+
+    uint8_t* tree = gp_span(&dat, root, 0x14, "FigaTree", "root");
+    uint32_t type = mv_be32(tree + 0x00);
+    uint32_t flags = mv_be32(tree + 0x04);
+    uint32_t frame_bits = mv_be32(tree + 0x08);
+    float frames;
+    memcpy(&frames, &frame_bits, sizeof(frames));
+    if (type > 0xFFu || !isfinite(frames) || frames < 0.0f ||
+        frames > 100000.0f)
+    {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter FigaTree scalar invalid");
+    }
+
+    uint32_t nodes = 0, tracks = 0;
+    if (gp_pointer(&dat, root + 0x0C, &nodes, "FigaTree", "nodes") != 1 ||
+        gp_pointer(&dat, root + 0x10, &tracks, "FigaTree", "tracks") != 1)
+    {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter FigaTree nodes/tracks missing");
+    }
+
+    size_t node_count = 0;
+    size_t track_count = 0;
+    for (; node_count < 512; ++node_count) {
+        int8_t value = *(int8_t*) gp_span(&dat, nodes + (uint32_t) node_count,
+                                         1, "FigaTree", "nodes");
+        if (value == -1) {
+            ++node_count;
+            break;
+        }
+        if (value < 0 || track_count + (uint8_t) value > 4096) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "fighter FigaTree node stream invalid");
+        }
+        track_count += (uint8_t) value;
+    }
+    if (node_count == 0 || node_count > 512 ||
+        *(int8_t*) gp_span(&dat, nodes + (uint32_t) node_count - 1, 1,
+                           "FigaTree", "nodes terminator") != -1)
+    {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter FigaTree nodes unterminated");
+    }
+
+    (void) gp_span(&dat, tracks, track_count * 0x0C,
+                   "FigaTree", "track table");
+    for (size_t i = 0; i < track_count; ++i) {
+        uint32_t off = tracks + (uint32_t) i * 0x0C;
+        uint32_t ignored = 0;
+        (void) gp_pointer(&dat, off + 0x08, &ignored,
+                          "FigaTree", "track data");
+        gp_swap16(&dat, off + 0x00, "FigaTree", "track length");
+        gp_swap16(&dat, off + 0x02, "FigaTree", "track startframe");
+    }
+    gp_swap32(&dat, root + 0x00, "FigaTree", "type");
+    gp_swap32(&dat, root + 0x04, "FigaTree", "flags");
+    gp_swap32(&dat, root + 0x08, "FigaTree", "frames");
+
+    OSReport("VITA_FIGATREE_NATIVE_PASS symbol=%s nodes=%u tracks=%u type=%u flags=%08x frames=%f\n",
+             public_name != NULL ? public_name : (symbol != NULL ? symbol : "?"),
+             (unsigned) node_count, (unsigned) track_count, type, flags, frames);
+    mv_dat_close(&dat);
 }
 
 void mv_gameplay_archive_prepare_raw(void* bytes, size_t size,

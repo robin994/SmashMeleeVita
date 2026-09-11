@@ -8,6 +8,7 @@
 #include <sysdolphin/baselib/forward.h>
 #include <sysdolphin/baselib/jobj.h>
 #include <sysdolphin/baselib/pobj.h>
+#include <sysdolphin/baselib/robj.h>
 
 #include <stdint.h>
 #include <stddef.h>
@@ -53,6 +54,9 @@ enum StageHsdRawKind {
     STAGE_HSD_RAW_SPLINE_SEG_POLY,
     STAGE_HSD_RAW_SHAPE_JOINT,
     STAGE_HSD_RAW_SHAPE_DOBJ,
+    STAGE_HSD_RAW_ROBJ,
+    STAGE_HSD_RAW_BCEXP,
+    STAGE_HSD_RAW_RVALUE_LIST,
     STAGE_HSD_RAW_KIND_COUNT,
 };
 
@@ -203,21 +207,36 @@ static int stage_hsd_raw_pointer(StageHsdRawContext* ctx, u32 field,
 
 static int stage_hsd_raw_seen(StageHsdRawContext* ctx, u8 kind, u32 offset)
 {
-    for (size_t i = 0; i < ctx->seen_count; ++i) {
-        if (ctx->seen[i].kind == kind && ctx->seen[i].offset == offset) {
-            return 1;
-        }
-    }
     if (ctx->seen_count >= STAGE_HSD_RAW_MAX_SEEN) {
         stage_hsd_raw_fail(ctx, "visited-overflow", offset);
     }
-    ctx->seen[ctx->seen_count].kind = kind;
-    ctx->seen[ctx->seen_count].offset = offset;
-    ++ctx->seen_count;
-    if (kind < STAGE_HSD_RAW_KIND_COUNT) {
-        ++ctx->converted[kind];
+
+    /* The ItCo model forest contains thousands of descriptors.  A linear
+     * visited-set scan made the pre-relocation nativeizer quadratic; use the
+     * zero-initialized kind field as the empty marker in an open-addressed
+     * table. STAGE_HSD_RAW_MAX_SEEN is a power of two and all real kinds are
+     * non-zero. */
+    u32 hash = (offset >> 2) * 2654435761u;
+    hash ^= (u32) kind * 2246822519u;
+    size_t slot = hash & (STAGE_HSD_RAW_MAX_SEEN - 1u);
+    for (size_t probe = 0; probe < STAGE_HSD_RAW_MAX_SEEN; ++probe) {
+        StageHsdRawSeen* entry = &ctx->seen[slot];
+        if (entry->kind == 0) {
+            entry->kind = kind;
+            entry->offset = offset;
+            ++ctx->seen_count;
+            if (kind < STAGE_HSD_RAW_KIND_COUNT) {
+                ++ctx->converted[kind];
+            }
+            return 0;
+        }
+        if (entry->kind == kind && entry->offset == offset) {
+            return 1;
+        }
+        slot = (slot + 1u) & (STAGE_HSD_RAW_MAX_SEEN - 1u);
     }
-    return 0;
+    stage_hsd_raw_fail(ctx, "visited-hash-full", offset);
+    return 1;
 }
 
 static void stage_hsd_raw_joint(StageHsdRawContext* ctx, u32 offset);
@@ -229,6 +248,7 @@ static void stage_hsd_raw_anim_joint(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_matanim_joint(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_spline(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_shape_joint(StageHsdRawContext* ctx, u32 offset);
+static void stage_hsd_raw_robj(StageHsdRawContext* ctx, u32 offset);
 
 static int stage_hsd_jobj_fobj_type_supported(u8 type)
 {
@@ -497,6 +517,70 @@ static void stage_hsd_raw_dobj(StageHsdRawContext* ctx, u32 offset)
     }
 }
 
+static void stage_hsd_raw_rvalue_list(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_RVALUE_LIST, offset)) {
+        return;
+    }
+    for (unsigned i = 0; i < 256; ++i) {
+        u32 entry = offset + i * 8;
+        u8* raw = stage_hsd_raw_span(ctx, entry, 8, "robj.rvalue");
+        uint32_t joint;
+        int jr = stage_hsd_raw_pointer(ctx, entry + 4, &joint,
+                                       "robj.rvalue.joint");
+        if (jr == 0) {
+            return;
+        }
+        stage_swap32(raw);
+    }
+    stage_hsd_raw_fail(ctx, "robj.rvalue-unterminated", offset);
+}
+
+static void stage_hsd_raw_bcexp(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_BCEXP, offset)) {
+        return;
+    }
+    (void) stage_hsd_raw_span(ctx, offset, 8, "robj.bcexp");
+    uint32_t target;
+    /* Bytecode itself is opaque data and deliberately stays byte-identical. */
+    (void) stage_hsd_raw_pointer(ctx, offset, &target, "robj.bcexp.bytecode");
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "robj.bcexp.rvalue"))
+    {
+        stage_hsd_raw_rvalue_list(ctx, target);
+    }
+}
+
+static void stage_hsd_raw_robj(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_ROBJ, offset)) {
+        return;
+    }
+    u8* raw = stage_hsd_raw_span(ctx, offset, 12, "robj");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target, "robj.next")) {
+        stage_hsd_raw_robj(ctx, target);
+    }
+    u32 flags = mv_be32(raw + 4);
+    int union_result = stage_hsd_raw_pointer(ctx, offset + 8, &target,
+                                             "robj.union");
+    switch (flags & ROBJ_TYPE_MASK) {
+    case REFTYPE_BYTECODE:
+        if (union_result != 1) {
+            stage_hsd_raw_fail(ctx, "robj.bytecode-null", offset);
+        }
+        stage_hsd_raw_bcexp(ctx, target);
+        break;
+    default:
+        OSReport("VITA_HSD_ROBJ_UNSUPPORTED off=%08x flags=%08x\n",
+                 offset, flags);
+        stage_hsd_raw_fail(ctx, "robj.type", offset);
+        break;
+    }
+    stage_swap32(raw + 4);
+}
+
 static void stage_hsd_raw_joint(StageHsdRawContext* ctx, u32 offset)
 {
     if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_JOINT, offset)) {
@@ -537,7 +621,7 @@ static void stage_hsd_raw_joint(StageHsdRawContext* ctx, u32 offset)
         stage_hsd_raw_matrix(ctx, target);
     }
     if (stage_hsd_raw_pointer(ctx, offset + 0x3C, &target, "joint.robj")) {
-        stage_hsd_raw_fail(ctx, "joint.robj", offset);
+        stage_hsd_raw_robj(ctx, target);
     }
 }
 
@@ -886,6 +970,204 @@ static int stage_hsd_name_ends_with(const char* name, const char* suffix)
            strcmp(name + name_len - suffix_len, suffix) == 0;
 }
 
+void mv_hsd_joint_graph_prepare_raw(void* bytes, size_t size,
+                                    uint32_t root_offset,
+                                    const char* filename,
+                                    const char* label)
+{
+    MvDat dat;
+    MvNativeHsd probe;
+
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0) {
+        HSD_Panic(__FILE__, __LINE__, "fighter parts HSD DAT parse failed");
+    }
+    if (root_offset >= dat.data_size) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter parts HSD root outside DAT");
+    }
+
+    int validation = mv_hsd_native_validate_raw_at(&dat, root_offset, &probe);
+    if (validation != 0) {
+        OSReport("VITA_FIGHTER_PARTS_HSD_RAW_VALIDATE_FAIL file=%s root=%s off=%08x code=%d unsupported=%s unsupported_off=%08x value=%08x\n",
+                 filename != NULL ? filename : "?",
+                 label != NULL ? label : "ftData.x5C", root_offset, validation,
+                 mv_hsd_native_unsupported_name(probe.unsupported_kind),
+                 probe.unsupported_offset, probe.unsupported_value);
+        mv_hsd_native_free(&probe);
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter parts HSD graph unsupported");
+    }
+    mv_hsd_native_free(&probe);
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "fighter parts raw visited allocation failed");
+    }
+
+    stage_hsd_raw_joint(&ctx, root_offset);
+    OSReport("VITA_FIGHTER_PARTS_HSD_RAW_NATIVE_PASS file=%s root=%s off=%08x joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u vtx=%u images=%u tluts=%u matrices=%u envelopes=%u splines=%u\n",
+             filename != NULL ? filename : "?",
+             label != NULL ? label : "ftData.x5C", root_offset,
+             ctx.converted[STAGE_HSD_RAW_JOINT],
+             ctx.converted[STAGE_HSD_RAW_DOBJ],
+             ctx.converted[STAGE_HSD_RAW_MOBJ],
+             ctx.converted[STAGE_HSD_RAW_POBJ],
+             ctx.converted[STAGE_HSD_RAW_TOBJ],
+             ctx.converted[STAGE_HSD_RAW_VTX],
+             ctx.converted[STAGE_HSD_RAW_IMAGE],
+             ctx.converted[STAGE_HSD_RAW_TLUT],
+             ctx.converted[STAGE_HSD_RAW_MTX],
+             ctx.converted[STAGE_HSD_RAW_ENVELOPE],
+             ctx.converted[STAGE_HSD_RAW_SPLINE]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
+void mv_hsd_anim_graph_prepare_raw(void* bytes, size_t size,
+                                   uint32_t root_offset,
+                                   const char* filename,
+                                   const char* label)
+{
+    MvDat dat;
+
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0) {
+        HSD_Panic(__FILE__, __LINE__, "HSD AnimJoint DAT parse failed");
+    }
+    if (root_offset >= dat.data_size) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "HSD AnimJoint root outside DAT");
+    }
+
+    int validation = mv_native_anim_validate_at(&dat, root_offset);
+    if (validation != 0) {
+        OSReport("VITA_HSD_ANIM_RAW_VALIDATE_FAIL file=%s root=%s off=%08x code=%d\n",
+                 filename != NULL ? filename : "?",
+                 label != NULL ? label : "AnimJoint", root_offset,
+                 validation);
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "HSD AnimJoint graph unsupported");
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "HSD AnimJoint visited allocation failed");
+    }
+
+    stage_hsd_raw_anim_joint(&ctx, root_offset);
+    OSReport("VITA_HSD_ANIM_RAW_NATIVE_PASS file=%s root=%s off=%08x animjoints=%u aobjs=%u fobjs=%u\n",
+             filename != NULL ? filename : "?",
+             label != NULL ? label : "AnimJoint", root_offset,
+             ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_AOBJ],
+             ctx.converted[STAGE_HSD_RAW_FOBJ]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
+void mv_hsd_graph_set_prepare_raw(void* bytes, size_t size,
+                                  const uint32_t* joint_roots,
+                                  size_t joint_count,
+                                  const uint32_t* anim_roots,
+                                  size_t anim_count,
+                                  const uint32_t* matanim_roots,
+                                  size_t matanim_count,
+                                  const uint32_t* shape_roots,
+                                  size_t shape_count,
+                                  const char* filename,
+                                  const char* label)
+{
+    MvDat dat;
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0) {
+        HSD_Panic(__FILE__, __LINE__, "HSD graph-set DAT parse failed");
+    }
+
+    /* Validate every graph before mutating any scalar.  A single shared seen
+     * set is then used for conversion so graphs shared by multiple public
+     * roots are never byte-swapped twice. */
+    if (joint_count != 0) {
+        MvNativeHsd probe = { 0 };
+        int validation = mv_hsd_native_validate_raw_set(
+            &dat, joint_roots, joint_count, &probe);
+        if (validation != 0) {
+            OSReport("VITA_HSD_GRAPH_SET_VALIDATE_FAIL file=%s root=%s kind=joint roots=%u code=%d unsupported=%s unsupported_off=%08x value=%08x\n",
+                     filename != NULL ? filename : "?",
+                     label != NULL ? label : "graph-set",
+                     (unsigned) joint_count, validation,
+                     mv_hsd_native_unsupported_name(probe.unsupported_kind),
+                     probe.unsupported_offset, probe.unsupported_value);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "HSD graph-set joint unsupported");
+        }
+    }
+    for (size_t i = 0; i < anim_count; ++i) {
+        uint32_t root = anim_roots[i];
+        if (root >= dat.data_size || mv_native_anim_validate_at(&dat, root) != 0) {
+            OSReport("VITA_HSD_GRAPH_SET_VALIDATE_FAIL file=%s root=%s kind=anim index=%u off=%08x\n",
+                     filename != NULL ? filename : "?",
+                     label != NULL ? label : "graph-set", (unsigned) i, root);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "HSD graph-set AnimJoint unsupported");
+        }
+    }
+    for (size_t i = 0; i < matanim_count; ++i) {
+        if (matanim_roots[i] >= dat.data_size) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "HSD graph-set MatAnim root outside DAT");
+        }
+    }
+    for (size_t i = 0; i < shape_count; ++i) {
+        if (shape_roots[i] >= dat.data_size) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "HSD graph-set ShapeAnim root outside DAT");
+        }
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "HSD graph-set visited allocation failed");
+    }
+    for (size_t i = 0; i < joint_count; ++i) {
+        stage_hsd_raw_joint(&ctx, joint_roots[i]);
+    }
+    for (size_t i = 0; i < anim_count; ++i) {
+        stage_hsd_raw_anim_joint(&ctx, anim_roots[i]);
+    }
+    for (size_t i = 0; i < matanim_count; ++i) {
+        stage_hsd_raw_matanim_joint(&ctx, matanim_roots[i]);
+    }
+    for (size_t i = 0; i < shape_count; ++i) {
+        stage_hsd_raw_shape_joint(&ctx, shape_roots[i]);
+    }
+
+    OSReport("VITA_HSD_GRAPH_SET_NATIVE_PASS file=%s root=%s joint_roots=%u anim_roots=%u matanim_roots=%u shape_roots=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u animjoints=%u matjoints=%u shapejoints=%u\n",
+             filename != NULL ? filename : "?",
+             label != NULL ? label : "graph-set",
+             (unsigned) joint_count, (unsigned) anim_count,
+             (unsigned) matanim_count, (unsigned) shape_count,
+             ctx.converted[STAGE_HSD_RAW_JOINT],
+             ctx.converted[STAGE_HSD_RAW_DOBJ],
+             ctx.converted[STAGE_HSD_RAW_MOBJ],
+             ctx.converted[STAGE_HSD_RAW_POBJ],
+             ctx.converted[STAGE_HSD_RAW_TOBJ],
+             ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_MATANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
 void mv_fighter_archive_prepare_raw(void* bytes, size_t size, const char* filename)
 {
     MvDat dat;
@@ -968,6 +1250,124 @@ void mv_fighter_archive_prepare_raw(void* bytes, size_t size, const char* filena
              ctx.converted[STAGE_HSD_RAW_TEXANIM],
              ctx.converted[STAGE_HSD_RAW_AOBJ],
              ctx.converted[STAGE_HSD_RAW_FOBJ]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
+static void stage_hsd_raw_scene_anim_table(StageHsdRawContext* ctx,
+                                           uint32_t table_offset,
+                                           const char* what,
+                                           void (*convert)(StageHsdRawContext*, u32))
+{
+    for (u32 i = 0; i < 512; ++i) {
+        uint32_t target;
+        int result = stage_hsd_raw_pointer(ctx, table_offset + i * 4, &target,
+                                           what);
+        if (result == 0) {
+            return;
+        }
+        if (result < 0) {
+            stage_hsd_raw_fail(ctx, what, table_offset + i * 4);
+        }
+        convert(ctx, target);
+    }
+    stage_hsd_raw_fail(ctx, "scene animation table unterminated", table_offset);
+}
+
+/* GmPause is loaded through the ordinary SceneDesc/DynamicModelDesc path rather
+ * than one of the stage/fighter/effect roots handled above.  Its relocation
+ * pointers are valid after HSD_ArchiveParse, but its HSD scalar fields still
+ * originate as GameCube big-endian values.  Convert every model graph while
+ * the DAT is still raw so JObjLoad never has to guess whether a flag such as
+ * 0x08000020 is a native PTCL node or byte-swapped 0x20000008. */
+void mv_pause_scene_archive_prepare_raw(void* bytes, size_t size,
+                                        const char* filename)
+{
+    MvDat dat;
+    uint32_t scene_offset;
+    uint32_t models_offset;
+    unsigned model_count = 0;
+
+    if (filename == NULL || strcmp(filename, "GmPause.dat") != 0 ||
+        bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
+    {
+        return;
+    }
+    if (stage_hsd_find_public(&dat, "ScGamPause_scene_data", &scene_offset) <= 0 ||
+        mv_dat_pointer(&dat, scene_offset, &models_offset) != 1)
+    {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "GmPause SceneDesc missing models");
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "GmPause raw visited allocation failed");
+    }
+
+    for (u32 i = 0; i < 64; ++i) {
+        uint32_t model_offset;
+        int model_result = stage_hsd_raw_pointer(&ctx, models_offset + i * 4,
+                                                 &model_offset,
+                                                 "GmPause scene model");
+        if (model_result == 0) {
+            break;
+        }
+        if (model_result < 0) {
+            stage_hsd_raw_fail(&ctx, "GmPause scene model", models_offset + i * 4);
+        }
+
+        uint32_t target;
+        if (stage_hsd_raw_pointer(&ctx, model_offset, &target,
+                                  "GmPause model joint") != 1)
+        {
+            stage_hsd_raw_fail(&ctx, "GmPause model joint", model_offset);
+        }
+        stage_hsd_raw_joint(&ctx, target);
+
+        int result = stage_hsd_raw_pointer(&ctx, model_offset + 4, &target,
+                                           "GmPause anim table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "GmPause anim",
+                                           stage_hsd_raw_anim_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "GmPause anim table", model_offset + 4);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, model_offset + 8, &target,
+                                       "GmPause matanim table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "GmPause matanim",
+                                           stage_hsd_raw_matanim_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "GmPause matanim table", model_offset + 8);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, model_offset + 12, &target,
+                                       "GmPause shapeanim table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "GmPause shapeanim",
+                                           stage_hsd_raw_shape_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "GmPause shapeanim table", model_offset + 12);
+        }
+        ++model_count;
+    }
+
+    OSReport("VITA_PAUSE_HSD_RAW_NATIVE_PASS file=%s models=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u animjoints=%u matjoints=%u shapejoints=%u\n",
+             filename, model_count,
+             ctx.converted[STAGE_HSD_RAW_JOINT],
+             ctx.converted[STAGE_HSD_RAW_DOBJ],
+             ctx.converted[STAGE_HSD_RAW_MOBJ],
+             ctx.converted[STAGE_HSD_RAW_POBJ],
+             ctx.converted[STAGE_HSD_RAW_TOBJ],
+             ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_MATANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT]);
 
     free(ctx.seen);
     mv_dat_close(&dat);

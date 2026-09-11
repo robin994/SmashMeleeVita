@@ -568,7 +568,7 @@ struct FtSFX {
     int x10;
     int x14;
     int x18;
-    int x1C;
+    FtSFXArr* x1C;
     FtSFXArr* x20;
     int x24;
     int x28;

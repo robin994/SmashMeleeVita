@@ -6,6 +6,10 @@
 
 #include <string.h>
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_fighter_figatree_prepare_raw(void*, size_t, const char*);
+#endif
+
 #include "fighter.h"
 #include "forward.h"
 #include "ft_0877.h"
@@ -1789,6 +1793,10 @@ void ftData_80085CD8(Fighter* fp, Fighter* arg1, int msid)
                     } else {
                         memcpy(fp->x59C, (void*) temp_r4_2, temp_r3->x8);
                     }
+#ifdef MELEE_VITA_PLATFORM
+                    mv_fighter_figatree_prepare_raw(fp->x59C, temp_r3->x8,
+                                                    temp_r3->x0);
+#endif
                     temp_ret_2 =
                         HSD_ArchiveParse(&sp14, fp->x59C->x0, temp_r3->x8);
                     if (temp_ret_2 == -1) {
@@ -1842,6 +1850,10 @@ FigaTree* ftData_80085E50(Fighter* arg0, int msid)
                     } else {
                         memcpy(arg0->x5A0, (void*) temp_r4_2, temp_r3->x8);
                     }
+#ifdef MELEE_VITA_PLATFORM
+                    mv_fighter_figatree_prepare_raw(arg0->x5A0, temp_r3->x8,
+                                                    temp_r3->x0);
+#endif
                     temp_ret_2 =
                         HSD_ArchiveParse(&sp10, arg0->x5A0->x0, temp_r3->x8);
                     if (temp_ret_2 == -1) {

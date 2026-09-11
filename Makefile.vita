@@ -3,7 +3,7 @@ export VITASDK
 BUILD_DIR ?= build/vita
 FULL_GAMEPLAY ?= ON
 CMAKE_ARGS ?= -DMELEE_VITA_FULL_GAMEPLAY_SCENE=$(FULL_GAMEPLAY)
-.PHONY: all configure audit asset-check test-env arm-boot-check arm-check assets
+.PHONY: all configure audit asset-check test-env arm-boot-check arm-check pause-raw-check item-hsd-check player-mapping-check endian-preflight assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
@@ -23,5 +23,19 @@ arm-boot-check: test-env
 
 arm-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_arm.py --assets orig/GALE01/files/MnMaAll.usd
+
+pause-raw-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_pause_raw.py
+
+item-hsd-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_itco_hsd_raw.py
+
+player-mapping-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_player_mapping_arm.py
+
+endian-preflight: item-hsd-check player-mapping-check
+	node vita/tools/audit_gameplay_dat.js orig/GALE01/files
+	node vita/tools/audit_figatree_dat.js
+
 assets:
 	python3 vita/tools/prepare_assets.py --output "$(BUILD_DIR)/SmashMeleeVita-menu-assets.zip"

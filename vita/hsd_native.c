@@ -153,6 +153,7 @@ _Static_assert(sizeof(HSD_PEDesc) == 12, "HSD_PEDesc ARM32 layout");
 #endif
 
 #define MV_NATIVE_MAX_NODES 32768u
+#define MV_NATIVE_ENTRY_HASH_CAPACITY 65536u
 #define MV_NATIVE_MAX_OWNED_BYTES (32u * 1024u * 1024u)
 #define MV_NATIVE_MAX_ENVELOPE_MATRICES 32u
 #define MV_NATIVE_MAX_ENVELOPE_WEIGHTS 32u
@@ -215,6 +216,8 @@ typedef struct {
     MvNativeHsd *out;
     NativeEntry *entries;
     size_t entry_count, entry_capacity;
+    uint32_t *entry_hash;
+    size_t entry_hash_capacity;
     void **owned;
     size_t owned_count, owned_capacity, owned_bytes;
     NativeEnvelopePatch *envelope_patches;
@@ -246,11 +249,46 @@ static void *own_calloc(NativeBuild *b, size_t count, size_t size)
     return p;
 }
 
+static size_t entry_hash_slot(const NativeBuild *b, uint8_t kind,
+                              uint32_t offset)
+{
+    uint32_t hash = (offset >> 2) * 2654435761u;
+    hash ^= (uint32_t) kind * 2246822519u;
+    return hash & (b->entry_hash_capacity - 1u);
+}
+
 static NativeEntry *find_entry(NativeBuild *b, uint8_t kind, uint32_t offset)
 {
-    for (size_t i = 0; i < b->entry_count; ++i)
-        if (b->entries[i].kind == kind && b->entries[i].offset == offset) return &b->entries[i];
+    if (b->entry_hash == NULL || b->entry_hash_capacity == 0) {
+        return NULL;
+    }
+    size_t slot = entry_hash_slot(b, kind, offset);
+    for (size_t probe = 0; probe < b->entry_hash_capacity; ++probe) {
+        uint32_t encoded = b->entry_hash[slot];
+        if (encoded == 0) {
+            return NULL;
+        }
+        NativeEntry *entry = &b->entries[encoded - 1u];
+        if (entry->kind == kind && entry->offset == offset) {
+            return entry;
+        }
+        slot = (slot + 1u) & (b->entry_hash_capacity - 1u);
+    }
     return NULL;
+}
+
+static int index_entry(NativeBuild *b, size_t entry_index)
+{
+    NativeEntry *entry = &b->entries[entry_index];
+    size_t slot = entry_hash_slot(b, entry->kind, entry->offset);
+    for (size_t probe = 0; probe < b->entry_hash_capacity; ++probe) {
+        if (b->entry_hash[slot] == 0) {
+            b->entry_hash[slot] = (uint32_t) entry_index + 1u;
+            return 0;
+        }
+        slot = (slot + 1u) & (b->entry_hash_capacity - 1u);
+    }
+    return -1;
 }
 
 static NativeEntry *begin_entry(NativeBuild *b, uint8_t kind, uint32_t offset, size_t size,
@@ -272,11 +310,16 @@ static NativeEntry *begin_entry(NativeBuild *b, uint8_t kind, uint32_t offset, s
         b->status = -1;
         return NULL;
     }
-    entry = &b->entries[b->entry_count++];
+    size_t entry_index = b->entry_count++;
+    entry = &b->entries[entry_index];
     entry->offset = offset;
     entry->kind = kind;
     entry->state = 1;
     entry->ptr = ptr;
+    if (index_entry(b, entry_index) != 0) {
+        b->status = -1;
+        return NULL;
+    }
     return entry;
 }
 
@@ -888,11 +931,12 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     }
     result = pointer_offset(b->dat, offset + 0x3c, &target);
     if (result < 0) { b->status = -1; return NULL; }
-    if (result) {
+    if (result && !b->raw_validation) {
         mark_unsupported(b, MV_NATIVE_UNSUPPORTED_JOBJ_ROBJ,
                          offset, target);
         return NULL;
     }
+    /* Raw validation leaves RObjDesc to the typed pre-relocation walker. */
     out->robjdesc = NULL;
     entry->state = 2;
     ++b->out->joint_count;
@@ -903,6 +947,7 @@ static void release_build(NativeBuild *b, int keep_owned)
 {
     free(b->skin_patches);
     free(b->envelope_patches);
+    free(b->entry_hash);
     free(b->entries);
     if (!keep_owned) {
         for (size_t i = 0; i < b->owned_count; ++i) free(b->owned[i]);
@@ -918,18 +963,23 @@ static int mv_hsd_native_build_at_mode(const MvDat *dat, uint32_t root_offset,
     NativeBuild b = {.dat = dat, .out = out, .raw_validation = raw_validation};
     /* Entries must not move while recursive builders retain an entry pointer. */
     b.entries = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.entries));
+    b.entry_hash = calloc(MV_NATIVE_ENTRY_HASH_CAPACITY,
+                          sizeof(*b.entry_hash));
     b.owned = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.owned));
     b.envelope_patches = calloc(MV_NATIVE_MAX_NODES,
                                 sizeof(*b.envelope_patches));
     b.skin_patches = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.skin_patches));
-    if (!b.entries || !b.owned || !b.envelope_patches || !b.skin_patches) {
+    if (!b.entries || !b.entry_hash || !b.owned ||
+        !b.envelope_patches || !b.skin_patches) {
         free(b.skin_patches);
         free(b.envelope_patches);
+        free(b.entry_hash);
         free(b.entries);
         free(b.owned);
         return -1;
     }
     b.entry_capacity = MV_NATIVE_MAX_NODES;
+    b.entry_hash_capacity = MV_NATIVE_ENTRY_HASH_CAPACITY;
     b.owned_capacity = MV_NATIVE_MAX_NODES;
     b.envelope_patch_capacity = MV_NATIVE_MAX_NODES;
     b.skin_patch_capacity = MV_NATIVE_MAX_NODES;
@@ -973,6 +1023,79 @@ int mv_hsd_native_validate_raw_at(const MvDat *dat, uint32_t root_offset,
                                   MvNativeHsd *out)
 {
     return mv_hsd_native_build_at_mode(dat, root_offset, out, 1);
+}
+
+int mv_hsd_native_validate_raw_set(const MvDat *dat,
+                                   const uint32_t *root_offsets,
+                                   size_t root_count, MvNativeHsd *out)
+{
+    if (!dat || !out || !dat->pointer_bits ||
+        (root_count != 0 && root_offsets == NULL))
+    {
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    if (root_count == 0) {
+        return 0;
+    }
+
+    NativeBuild b = {.dat = dat, .out = out, .raw_validation = 1};
+    b.entries = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.entries));
+    b.entry_hash = calloc(MV_NATIVE_ENTRY_HASH_CAPACITY,
+                          sizeof(*b.entry_hash));
+    b.owned = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.owned));
+    b.envelope_patches = calloc(MV_NATIVE_MAX_NODES,
+                                sizeof(*b.envelope_patches));
+    b.skin_patches = calloc(MV_NATIVE_MAX_NODES, sizeof(*b.skin_patches));
+    if (!b.entries || !b.entry_hash || !b.owned ||
+        !b.envelope_patches || !b.skin_patches) {
+        free(b.skin_patches);
+        free(b.envelope_patches);
+        free(b.entry_hash);
+        free(b.entries);
+        free(b.owned);
+        return -1;
+    }
+    b.entry_capacity = MV_NATIVE_MAX_NODES;
+    b.entry_hash_capacity = MV_NATIVE_ENTRY_HASH_CAPACITY;
+    b.owned_capacity = MV_NATIVE_MAX_NODES;
+    b.envelope_patch_capacity = MV_NATIVE_MAX_NODES;
+    b.skin_patch_capacity = MV_NATIVE_MAX_NODES;
+
+    for (size_t i = 0; i < root_count && !b.status; ++i) {
+        if (root_offsets[i] >= dat->data_size ||
+            build_joint(&b, root_offsets[i]) == NULL)
+        {
+            if (!b.status) {
+                b.status = -1;
+            }
+            break;
+        }
+    }
+    if (!b.status && resolve_envelope_patches(&b)) b.status = -1;
+    if (!b.status && resolve_skin_patches(&b)) b.status = -1;
+
+    int result = b.status;
+    if (result) {
+        uint32_t unsupported_kind = out->unsupported_kind;
+        uint32_t unsupported_offset = out->unsupported_offset;
+        uint32_t unsupported_value = out->unsupported_value;
+        size_t unsupported_count = out->unsupported_count;
+        release_build(&b, 0);
+        memset(out, 0, sizeof(*out));
+        out->unsupported_kind = unsupported_kind;
+        out->unsupported_offset = unsupported_offset;
+        out->unsupported_value = unsupported_value;
+        out->unsupported_count = unsupported_count;
+        return result;
+    }
+
+    /* Validation never returns the temporary native graph.  Keep the aggregate
+     * counts/diagnostics but release all scratch allocations immediately. */
+    release_build(&b, 0);
+    out->root = NULL;
+    out->storage = NULL;
+    return 0;
 }
 
 int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out)

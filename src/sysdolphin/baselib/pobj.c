@@ -1460,6 +1460,8 @@ static void PObjInfoInit(void)
                      sizeof(HSD_PObjInfo), sizeof(HSD_PObj));
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
     HSD_POBJ_INFO(&hsdPObj)->load = PObjLoad;
+    HSD_POBJ_INFO(&hsdPObj)->disp = HSD_PObjDisp;
+    HSD_POBJ_INFO(&hsdPObj)->setup_mtx = PObjSetupMtx;
 #else
     HSD_CLASS_INFO(&hsdPObj)->release = PObjRelease;
     HSD_CLASS_INFO(&hsdPObj)->amnesia = PObjAmnesia;

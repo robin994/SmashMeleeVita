@@ -110,6 +110,281 @@ function assertNoRelocations(dat, start, bytes, label, skip = new Set()) {
   }
 }
 
+function auditAnimJointTree(dat, root, label) {
+  const seen = new Set();
+  function walk(off) {
+    if (off === null || seen.has(off)) return;
+    seen.add(off);
+    dat.requireSpan(off, 0x14, label);
+    const child = dat.pointer(off + 0x00);
+    const next = dat.pointer(off + 0x04);
+    const aobj = dat.pointer(off + 0x08);
+    const robj = dat.pointer(off + 0x0c);
+    if (aobj !== null) dat.requireSpan(aobj, 0x10, `${label} AObjDesc`);
+    if (robj !== null) dat.requireSpan(robj, 8, `${label} RObjAnimJoint`);
+    walk(child);
+    walk(next);
+  }
+  walk(root);
+  return seen.size;
+}
+
+function auditColorCommandGraphs(dat, roots, label) {
+  const lengths = new Map([
+    [0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [5, 2], [6, 1], [7, 2],
+    [8, 1], [9, 1], [10, 1], [11, 1], [12, 1], [13, 2], [14, 2],
+    [15, 2], [16, 1], [17, 1], [18, 2], [19, 2], [20, 1], [21, 5],
+    [22, 3], [23, 1],
+  ]);
+  const seen = new Set();
+  const histogram = new Map();
+  function walk(start) {
+    let off = start;
+    while (off !== null && !seen.has(off)) {
+      dat.requireSpan(off, 4, `${label} command`);
+      seen.add(off);
+      const raw = dat.word(off);
+      const opcode = raw >>> 26;
+      const words = lengths.get(opcode);
+      if (words === undefined) die(`${dat.file}: unsupported ${label} opcode ${opcode} at 0x${off.toString(16)}`);
+      dat.requireSpan(off, words * 4, `${label} command payload`);
+      histogram.set(opcode, (histogram.get(opcode) || 0) + 1);
+      if (opcode === 5 || opcode === 7) {
+        const target = dat.pointer(off + 4, false);
+        walk(target);
+        if (opcode === 7) return;
+      }
+      if (opcode === 23 && (raw & 0x1ffff) !== 0) {
+        die(`${dat.file}: nonzero padding in ${label} opcode 23 at 0x${off.toString(16)}`);
+      }
+      if (opcode === 0 || opcode === 6 || opcode === 10) return;
+      off += words * 4;
+    }
+  }
+  for (const root of roots) walk(root);
+  return { commands: seen.size, histogram };
+}
+
+function auditFighterPartsHsd(dat, root) {
+  if (root === null) return { present: 0, joints: 0, dobjs: 0, mobjs: 0, pobjs: 0, tobjs: 0, robjs: 0 };
+  const joints = new Set(), dobjs = new Set(), mobjs = new Set();
+  const pobjs = new Set(), tobjs = new Set(), vtx = new Set();
+  const images = new Set(), tluts = new Set(), envelopes = new Set();
+  const robjs = new Set(), bcexps = new Set(), rvalueLists = new Set();
+  const robjJointRefs = new Set();
+
+  function auditVtx(start) {
+    if (vtx.has(start)) return;
+    vtx.add(start);
+    for (let i = 0; i < 32; ++i) {
+      const off = start + i * 0x18;
+      dat.requireSpan(off, 0x18, 'fighter x5C vtxdesc');
+      const attr = dat.word(off);
+      if (attr === 0xff) {
+        if (i === 0) die(`${dat.file}: empty fighter x5C vtxdesc`);
+        return;
+      }
+      const attrType = dat.word(off + 4);
+      const vertex = dat.pointer(off + 0x14);
+      if (attrType !== 1 && vertex === null) {
+        die(`${dat.file}: indexed fighter x5C vtxdesc without vertex data`);
+      }
+    }
+    die(`${dat.file}: unterminated fighter x5C vtxdesc`);
+  }
+
+  function auditTObj(off) {
+    if (tobjs.has(off)) return;
+    tobjs.add(off);
+    dat.requireSpan(off, 0x5c, 'fighter x5C TObj');
+    const next = dat.pointer(off + 4);
+    if (next !== null) auditTObj(next);
+    const image = dat.pointer(off + 0x4c, false);
+    if (!images.has(image)) {
+      images.add(image);
+      dat.requireSpan(image, 0x18, 'fighter x5C image');
+      dat.pointer(image, false);
+    }
+    const tlut = dat.pointer(off + 0x50);
+    if (tlut !== null && !tluts.has(tlut)) {
+      tluts.add(tlut);
+      dat.requireSpan(tlut, 0x10, 'fighter x5C tlut');
+      dat.pointer(tlut, false);
+    }
+    const lod = dat.pointer(off + 0x54);
+    if (lod !== null) dat.requireSpan(lod, 0x10, 'fighter x5C lod');
+    const tev = dat.pointer(off + 0x58);
+    if (tev !== null) dat.requireSpan(tev, 0x20, 'fighter x5C tev');
+  }
+
+  function auditEnvelope(array) {
+    if (envelopes.has(array)) return;
+    envelopes.add(array);
+    for (let matrix = 0; matrix < 32; ++matrix) {
+      const desc = dat.pointer(array + matrix * 4);
+      if (desc === null) return;
+      let terminated = false;
+      for (let weight = 0; weight < 32; ++weight) {
+        const entry = desc + weight * 8;
+        dat.requireSpan(entry, 8, 'fighter x5C envelope weight');
+        const joint = dat.pointer(entry);
+        if (joint === null) {
+          terminated = true;
+          break;
+        }
+        auditJoint(joint);
+      }
+      if (!terminated) die(`${dat.file}: fighter x5C envelope weights unterminated`);
+    }
+    die(`${dat.file}: fighter x5C envelope matrices unterminated`);
+  }
+
+  function auditPObj(off) {
+    if (pobjs.has(off)) return;
+    pobjs.add(off);
+    dat.requireSpan(off, 0x18, 'fighter x5C PObj');
+    const next = dat.pointer(off + 4);
+    if (next !== null) auditPObj(next);
+    auditVtx(dat.pointer(off + 8, false));
+    const flags = dat.half(off + 0x0c);
+    const type = flags & 0x3000;
+    if (type === 0x1000 || type === 0x3000) {
+      die(`${dat.file}: unsupported fighter x5C PObj flags 0x${flags.toString(16)}`);
+    }
+    dat.pointer(off + 0x10, false);
+    const union = dat.pointer(off + 0x14);
+    if (type === 0x2000) {
+      if (union === null) die(`${dat.file}: fighter x5C envelope PObj without data`);
+      auditEnvelope(union);
+    } else if (union !== null) {
+      auditJoint(union);
+    }
+  }
+
+  function auditMObj(off) {
+    if (mobjs.has(off)) return;
+    mobjs.add(off);
+    dat.requireSpan(off, 0x18, 'fighter x5C MObj');
+    const mode = dat.word(off + 4);
+    if ((mode & 0x60000000) === 0x20000000) {
+      die(`${dat.file}: invalid fighter x5C MObj blending 0x${mode.toString(16)}`);
+    }
+    const tex = dat.pointer(off + 8);
+    if (tex !== null) auditTObj(tex);
+    const material = dat.pointer(off + 0x0c, false);
+    dat.requireSpan(material, 0x14, 'fighter x5C material');
+    if (dat.pointer(off + 0x10) !== null) {
+      die(`${dat.file}: fighter x5C MObj renderdesc requires adapter`);
+    }
+    const pe = dat.pointer(off + 0x14);
+    if (pe !== null) dat.requireSpan(pe, 0x0c, 'fighter x5C PEDesc');
+  }
+
+  function auditDObj(off) {
+    if (dobjs.has(off)) return;
+    dobjs.add(off);
+    dat.requireSpan(off, 0x10, 'fighter x5C DObj');
+    const next = dat.pointer(off + 4);
+    if (next !== null) auditDObj(next);
+    const mobj = dat.pointer(off + 8);
+    if (mobj !== null) auditMObj(mobj);
+    const pobj = dat.pointer(off + 0x0c);
+    if (pobj !== null) auditPObj(pobj);
+  }
+
+  function auditSpline(off) {
+    dat.requireSpan(off, 0x18, 'fighter x5C spline');
+    const type = dat.b[32 + off];
+    const numcv = dat.b.readInt16BE(32 + off + 2);
+    if (type > 3 || numcv < 2 || numcv > 4096) {
+      die(`${dat.file}: invalid fighter x5C spline header`);
+    }
+    dat.pointer(off + 8, false);
+    dat.pointer(off + 0x10, false);
+    dat.pointer(off + 0x14, false);
+  }
+
+  function auditRvalueList(off) {
+    if (rvalueLists.has(off)) return;
+    rvalueLists.add(off);
+    for (let i = 0; i < 256; ++i) {
+      const entry = off + i * 8;
+      dat.requireSpan(entry, 8, 'HSD RvalueList');
+      const joint = dat.pointer(entry + 4);
+      if (joint === null) return;
+      robjJointRefs.add(joint);
+    }
+    die(`${dat.file}: HSD RvalueList unterminated`);
+  }
+
+  function auditBcExp(off) {
+    if (bcexps.has(off)) return;
+    bcexps.add(off);
+    dat.requireSpan(off, 8, 'HSD ByteCodeExpDesc');
+    dat.pointer(off);
+    const rvalue = dat.pointer(off + 4);
+    if (rvalue !== null) auditRvalueList(rvalue);
+  }
+
+  function auditRObj(off) {
+    while (off !== null && !robjs.has(off)) {
+      robjs.add(off);
+      dat.requireSpan(off, 12, 'HSD RObjDesc');
+      const next = dat.pointer(off);
+      const flags = dat.word(off + 4);
+      const type = flags & 0x70000000;
+      const payload = dat.pointer(off + 8);
+      if (type !== 0x30000000 || payload === null) {
+        die(`${dat.file}: unsupported HSD RObj flags 0x${flags.toString(16)}`);
+      }
+      auditBcExp(payload);
+      off = next;
+    }
+  }
+
+  function auditJoint(off) {
+    if (joints.has(off)) return;
+    joints.add(off);
+    dat.requireSpan(off, 0x40, 'fighter x5C JObj');
+    const flags = dat.word(off + 4);
+    const unsupported = flags & (0x20 | 0x1000 | 0x20000 | 0x600000 | 0x800000);
+    const billboard = flags & 0xe00;
+    if (unsupported || (billboard && ![0x200, 0x400, 0x600, 0x800].includes(billboard))) {
+      die(`${dat.file}: unsupported fighter x5C JObj flags 0x${flags.toString(16)}`);
+    }
+    const child = dat.pointer(off + 8);
+    const next = dat.pointer(off + 0x0c);
+    if (child !== null) auditJoint(child);
+    if (next !== null) auditJoint(next);
+    const union = dat.pointer(off + 0x10);
+    if (flags & 0x4000) {
+      if (union === null) die(`${dat.file}: fighter x5C spline JObj without spline`);
+      auditSpline(union);
+    } else if (union !== null) {
+      auditDObj(union);
+    }
+    dat.pointer(off + 0x38);
+    const robj = dat.pointer(off + 0x3c);
+    if (robj !== null) auditRObj(robj);
+  }
+
+  auditJoint(root);
+  for (const joint of robjJointRefs) {
+    if (!joints.has(joint)) {
+      die(`${dat.file}: RObj references JObj outside structural tree 0x${joint.toString(16)}`);
+    }
+  }
+  return {
+    present: 1,
+    joints: joints.size,
+    dobjs: dobjs.size,
+    mobjs: mobjs.size,
+    pobjs: pobjs.size,
+    tobjs: tobjs.size,
+    robjs: robjs.size,
+  };
+}
+
 function auditFighter(file) {
   const dat = parseDat(file);
   const roots = dat.publics.filter((entry) => entry.name.startsWith('ftData'));
@@ -123,6 +398,72 @@ function auditFighter(file) {
   dat.requireSpan(fields[0], 0x184, 'ftCo_DatAttrs');
   assertNoRelocations(dat, fields[0], 0x180, 'ftCo_DatAttrs');
   if (dat.span(fields[1]) < extSizes[name]) die(`${file}: short ext_attr for ${name}`);
+
+  dat.requireSpan(fields[2], 0x15, 'ftData_x8');
+  dat.pointer(fields[2] + 4);
+  const costumeTobjCount = dat.word(fields[2] + 8);
+  const costumeTobjTable = dat.pointer(fields[2] + 0x0c, false);
+  if (costumeTobjCount > 5 || costumeTobjTable === null) {
+    die(`${file}: invalid costume TObj count/table ${costumeTobjCount}`);
+  }
+  const costumeTobjTableBytes = dat.span(costumeTobjTable);
+  if (!costumeTobjTableBytes || costumeTobjTableBytes > 0x18 || costumeTobjTableBytes % 4) {
+    die(`${file}: invalid costume TObj pointer-table span 0x${costumeTobjTableBytes.toString(16)}`);
+  }
+
+  const modelNum = dat.word(fields[2]);
+  const visTable = dat.pointer(fields[2] + 4, false);
+  if (modelNum > 11 || visTable === null) die(`${file}: invalid fighter visibility root`);
+  const visTableBytes = dat.span(visTable);
+  if (!visTableBytes || visTableBytes > 0x80 || visTableBytes % 0x10) {
+    die(`${file}: invalid visibility table span 0x${visTableBytes.toString(16)}`);
+  }
+  const visLookups = new Set();
+  const visTemps = new Set();
+  let visTempEntries = 0;
+  let visByteIndices = 0;
+  for (let cell = 0; cell < visTableBytes / 4; ++cell) {
+    const lookup = dat.pointer(visTable + cell * 4);
+    if (lookup === null || visLookups.has(lookup)) continue;
+    visLookups.add(lookup);
+    dat.requireSpan(lookup, modelNum * 8, 'FtPartsVisLookup[]');
+    for (let model = 0; model < modelNum; ++model) {
+      const rec = lookup + model * 8;
+      const count = dat.word(rec);
+      const temp = dat.pointer(rec + 4);
+      if (count > 32 || (count && temp === null)) {
+        die(`${file}: invalid FtPartsVisLookup count ${count}`);
+      }
+      if (temp === null || visTemps.has(temp)) continue;
+      visTemps.add(temp);
+      dat.requireSpan(temp, count * 8, 'TempS[]');
+      for (let j = 0; j < count; ++j) {
+        const entry = temp + j * 8;
+        const indexCount = dat.word(entry);
+        const indices = dat.pointer(entry + 4);
+        if (indexCount > 256 || (indexCount && indices === null)) {
+          die(`${file}: invalid TempS count ${indexCount}`);
+        }
+        if (indexCount) dat.requireSpan(indices, indexCount, 'TempS byte indices');
+        visTempEntries++;
+        visByteIndices += indexCount;
+      }
+    }
+  }
+
+  const costumeTobjArrays = new Set();
+  let costumeTobjIndices = 0;
+  for (let i = 0; i < costumeTobjTableBytes / 4; ++i) {
+    const indices = dat.pointer(costumeTobjTable + i * 4);
+    if (indices === null || costumeTobjArrays.has(indices)) continue;
+    costumeTobjArrays.add(indices);
+    dat.requireSpan(indices, costumeTobjCount * 2, 'costume TObj indices');
+    for (let j = 0; j < costumeTobjCount; ++j) {
+      const index = dat.half(indices + j * 2);
+      if (index > 0xff) die(`${file}: costume TObj index ${index} > 255`);
+      costumeTobjIndices++;
+    }
+  }
 
   const mainBytes = fields[5] - fields[3];
   if (mainBytes <= 0 || mainBytes % 0x18) die(`${file}: invalid main motion extent`);
@@ -198,7 +539,9 @@ function auditFighter(file) {
   }
 
   if (fields[19] !== null) {
-    for (const wordOff of [0, 0x20]) {
+    assertNoRelocations(dat, fields[19] + 0x04, 0x18, 'FtSFX scalar 04..18');
+    assertNoRelocations(dat, fields[19] + 0x24, 0x14, 'FtSFX scalar 24..34');
+    for (const wordOff of [0, 0x1c, 0x20]) {
       const arr = dat.pointer(fields[19] + wordOff);
       if (arr === null) continue;
       dat.requireSpan(arr, 8, 'FtSFXArr');
@@ -211,7 +554,19 @@ function auditFighter(file) {
       }
     }
   }
-  return { name, motionCount, demoCount: demoBytes / 0x18 };
+  const partsHsd = auditFighterPartsHsd(dat, fields[23]);
+  return {
+    name,
+    motionCount,
+    demoCount: demoBytes / 0x18,
+    costumeTobjArrays: costumeTobjArrays.size,
+    costumeTobjIndices,
+    visLookups: visLookups.size,
+    visTemps: visTemps.size,
+    visTempEntries,
+    visByteIndices,
+    partsHsd,
+  };
 }
 
 function publicTarget(dat, wanted) {
@@ -241,6 +596,114 @@ function auditPlCo(file) {
     dat.pointer(rec + 4);
     if (dat.word(rec + 8) > 255) die(`${file}: parts_num > 255`);
   }
+
+  if (dat.span(p[1]) !== 0x138) die(`${file}: unexpected item-throw attr span`);
+  assertNoRelocations(dat, p[1], 0x138, 'item-throw attrs');
+
+  const specialPartsBytes = dat.span(p[5]);
+  if (specialPartsBytes !== 34 * 4) die(`${file}: unexpected special-parts table span`);
+  let specialPartsRecords = 0;
+  let specialPartsEntries = 0;
+  for (let i = 0; i < 34; ++i) {
+    const rec = dat.pointer(p[5] + i * 4);
+    if (rec === null) continue;
+    specialPartsRecords++;
+    dat.requireSpan(rec, 8, 'special-parts record');
+    const entries = dat.pointer(rec);
+    const count = dat.word(rec + 4);
+    if (count > 32 || (count && entries === null)) {
+      die(`${file}: invalid special-parts count ${count} for fighter ${i}`);
+    }
+    if (count) dat.requireSpan(entries, count * 4, 'special-parts byte records');
+    specialPartsEntries += count;
+  }
+
+  if (dat.span(p[9]) !== 0x18) die(`${file}: unexpected model-shift table span`);
+  let modelShiftVectors = 0;
+  for (let i = 0; i < 3; ++i) {
+    const vectors = dat.pointer(p[9] + i * 8);
+    const count = dat.word(p[9] + i * 8 + 4);
+    if (count > 64 || (count && vectors === null)) {
+      die(`${file}: invalid model-shift vector count ${count}`);
+    }
+    if (count) {
+      dat.requireSpan(vectors, count * 8, 'model-shift Vec2[]');
+      assertNoRelocations(dat, vectors, count * 8, 'model-shift Vec2[]');
+      modelShiftVectors += count;
+    }
+  }
+
+  for (const [idx, bytes, label] of [
+    [13, 0x3c, 'bunnyhood modifiers'],
+    [14, 0x24, 'metal modifiers'],
+    [15, 0x08, 'gravity/weight modifiers'],
+  ]) {
+    if (dat.span(p[idx]) !== bytes) die(`${file}: unexpected ${label} span`);
+    assertNoRelocations(dat, p[idx], bytes, label);
+  }
+
+  if (dat.span(p[8]) !== 8) die(`${file}: unexpected common-model root table span`);
+  const commonModel0 = dat.pointer(p[8], false);
+  const commonAnim = dat.pointer(p[8] + 4, false);
+  const commonModels = [
+    auditFighterPartsHsd(dat, commonModel0),
+    auditFighterPartsHsd(dat, p[16]),
+    auditFighterPartsHsd(dat, p[20]),
+  ];
+  const commonAnimJoints = auditAnimJointTree(dat, commonAnim, 'common accessory AnimJoint');
+
+  const colorRoots = [];
+  for (const [idx, expectedSpan] of [[6, 0x3d8], [7, 0x30]]) {
+    if (dat.span(p[idx]) !== expectedSpan) die(`${file}: unexpected color-table ${idx} span`);
+    for (let off = 0; off < expectedSpan; off += 8) {
+      const script = dat.pointer(p[idx] + off);
+      if (script !== null) colorRoots.push(script);
+    }
+  }
+  const colorCommands = auditColorCommandGraphs(dat, colorRoots, 'ColorOverlay');
+
+  const aiRoot = p[22];
+  if (dat.span(aiRoot) !== 0x30) die(`${file}: unexpected CPU common root span`);
+  const ai = Array.from({ length: 10 }, (_, i) => dat.pointer(aiRoot + i * 4, false));
+  if (dat.span(ai[0]) !== 0xf8) die(`${file}: unexpected CPU cmdscript pointer-table span`);
+  for (let off = 0; off < 0xf8; off += 4) dat.pointer(ai[0] + off);
+  let cpuAttackLists = 0;
+  let cpuAttackEntries = 0;
+  const seenAttackLists = new Set();
+  for (let field = 1; field <= 7; ++field) {
+    if (dat.span(ai[field]) !== 0x80) die(`${file}: unexpected CPU attack pointer-table span ${field}`);
+    for (let i = 0; i < 32; ++i) {
+      const list = dat.pointer(ai[field] + i * 4);
+      if (list === null || seenAttackLists.has(list)) continue;
+      seenAttackLists.add(list);
+      cpuAttackLists++;
+      let count = 0;
+      for (; count < 64; ++count) {
+        const rec = list + count * 0x24;
+        dat.requireSpan(rec, 0x24, 'CPU attack record');
+        assertNoRelocations(dat, rec, 0x24, 'CPU attack record');
+        if (dat.word(rec) === 0) break;
+      }
+      if (count === 64) die(`${file}: unterminated CPU attack list at 0x${list.toString(16)}`);
+      cpuAttackEntries += count;
+    }
+  }
+  if (dat.span(ai[8]) !== 0x80 || dat.span(ai[9]) !== 0x18) {
+    die(`${file}: unexpected CPU float-table spans`);
+  }
+  assertNoRelocations(dat, ai[8], 0x80, 'CPU fighter reach');
+  assertNoRelocations(dat, ai[9], 0x18, 'CPU weapon reach');
+
+  return {
+    specialPartsRecords,
+    specialPartsEntries,
+    modelShiftVectors,
+    commonModels,
+    commonAnimJoints,
+    colorCommands,
+    cpuAttackLists,
+    cpuAttackEntries,
+  };
 }
 
 function auditItCo(file) {
@@ -259,6 +722,13 @@ function auditItCo(file) {
   const models = new Set();
   const dynamics = new Set();
   const dynamicsSources = new Set();
+  let modelHsdRoots = 0;
+  let modelHsdJoints = 0;
+  let modelHsdDobjs = 0;
+  let modelHsdMobjs = 0;
+  let modelHsdPobjs = 0;
+  let modelHsdTobjs = 0;
+  let modelHsdRobjs = 0;
   for (let table = 0; table < articleCounts.length; ++table) {
     const base = p[table + 1];
     if (base === null) die(`${file}: missing Article table ${table}`);
@@ -296,13 +766,23 @@ function auditItCo(file) {
   }
   for (const model of models) {
     dat.requireSpan(model, 0x10, 'ItemModelDesc');
-    dat.pointer(model);
+    const joint = dat.pointer(model);
     const boneCount = dat.word(model + 4);
     const attachId = dat.word(model + 8) | 0;
     if (boneCount > 100 || attachId < -1 || attachId > 100) {
       die(`${file}: invalid ItemModelDesc ${boneCount}/${attachId}`);
     }
     assertNoRelocations(dat, model + 4, 8, 'ItemModelDesc scalars');
+    if (joint !== null) {
+      const hsd = auditFighterPartsHsd(dat, joint);
+      modelHsdRoots++;
+      modelHsdJoints += hsd.joints;
+      modelHsdDobjs += hsd.dobjs;
+      modelHsdMobjs += hsd.mobjs;
+      modelHsdPobjs += hsd.pobjs;
+      modelHsdTobjs += hsd.tobjs;
+      modelHsdRobjs += hsd.robjs;
+    }
   }
   for (const dyn of dynamics) {
     dat.requireSpan(dyn, 0x10, 'ItemDynamics');
@@ -341,6 +821,13 @@ function auditItCo(file) {
     attrs: attrs.size,
     hurts: hurts.size,
     models: models.size,
+    modelHsdRoots,
+    modelHsdJoints,
+    modelHsdDobjs,
+    modelHsdMobjs,
+    modelHsdPobjs,
+    modelHsdTobjs,
+    modelHsdRobjs,
     dynamics: dynamics.size,
     dynamicsSources: dynamicsSources.size,
   };
@@ -354,15 +841,42 @@ function main() {
   if (fighterFiles.length !== 33) die(`expected 33 fighter DATs, got ${fighterFiles.length}`);
   let motions = 0;
   let demos = 0;
+  let costumeTobjArrays = 0;
+  let costumeTobjIndices = 0;
+  let visLookups = 0;
+  let visTemps = 0;
+  let visTempEntries = 0;
+  let visByteIndices = 0;
+  let partsHsdFiles = 0;
+  let partsHsdNull = 0;
+  let partsHsdJoints = 0;
+  let partsHsdDobjs = 0;
+  let partsHsdMobjs = 0;
+  let partsHsdPobjs = 0;
+  let partsHsdTobjs = 0;
   for (const name of fighterFiles) {
     const result = auditFighter(path.join(assets, name));
     motions += result.motionCount;
     demos += result.demoCount;
+    costumeTobjArrays += result.costumeTobjArrays;
+    costumeTobjIndices += result.costumeTobjIndices;
+    visLookups += result.visLookups;
+    visTemps += result.visTemps;
+    visTempEntries += result.visTempEntries;
+    visByteIndices += result.visByteIndices;
+    if (result.partsHsd.present) partsHsdFiles++;
+    else partsHsdNull++;
+    partsHsdJoints += result.partsHsd.joints;
+    partsHsdDobjs += result.partsHsd.dobjs;
+    partsHsdMobjs += result.partsHsd.mobjs;
+    partsHsdPobjs += result.partsHsd.pobjs;
+    partsHsdTobjs += result.partsHsd.tobjs;
   }
-  auditPlCo(path.join(assets, 'PlCo.dat'));
+  const plco = auditPlCo(path.join(assets, 'PlCo.dat'));
   const itcoDat = auditItCo(path.join(assets, 'ItCo.dat'));
   const itcoUsd = auditItCo(path.join(assets, 'ItCo.usd'));
-  console.log(`GAMEPLAY_DAT_AUDIT_PASS fighters=${fighterFiles.length} motions=${motions} demos=${demos} plco=1 itco=2 articles=${itcoDat.articles}/${itcoUsd.articles} hurts=${itcoDat.hurts}/${itcoUsd.hurts} dynamics=${itcoDat.dynamics}/${itcoUsd.dynamics}`);
+  const colorHist = [...plco.colorCommands.histogram.entries()].sort((a, b) => a[0] - b[0]).map(([op, n]) => `${op}:${n}`).join(',');
+  console.log(`GAMEPLAY_DAT_AUDIT_PASS fighters=${fighterFiles.length} motions=${motions} demos=${demos} costume_tobj_arrays=${costumeTobjArrays} costume_tobj_indices=${costumeTobjIndices} vis_lookups=${visLookups} vis_temp_arrays=${visTemps} vis_temp_entries=${visTempEntries} vis_byte_indices=${visByteIndices} fighter_parts_hsd=${partsHsdFiles}/${partsHsdNull} fighter_parts_nodes=${partsHsdJoints}/${partsHsdDobjs}/${partsHsdMobjs}/${partsHsdPobjs}/${partsHsdTobjs} plco=1 plco_special_parts=${plco.specialPartsRecords}/${plco.specialPartsEntries} plco_model_shift_vecs=${plco.modelShiftVectors} plco_common_hsd=${plco.commonModels.map((x) => x.joints).join('/')} plco_common_anim=${plco.commonAnimJoints} plco_color_cmds=${plco.colorCommands.commands}[${colorHist}] plco_cpu_attacks=${plco.cpuAttackLists}/${plco.cpuAttackEntries} itco=2 articles=${itcoDat.articles}/${itcoUsd.articles} item_model_hsd=${itcoDat.modelHsdRoots}/${itcoUsd.modelHsdRoots} item_model_nodes=${itcoDat.modelHsdJoints}/${itcoDat.modelHsdDobjs}/${itcoDat.modelHsdMobjs}/${itcoDat.modelHsdPobjs}/${itcoDat.modelHsdTobjs}/${itcoDat.modelHsdRobjs}:${itcoUsd.modelHsdJoints}/${itcoUsd.modelHsdDobjs}/${itcoUsd.modelHsdMobjs}/${itcoUsd.modelHsdPobjs}/${itcoUsd.modelHsdTobjs}/${itcoUsd.modelHsdRobjs} hurts=${itcoDat.hurts}/${itcoUsd.hurts} dynamics=${itcoDat.dynamics}/${itcoUsd.dynamics}`);
 }
 
 try {

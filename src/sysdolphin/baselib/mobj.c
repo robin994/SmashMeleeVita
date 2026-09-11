@@ -180,7 +180,7 @@ HSD_MObj* HSD_MObjLoadDesc(HSD_MObjDesc* mobjdesc)
         }
 
         HSD_MOBJ_METHOD(mobj)->load(mobj, mobjdesc);
-#ifndef MELEE_VITA_HSD_LOAD_ONLY
+#if !defined(MELEE_VITA_HSD_LOAD_ONLY) || defined(MELEE_VITA_PLATFORM)
         HSD_MObjCompileTev(mobj);
 #endif
 
@@ -585,6 +585,10 @@ static void MObjInfoInit(void)
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
     HSD_MOBJ_INFO(&hsdMObj)->load = MObjLoad;
+    HSD_MOBJ_INFO(&hsdMObj)->setup = HSD_MObjSetup;
+    HSD_MOBJ_INFO(&hsdMObj)->unset = HSD_MObjUnset;
+    HSD_MOBJ_INFO(&hsdMObj)->make_texp = MObjMakeTExp;
+    HSD_MOBJ_INFO(&hsdMObj)->setup_tev = MObjSetupTev;
 #else
     HSD_CLASS_INFO(&hsdMObj)->release = MObjRelease;
     HSD_CLASS_INFO(&hsdMObj)->amnesia = MObjAmnesia;

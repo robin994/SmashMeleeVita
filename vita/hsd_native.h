@@ -73,6 +73,12 @@ int mv_hsd_native_build_at(const MvDat *dat, uint32_t root_offset, MvNativeHsd *
    to runtime loaders; callers must free it after validation/statistics. */
 int mv_hsd_native_validate_raw_at(const MvDat *dat, uint32_t root_offset,
                                   MvNativeHsd *out);
+/* Validate several raw JObj roots with one shared descriptor cache.  This is
+   used by archive families such as ItCo where dozens of public objects share
+   subgraphs; each serialized descriptor is visited at most once. */
+int mv_hsd_native_validate_raw_set(const MvDat *dat,
+                                   const uint32_t *root_offsets,
+                                   size_t root_count, MvNativeHsd *out);
 int mv_hsd_native_build(const MvDat *dat, const char *root_name, MvNativeHsd *out);
 void mv_hsd_native_free(MvNativeHsd *graph);
 int mv_hsd_native_stats(const MvDat *dat, const char *root_name,

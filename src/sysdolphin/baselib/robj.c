@@ -587,7 +587,13 @@ void HSD_RObjResolveRefs(HSD_RObj* robj, HSD_RObjDesc* desc)
 void HSD_RObjResolveRefsAll(HSD_RObj* robj, HSD_RObjDesc* desc)
 {
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    if (robj || desc) HSD_Panic(__FILE__, __LINE__, "RObj refs require a native adapter");
+    for (; robj != NULL && desc != NULL; robj = robj->next, desc = desc->next)
+    {
+        if ((desc->flags & ROBJ_TYPE_MASK) != REFTYPE_BYTECODE) {
+            HSD_Panic(__FILE__, __LINE__, "load-only RObj ref type unsupported");
+        }
+        HSD_RObjResolveRefs(robj, desc);
+    }
 #else
     for (; robj != NULL && desc != NULL; robj = robj->next, desc = desc->next)
     {
@@ -602,7 +608,17 @@ static void expLoadDesc(HSD_Exp* exp, HSD_ExpDesc* desc);
 HSD_RObj* HSD_RObjLoadDesc(HSD_RObjDesc* robjdesc)
 {
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    if (robjdesc) HSD_Panic(__FILE__, __LINE__, "RObj requires a native adapter");
+    if (robjdesc != NULL) {
+        HSD_RObj* robj = HSD_RObjAlloc();
+        robj->next = HSD_RObjLoadDesc(robjdesc->next);
+        robj->flags = robjdesc->flags;
+        if ((robj->flags & ROBJ_TYPE_MASK) != REFTYPE_BYTECODE) {
+            HSD_Panic(__FILE__, __LINE__, "load-only RObj type unsupported");
+        }
+        bcexpLoadDesc(&robj->u.exp, robjdesc->u.bcexp);
+        robj->flags &= ~ROBJ_TYPE_MASK;
+        return robj;
+    }
     return NULL;
 #else
     HSD_RObj* robj;

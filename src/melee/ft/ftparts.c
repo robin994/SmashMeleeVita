@@ -790,6 +790,10 @@ HSD_TObj* ftParts_80075240(DObjList* arg0, int n)
             }
         }
     }
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_TOBJ_LOOKUP_FAIL requested=%d available=%d dobjs=%u\n",
+             n, tobj_i, arg0 != NULL ? (unsigned) arg0->count : 0);
+#endif
     HSD_ASSERTREPORT(948, 0, "can't find tobj!\n");
 }
 
