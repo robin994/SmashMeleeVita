@@ -166,6 +166,22 @@ static int capture_uv_mtx(const HSD_TObj *tobj, float out[2][3])
     return 0;
 }
 
+static const HSD_Tlut *capture_effective_tlut(const HSD_TObj *tobj)
+{
+    if (!tobj) return NULL;
+    if (tobj->tlut_no != (u8)-1 && tobj->tluttbl) {
+        unsigned index = tobj->tlut_no;
+        /* HSD_TObjAddAnim builds a NULL-terminated native TLUT table.  Match
+         * HSD_TObjSetup's animated TCLT choice but fail safely on malformed
+         * animation indices instead of reading past that table. */
+        for (unsigned i = 0; i <= index; ++i) {
+            if (!tobj->tluttbl[i]) return tobj->tlut;
+        }
+        return tobj->tluttbl[index];
+    }
+    return tobj->tlut;
+}
+
 static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
 {
     memset(out, 0, sizeof(*out));
@@ -266,10 +282,13 @@ static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
         out->height = first->imagedesc->height;
         out->format = (uint8_t)first->imagedesc->format;
     }
-    if (first->tlut) {
-        out->palette = first->tlut->lut;
-        out->palette_entries = first->tlut->n_entries;
-        out->palette_format = (uint8_t)first->tlut->fmt;
+    {
+        const HSD_Tlut *tlut = capture_effective_tlut(first);
+        if (tlut) {
+            out->palette = tlut->lut;
+            out->palette_entries = tlut->n_entries;
+            out->palette_format = (uint8_t)tlut->fmt;
+        }
     }
     if (!(out->unsupported & MV_GX_MATERIAL_UNSUPPORTED_TEXCOORD) &&
         !capture_uv_mtx(first, out->uv_mtx))
@@ -288,10 +307,13 @@ static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
             out->height1 = second->imagedesc->height;
             out->format1 = (uint8_t)second->imagedesc->format;
         }
-        if (second->tlut) {
-            out->palette1 = second->tlut->lut;
-            out->palette_entries1 = second->tlut->n_entries;
-            out->palette_format1 = (uint8_t)second->tlut->fmt;
+        {
+            const HSD_Tlut *tlut = capture_effective_tlut(second);
+            if (tlut) {
+                out->palette1 = tlut->lut;
+                out->palette_entries1 = tlut->n_entries;
+                out->palette_format1 = (uint8_t)tlut->fmt;
+            }
         }
         if (tobj_coord(second) == TEX_COORD_UV &&
             !capture_uv_mtx(second, out->uv_mtx1))

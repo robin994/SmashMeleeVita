@@ -181,6 +181,14 @@ void gm_Mode_LightningVs_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmlightning = {
-    GM_LIGHTNING_VS, "GM_LIGHTNING_VS", gm_Mode_LightningVs_OnInit, gm_Mode_LightningVs_OnLoad, gm_801BA704, gm_801BA730, gm_801BA758, gm_801BA780
+    .mode = GM_LIGHTNING_VS, .name = "GM_LIGHTNING_VS",
+    .init = gm_Mode_LightningVs_OnInit, .load = gm_Mode_LightningVs_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = gm_801BA704, .css_exit = gm_801BA730,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = gm_801BA758, .sss_exit = gm_801BA780,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = gm_801BA7B8, .vs_exit = gm_801BA7EC,
 };
 #endif

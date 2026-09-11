@@ -12,8 +12,9 @@
 
 #include <dolphin/pad.h>
 #include <melee/gm/gm_1A36.h>
-#include <melee/gm/gm_1A45.h>
+#include <melee/gm/gmscene.h>
 #include <melee/gm/gmtitle.h>
+#include <melee/gm/gmopening.h>
 #include <melee/gm/types.h>
 #include <melee/sc/types.h>
 #include <psp2/ctrl.h>
@@ -51,8 +52,10 @@ static int menu_scene_active;
 
 /* gmtitle.c normally gets these from gmopening.c. The direct-title Vita boot
  * starts at GM_TITLE, so the opening-movie counters are intentionally zero. */
+#ifndef MELEE_VITA_FULL_GAMEPLAY_SCENE
 HSD_SObjDesc *gm_804D67F0;
 u32 gm_804D67EC;
+#endif
 
 static void title_release_assets(void)
 {
@@ -176,18 +179,25 @@ int mv_title_vita_prepare(StaticModelDesc *moji, StaticModelDesc *background,
     return 0;
 }
 
-/* Reuse the GObj allocator/list storage between native scenes. Re-running
- * HSD_GObj initialization loses its pool free lists at every Back transition. */
+/* GObj control arrays and ObjAlloc slabs live in the HSD main heap.  Retail
+ * scene preloads recreate that heap; therefore reuse is valid only while the
+ * HSD heap generation is unchanged. */
 static int scene_objects_initialized;
+static u32 scene_objects_heap_generation = (u32)-1;
 static int scene_sis_owned;
 void mv_scene_vita_objects_init(void)
 {
-    if (scene_objects_initialized) return;
+    u32 generation = HSD_GetHeapGeneration();
+    if (scene_objects_initialized &&
+        scene_objects_heap_generation == generation)
+        return;
+
     HSD_GObjLibInitDataType init = {0};
-    HSD_GObj_803912E0(&init);
+    HSD_GObjSetInitDefaults(&init);
     init.gproc_pri_max = 0x18;
-    HSD_GObj_80391304(&init);
+    HSD_GObjInit(&init);
     scene_objects_initialized = 1;
+    scene_objects_heap_generation = generation;
 }
 
 void mv_scene_vita_sis_init(unsigned size)
@@ -205,7 +215,7 @@ void mv_scene_vita_objects_close(void)
     }
     if (!scene_objects_initialized) return;
     for (unsigned p = 0; p <= HSD_GObjLibInitData.p_link_max; ++p) {
-        HSD_GObj **heads = (HSD_GObj **)HSD_GObj_Entities;
+        HSD_GObj **heads = HSD_GObjPLinkHead;
         while (heads[p]) HSD_GObjFree(heads[p]);
     }
 }
@@ -213,12 +223,19 @@ void mv_scene_vita_objects_close(void)
 /* The original callbacks require scene-specific, ARM-native exit storage. */
 void *gm_GetCurrentSceneExitData(void)
 {
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    if (mv_gm_vita_retail_scene_active())
+        return mv_gm_vita_current_scene_exit_data();
+#endif
     return menu_scene_active ? (void *)&menu_exit_data : (void *)&title_exit_buttons;
 }
 
 void gm_801A4B60(void)
 {
     title_scene_done = 1;
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    mv_gm_vita_scene_complete();
+#endif
 }
 
 void mv_scene_vita_reset(void)
@@ -315,7 +332,7 @@ int mv_title_boot_run(FILE *log)
     }
 
     live_moji = live_background = NULL;
-    for (HSD_GObj *g=((HSD_GObj**)HSD_GObj_Entities)[15];g;g=g->next) {
+    for (HSD_GObj *g=HSD_GObjPLinkHead[15];g;g=g->next) {
         if (g->gx_link==3) live_background=g->hsd_obj;
         if (g->gx_link==9) live_moji=g->hsd_obj;
     }
@@ -342,7 +359,7 @@ int mv_title_boot_run(FILE *log)
         HSD_PadRenewStatus();
         gm_EvaluateAllControllerInputs();
         gm_Scene_Title_OnFrame();
-        HSD_GObj_80390CFC();
+        HSD_GObj_RunProcs();
 
         MvGxCaptureStats live_stats={0};
         if (mv_hsd_gx_capture_runtime(live_background,1,1,&live_stats)) { result=-33;break; }

@@ -60,7 +60,7 @@ void db_GetGameLaunchButtonState(void)
     }
 }
 
-#ifndef MELEE_VITA_BOOT_PROBE
+#if !defined(MELEE_VITA_BOOT_PROBE) || defined(MELEE_VITA_PLATFORM)
 void db_Setup(void)
 {
     int i;
@@ -126,7 +126,7 @@ void db_PrintEntityCounts(void)
 
     for (i = 0; i < 64; i++) {
         int count = 0;
-        HSD_GObj* var_r3 = ((HSD_GObj**) HSD_GObj_Entities)[i & 0xFF];
+        HSD_GObj* var_r3 = HSD_GObjPLinkHead[i & 0xFF];
         while (var_r3 != NULL) {
             var_r3 = var_r3->next;
             count += 1;
@@ -141,6 +141,11 @@ void db_PrintEntityCounts(void)
 
 void db_PrintThreadInfo(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Vita has no GameCube linker stack sentinels (_stack_addr/_stack_end). */
+    OSReport("------ Thread info (Vita runtime) ------\n");
+    return;
+#else
     u8* peak = _stack_end + 4;
     while (*peak == 0xAA) {
         peak += 1;
@@ -149,6 +154,7 @@ void db_PrintThreadInfo(void)
     OSReport("base:%x, end:%x, size:%d peak:%d \n", _stack_addr, _stack_end,
              _stack_addr - _stack_end, _stack_addr - peak);
     OSReport("\n");
+#endif
 }
 
 static inline int db_get_pad_button(int i)

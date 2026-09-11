@@ -14,6 +14,7 @@
 #define MV_GX_CULL_ALL 3u
 #include "gx_replay_vita.h"
 #include "gx_texture.h"
+#include <dolphin/gx/GXEnum.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,17 +70,37 @@ static uint8_t tev_scale_u8(uint8_t value, float factor)
     return (uint8_t)(value * factor + 0.5f);
 }
 
+static uint8_t tev_apply_scale_u8(unsigned value, uint8_t scale)
+{
+    switch (scale) {
+    case GX_CS_SCALE_2: value *= 2u; break;
+    case GX_CS_SCALE_4: value *= 4u; break;
+    case GX_CS_DIVIDE_2: value = (value + 1u) / 2u; break;
+    default: break;
+    }
+    return (uint8_t)(value > 255u ? 255u : value);
+}
+
 static void bake_custom_tev_pixel(const MvGxMaterialState *material, uint8_t rgba[4])
 {
-    if (!material->tev_valid || material->tev_active == 0 ||
+    if (!material->tev_valid ||
         !mv_gx_material_custom_tev_cpu_bakeable(material)) return;
 
-    /* The narrow matcher in mv_gx_material_custom_tev_cpu_bakeable guarantees
-     * the exact MenMainBack stage: ADD, no bias, scale 1, clamp, with
-     * A=TEV0.rgb, B=KONST.rgb, C=texture.rgb and D=zero. */
-    uint8_t tex_rgb[3] = {rgba[0], rgba[1], rgba[2]};
-    for (unsigned c = 0; c < 3; ++c)
-        rgba[c] = tev_lerp_u8(material->tev0[c], material->tev_konst[c], tex_rgb[c]);
+    const uint32_t active = material->tev_active;
+    const uint8_t *op = material->tev_op;
+    uint8_t tex[4] = {rgba[0], rgba[1], rgba[2], rgba[3]};
+    if (active & 0x40000000u) {
+        for (unsigned c = 0; c < 3; ++c) {
+            unsigned v = tev_lerp_u8(material->tev0[c],
+                                     material->tev_konst[c], tex[c]);
+            rgba[c] = tev_apply_scale_u8(v, op[4]);
+        }
+    }
+    if (active & 0x80000000u) {
+        unsigned v = tev_lerp_u8(material->tev0[3],
+                                 material->tev_konst[3], tex[3]);
+        rgba[3] = tev_apply_scale_u8(v, op[5]);
+    }
 }
 
 static void bake_material_pixel(const MvGxMaterialState *material, uint8_t rgba[4])
@@ -271,6 +292,23 @@ static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
     r->texture_bytes+=(unsigned)bytes;
     return id;
 }
+static int alpha_compare_supported(const MvGxMaterialState *m)
+{
+    if (m->pe_alpha_comp0 == GX_ALWAYS && m->pe_alpha_comp1 == GX_ALWAYS) return 1;
+    return m->pe_alpha_comp0 == GX_GREATER && m->pe_alpha_ref0 == 0 &&
+           m->pe_alpha_op == GX_AOP_OR && m->pe_alpha_comp1 == GX_NEVER;
+}
+
+static void apply_alpha_compare(const MvGxMaterialState *m)
+{
+    if (m->pe_alpha_comp0 == GX_ALWAYS && m->pe_alpha_comp1 == GX_ALWAYS) {
+        glDisable(GL_ALPHA_TEST);
+        return;
+    }
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, (float)m->pe_alpha_ref0 / 255.0f);
+}
+
 static int supported(const MvGxCaptureCommand *c,int relaxed)
 {
     unsigned bad=c->material.unsupported;
@@ -280,7 +318,7 @@ static int supported(const MvGxCaptureCommand *c,int relaxed)
     /* Retain existing title bridge's explicit approximation until general TEV. */
     if(relaxed) bad &= ~(MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV|MV_GX_MATERIAL_UNSUPPORTED_MULTITEX);
     return !bad && (c->attr_mask&(1u<<MV_GX_VA_POS)) && c->material.pe_blend_type<=1 &&
-        !c->material.pe_dst_alpha_enable && c->material.pe_alpha_comp0==7 && c->material.pe_alpha_comp1==7;
+        !c->material.pe_dst_alpha_enable && alpha_compare_supported(&c->material);
 }
 int mv_gx_replay_init_relaxed_from(MvGxReplay *r,const MvCamera *camera,FILE *log,uint32_t relaxed)
 {
@@ -309,10 +347,29 @@ int mv_gx_replay_init_relaxed_from(MvGxReplay *r,const MvCamera *camera,FILE *lo
 }
 int mv_gx_replay_init(MvGxReplay *r,const MvCamera *c,FILE *f)
 {return mv_gx_replay_init_relaxed_from(r,c,f,UINT32_MAX);}
+int mv_gx_replay_init_streaming(MvGxReplay *r, FILE *log)
+{
+    if (!r) return -1;
+    memset(r, 0, sizeof(*r));
+    r->log = log;
+    r->relaxed_from_command = 0;
+    r->texture_capacity = MV_GX_REPLAY_TEXTURE_LIMIT;
+    r->textures = calloc(r->texture_capacity, sizeof(*r->textures));
+    if (!r->textures) return -1;
+    r->ready = 1;
+    if (log) {
+        fprintf(log, "VITAGL_REPLAY_STREAMING_READY result=1 capacity=%u\n",
+                r->texture_capacity);
+        fflush(log);
+    }
+    return 0;
+}
+
 static void norm(float *a)
 {float n=sqrtf(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]);if(n)for(int i=0;i<3;i++)a[i]/=n;}
 static void cross(const float *a,const float *b,float *v)
 {v[0]=a[1]*b[2]-a[2]*b[1];v[1]=a[2]*b[0]-a[0]*b[2];v[2]=a[0]*b[1]-a[1]*b[0];}
+static void captured_viewport(const MvGxCaptureCommand *c);
 void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
 {
     if(!r || !r->ready || !cam || cam->projection_type!=1) return;
@@ -334,11 +391,20 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
     for(unsigned i=0;i<count;i++) {
         const MvGxCaptureCommand *c=cmd+i;const MvGxMaterialState *m=&c->material;
         if(!supported(c,i>=r->relaxed_from_command) || c->first_vertex>nverts || c->vertex_count>nverts-c->first_vertex || m->pe_z_func>7 || m->pe_src_factor>7 || m->pe_dst_factor>7 || c->cull_mode==3) continue;
+        if (c->projection_valid) {
+            captured_viewport(c);
+            float projection[16];
+            for (int row = 0; row < 4; ++row)
+                for (int col = 0; col < 4; ++col)
+                    projection[col * 4 + row] = c->projection[row][col];
+            glMatrixMode(GL_PROJECTION); glLoadMatrixf(projection);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        }
         if(m->pe_blend_type) {glEnable(GL_BLEND);glBlendFunc(m->pe_src_factor==2?GL_DST_COLOR:m->pe_src_factor==3?GL_ONE_MINUS_DST_COLOR:factors[m->pe_src_factor],factors[m->pe_dst_factor]);} else glDisable(GL_BLEND);
         if(m->pe_z_enable) glEnable(GL_DEPTH_TEST);else glDisable(GL_DEPTH_TEST);
         glDepthFunc(compares[m->pe_z_func]);glDepthMask(m->pe_z_update);
         glColorMask(m->pe_color_update,m->pe_color_update,m->pe_color_update,m->pe_alpha_update);
-        glDisable(GL_ALPHA_TEST);glFrontFace(GL_CW);
+        apply_alpha_compare(m);glFrontFace(GL_CW);
         if(c->cull_mode) {glEnable(GL_CULL_FACE);glCullFace(c->cull_mode==1?GL_FRONT:GL_BACK);} else glDisable(GL_CULL_FACE);
         int two=m->texture_count==2 && mv_gx_material_multitex_vitagl_supported(m);
         glActiveTexture(GL_TEXTURE0);
@@ -385,5 +451,163 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
     if(!r->submit_logged && r->log) {fprintf(r->log,"VITAGL_REPLAY_SUBMIT commands=%u total=%u gl_error=%x perspective=GPU\n",submitted,count,glGetError());fflush(r->log);r->submit_logged=1;}
     glActiveTexture(GL_TEXTURE1);glDisable(GL_TEXTURE_2D);glActiveTexture(GL_TEXTURE0);
 }
+
+static void captured_viewport(const MvGxCaptureCommand *c)
+{
+    const float scale = 544.0f / 480.0f;
+    const float base_x = (960.0f - 640.0f * scale) * 0.5f;
+    float x = 0.0f, y = 0.0f, w = 640.0f, h = 480.0f;
+    float near_z = 0.0f, far_z = 1.0f;
+    if (c->viewport_valid) {
+        x = c->viewport[0]; y = c->viewport[1];
+        w = c->viewport[2]; h = c->viewport[3];
+        near_z = c->viewport[4]; far_z = c->viewport[5];
+    }
+    int vx = (int)(base_x + x * scale + 0.5f);
+    int vy = (int)((480.0f - (y + h)) * scale + 0.5f);
+    int vw = (int)(w * scale + 0.5f);
+    int vh = (int)(h * scale + 0.5f);
+    if (vx < 0) { vw += vx; vx = 0; }
+    if (vy < 0) { vh += vy; vy = 0; }
+    if (vx + vw > 960) vw = 960 - vx;
+    if (vy + vh > 544) vh = 544 - vy;
+    if (vw < 1) vw = 1;
+    if (vh < 1) vh = 1;
+    glViewport(vx, vy, vw, vh);
+    glDepthRangef(near_z, far_z);
+}
+
+void mv_gx_replay_draw_captured(MvGxReplay *r)
+{
+    if (!r || !r->ready) return;
+    uint32_t count, nverts;
+    const MvGxCaptureCommand *cmd = mv_gx_capture_commands(&count);
+    const MvGxCaptureVertex *verts = mv_gx_capture_vertices(&nverts);
+    const GLenum compares[] = {GL_NEVER,GL_LESS,GL_EQUAL,GL_LEQUAL,GL_GREATER,GL_NOTEQUAL,GL_GEQUAL,GL_ALWAYS};
+    const GLenum factors[] = {GL_ZERO,GL_ONE,GL_SRC_COLOR,GL_ONE_MINUS_SRC_COLOR,GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA};
+    unsigned submitted = 0;
+
+    for (unsigned i = 0; i < count; ++i) {
+        const MvGxCaptureCommand *c = cmd + i;
+        const MvGxMaterialState *m = &c->material;
+        if (!c->projection_valid || !supported(c, 1) ||
+            c->first_vertex > nverts || c->vertex_count > nverts - c->first_vertex ||
+            m->pe_z_func > 7 || m->pe_src_factor > 7 || m->pe_dst_factor > 7 ||
+            c->cull_mode == 3)
+            continue;
+
+        captured_viewport(c);
+        float projection[16];
+        for (int row = 0; row < 4; ++row)
+            for (int col = 0; col < 4; ++col)
+                projection[col * 4 + row] = c->projection[row][col];
+        glMatrixMode(GL_PROJECTION);
+        glLoadMatrixf(projection);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+
+        if (m->pe_blend_type) {
+            glEnable(GL_BLEND);
+            glBlendFunc(m->pe_src_factor == 2 ? GL_DST_COLOR :
+                        m->pe_src_factor == 3 ? GL_ONE_MINUS_DST_COLOR : factors[m->pe_src_factor],
+                        factors[m->pe_dst_factor]);
+        } else {
+            glDisable(GL_BLEND);
+        }
+        if (m->pe_z_enable) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        glDepthFunc(compares[m->pe_z_func]);
+        glDepthMask(m->pe_z_update);
+        glColorMask(m->pe_color_update, m->pe_color_update,
+                    m->pe_color_update, m->pe_alpha_update);
+        apply_alpha_compare(m);
+        glFrontFace(GL_CW);
+        if (c->cull_mode) {
+            glEnable(GL_CULL_FACE);
+            glCullFace(c->cull_mode == 1 ? GL_FRONT : GL_BACK);
+        } else {
+            glDisable(GL_CULL_FACE);
+        }
+
+        int two = m->texture_count == 2 && mv_gx_material_multitex_vitagl_supported(m);
+        glActiveTexture(GL_TEXTURE0);
+        if (m->texture_count) {
+            GLuint id = prepare(r, m);
+            if (!id) continue;
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, id);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        } else {
+            glDisable(GL_TEXTURE_2D);
+        }
+        glActiveTexture(GL_TEXTURE1);
+        if (two) {
+            MvGxMaterialState second;
+            second_layer_material(m, &second);
+            GLuint id = prepare(r, &second);
+            if (!id) continue;
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, id);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PREVIOUS);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
+            if (((m->tobj1_flags >> 20) & 0xfu) == 3u) {
+                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_TEXTURE);
+            } else {
+                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
+            }
+        } else {
+            glDisable(GL_TEXTURE_2D);
+        }
+        glActiveTexture(GL_TEXTURE0);
+
+        glPushMatrix();
+        float model[16] = {0};
+        model[15] = 1.0f;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 4; ++col)
+                model[col * 4 + row] = c->pos_mtx[row][col];
+        glMultMatrixf(model);
+        glBegin(GL_TRIANGLES);
+        for (unsigned t = 0; t < c->triangle_count; ++t) {
+            uint32_t ids[3];
+            if (triangle_indices(c, t, ids)) continue;
+            for (int k = 0; k < 3; ++k) {
+                const MvGxCaptureVertex *v = verts + c->first_vertex + ids[k];
+                unsigned color = m->texture_count ? material_draw_color(m) : m->material_rgba;
+                if (v->present & (1u << MV_GX_VA_CLR0)) color = v->color0;
+                glColor4ub(color >> 24, color >> 16, color >> 8, color);
+                for (int unit = 0; unit < (two ? 2 : 1); ++unit) {
+                    const float (*mat)[3] = unit ? m->uv_mtx1 : m->uv_mtx;
+                    int valid = unit ? m->uv_mtx1_valid : m->uv_mtx_valid;
+                    float u = v->tex0[0], vv = v->tex0[1];
+                    glMultiTexCoord2f(GL_TEXTURE0 + unit,
+                        valid ? mat[0][0] * u + mat[0][1] * vv + mat[0][2] : u,
+                        valid ? mat[1][0] * u + mat[1][1] * vv + mat[1][2] : vv);
+                }
+                glVertex3fv(v->position);
+            }
+        }
+        glEnd();
+        glPopMatrix();
+        ++submitted;
+    }
+
+    r->submitted_commands = submitted;
+    if (!r->submit_logged && r->log) {
+        fprintf(r->log,
+                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u gl_error=%x camera=per-command\n",
+                submitted, count, glGetError());
+        fflush(r->log);
+        r->submit_logged = 1;
+    }
+    glDepthRangef(0.0f, 1.0f);
+    glActiveTexture(GL_TEXTURE1); glDisable(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void mv_gx_replay_close(MvGxReplay *r)
 {if(!r)return;glFinish();for(unsigned i=0;i<r->texture_count;i++)glDeleteTextures(1,&r->textures[i].id);free(r->textures);memset(r,0,sizeof(*r));}

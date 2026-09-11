@@ -47,6 +47,12 @@ static MvCssDataTable css_table;
 static FILE *css_log;
 
 void mv_css_vita_set_log(FILE *log) { css_log = log; }
+void mv_css_vita_trace(const char *marker)
+{
+    if (!css_log || !marker) return;
+    fprintf(css_log, "%s\n", marker);
+    fflush(css_log);
+}
 
 static int public_offset(const char *wanted, uint32_t *out)
 {

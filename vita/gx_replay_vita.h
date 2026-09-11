@@ -25,7 +25,9 @@ typedef struct {
 } MvGxReplay;
 
 int mv_gx_replay_init(MvGxReplay *replay, const MvCamera *camera, FILE *log);
+int mv_gx_replay_init_streaming(MvGxReplay *replay, FILE *log);
 int mv_gx_replay_init_relaxed_from(MvGxReplay *replay, const MvCamera *camera, FILE *log,
                                    uint32_t relaxed_from_command);
 void mv_gx_replay_draw(MvGxReplay *replay, const MvCamera *camera);
+void mv_gx_replay_draw_captured(MvGxReplay *replay);
 void mv_gx_replay_close(MvGxReplay *replay);

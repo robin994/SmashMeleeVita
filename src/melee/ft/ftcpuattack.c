@@ -1272,7 +1272,7 @@ int ftCo_800B732C(Fighter* fp)
     if (!temp_r29->xF9_b3) {
         return 0;
     }
-    if (temp_r29->xC == 0x10) {
+    if (temp_r29->kind == 0x10) {
         return ftCo_800B7638(fp);
     }
     if (ftCo_800A2BD4(fp) == 0) {
@@ -1434,7 +1434,7 @@ void ftCo_800B77E8(Fighter* fp)
     f32 x;
     f32 y;
 
-    if (cpu->xC == 7 || ftCo_800A1C44(fp)) {
+    if (cpu->kind == 7 || ftCo_800A1C44(fp)) {
         struct CpuFighter* tmp = &fp->cpu;
         if (fp->cpu.xEC < 8U) {
             tmp->xCC_array[tmp->xEC] = 0x34;
@@ -2100,7 +2100,7 @@ void ftCo_800B9704(Fighter* fp)
     struct CpuFighter* cpu = &fp->cpu;
     float rand = HSD_Randf();
     cpu->x34 = (10 - cpu->level) * (rand * 15.0F + 15.0F) + 10.0F;
-    if (cpu->xC == 7) {
+    if (cpu->kind == 7) {
         cpu->x34 /= 2;
     }
 }
@@ -2917,7 +2917,7 @@ int ftCo_800BB9B4(Fighter* fp)
     sp24.y = fp->cur_pos.y + temp_f31;
     sp24.z = fp->cur_pos.z;
 
-    for (var_r29 = HSD_GObj_Entities->fighters; var_r29 != NULL;
+    for (var_r29 = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; var_r29 != NULL;
          var_r29 = var_r29->next)
     {
         if (fp->gobj == var_r29) {
@@ -2942,7 +2942,7 @@ int ftCo_800BB9B4(Fighter* fp)
         }
     }
 
-    var_r29_2 = HSD_GObj_Entities->items;
+    var_r29_2 = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_ITEM];
     while (var_r29_2 != NULL) {
         temp_r28 = GET_ITEM(var_r29_2);
         if (it_8026C1B4(var_r29_2)) {

@@ -1,9 +1,9 @@
 #include "gm_1A3F.h"
 
 #include "gm_1A36.h"
-#include "gm_1A45.h"
 #include "gmmain_lib.h"
 #include "gmscdata.h"
+#include "gmscene.h"
 #include "types.h"
 #include <dolphin/vi.h>
 #include <melee/db/db.h>
@@ -146,12 +146,29 @@ void gm_801A4014(GameMode* mode)
                       (dead = 0));
     gm_801A4BD4();
     gm_801A4B88(info);
-    if (scene->on_enter != NULL) {
-        scene->on_enter(info->enter_data);
-    }
-    gm_801A4D34(scene->on_frame, info);
-    if (!gmMainLib_8046B0F0.resetting && scene->on_exit != NULL) {
-        scene->on_exit(info->exit_data);
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    mv_gm_vita_set_retail_scene_active(1);
+#endif
+#if defined(MELEE_VITA_FULL_GAMEPLAY_SCENE) && defined(MELEE_VITA_SKIP_CLASSIC_INTRO)
+    /* The state callback has already prepared the retail Classic matchup,
+     * GameCache and preload data. Skip only the GS_INTRO_EASY presentation
+     * while its demo-fighter/archive path is still being ported, so hardware
+     * testing can move on to the real GS_VS runtime. */
+    bool vita_skip_scene =
+        sm->routing.curr_mode == GM_CLASSIC && info->scene_kind == GS_INTRO_EASY;
+    if (vita_skip_scene) {
+        OSReport("VITA_CLASSIC_INTRO_BYPASS state=%u scene=GS_INTRO_EASY next=GS_VS\n",
+                 (unsigned) state->id);
+    } else
+#endif
+    {
+        if (scene->on_enter != NULL) {
+            scene->on_enter(info->enter_data);
+        }
+        gm_801A4D34(scene->on_frame, info);
+        if (!gmMainLib_8046B0F0.resetting && scene->on_exit != NULL) {
+            scene->on_exit(info->exit_data);
+        }
     }
     if (!gmMainLib_8046B0F0.resetting) {
         if (state->on_exit != NULL) {
@@ -167,6 +184,9 @@ void gm_801A4014(GameMode* mode)
             sm->routing.curr_state_id = nextState(mode->states);
         }
     }
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    mv_gm_vita_set_retail_scene_active(0);
+#endif
     lb_8001CDB4();
     lb_8001B760(11);
     lbMthp_8001F800();
@@ -335,6 +355,30 @@ u8 runGameMode(u8 mode_kind)
     }
     return state_machine.routing.pending_mode;
 }
+
+#ifdef MELEE_VITA_PLATFORM
+int mv_gm_vita_continue_mode(int mode_kind)
+{
+    GameMode* mode = findMode((u8) mode_kind);
+    struct stateMachine* sm = &state_machine;
+    if (mode == NULL || sm->routing.curr_mode != (u8) mode_kind)
+        return GM_COUNT;
+    if (!sm->pending_mode_change) {
+        sm->routing.prev_state_id = sm->routing.curr_state_id;
+        if (sm->routing.next_state_id != 0) {
+            sm->routing.curr_state_id = sm->routing.next_state_id - 1;
+            sm->routing.next_state_id = 0;
+        } else {
+            sm->routing.curr_state_id = nextState(mode->states);
+        }
+    }
+    while (!sm->pending_mode_change)
+        gm_801A4014(mode);
+    if (!gmMainLib_8046B0F0.resetting && mode->on_unload != NULL)
+        mode->on_unload();
+    return sm->routing.pending_mode;
+}
+#endif
 
 /// UnclePunch: Scene_Main
 void gm_801A4510(void)

@@ -173,7 +173,7 @@ void ftColl_80076528(Fighter_GObj* gobj)
 /// Clear victim pointer from attacker upon freeing memory?
 void ftColl_800765AC(Fighter_GObj* victim)
 {
-    Fighter_GObj* cur = HSD_GObj_Entities->fighters;
+    Fighter_GObj* cur = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER];
     while (cur != NULL) {
         Fighter* fp = GET_FIGHTER(cur);
         if (victim == fp->x2094) {
@@ -489,13 +489,13 @@ void ftColl_80076CBC(Fighter* fp0, HitCapsule* hit0, Fighter* fp1)
             PAD_STACK(4);
             fp1->x19A0_shieldDamageTaken += tmp_dmg < 0 ? 0 : tmp_dmg;
             fp1->x19BC_shieldDamageTaken3 = fp0->player_id;
-            fp1->x221F_b6 = fp0->x221F_b4;
+            fp1->x221F_b6 = fp0->is_sub_fighter;
             efSync_Spawn(1052, NULL, &hit0->hurt_coll_pos);
         } else {
             ftCo_80094138(fp1);
             ftCo_800BFFD0(fp1, 118, 0);
             ft_PlaySFX(fp1, 104, 0x7F, 0x40);
-            pl_8003E150(fp1->player_id, fp1->x221F_b4);
+            pl_8003E150(fp1->player_id, fp1->is_sub_fighter);
             efSync_Spawn(27, NULL, &hit0->hurt_coll_pos);
         }
     }
@@ -948,7 +948,7 @@ void ftColl_80077688(Item* item, HitCapsule* hurt, Fighter* fp, Vec3* pos,
     if (ftLib_80086960(item->owner)) {
         Fighter* owner_fp = item->owner->user_data;
         fp->x19BC_shieldDamageTaken3 = owner_fp->player_id;
-        fp->x221F_b6 = owner_fp->x221F_b4;
+        fp->x221F_b6 = owner_fp->is_sub_fighter;
     } else {
         fp->x19BC_shieldDamageTaken3 = 6;
     }
@@ -1137,7 +1137,7 @@ bool ftColl_80077C60(Item* item, HitCapsule* hit, Fighter* fp,
             default:
                 break;
             }
-            pl_8003E17C(fp->player_id, fp->x221F_b4, item->entity);
+            pl_8003E17C(fp->player_id, fp->is_sub_fighter, item->entity);
         }
         return false;
     }
@@ -1343,7 +1343,7 @@ bool ftColl_80077C60(Item* item, HitCapsule* hit, Fighter* fp,
 
 static inline int getUnkVal(Fighter* fp, int i)
 {
-    return i + fp->player_id * 2 + fp->x221F_b4;
+    return i + fp->player_id * 2 + fp->is_sub_fighter;
 }
 
 void ftColl_80078384(Fighter* fp, FighterHurtCapsule* arg1, HitCapsule* arg2)
@@ -1428,7 +1428,7 @@ void ftColl_8007861C(Fighter_GObj* arg0, Fighter_GObj* gobj, int arg2,
         victim->dmg.x18C0 = attacker == victim ? 0 : attacker->x8_spawnNum;
         victim->dmg.x18c4_source_ply = attacker->player_id;
         victim->dmg.x18C8 = -1;
-        victim->x221F_b5 = attacker->x221F_b4;
+        victim->x221F_b5 = attacker->is_sub_fighter;
     } else {
         victim->dmg.x18C0 = 0;
         victim->dmg.x18C8 = -1;
@@ -1477,7 +1477,7 @@ void ftColl_800787B4(Item_GObj* arg0, Fighter_GObj* arg1, int arg2)
     PAD_STACK(8);
 
     if (ip->kind == It_Kind_BombHei) {
-        pl_80041B08(fp->player_id, (UNK_T) (uintptr_t) fp->x221F_b4,
+        pl_80041B08(fp->player_id, (UNK_T) (uintptr_t) fp->is_sub_fighter,
                     (u16) ip->x1C);
     }
 
@@ -1512,8 +1512,8 @@ void ftColl_8007891C(Fighter_GObj* arg0, Fighter_GObj* arg1, float arg2)
     ftColl_80076444(arg0, arg1);
     fp0 = arg0->user_data;
     fp1 = arg1->user_data;
-    pl_8003EB30(arg2, fp0->player_id, fp0->x221F_b4, fp1->player_id,
-                fp1->x221F_b4, fp0->x2070.x2073);
+    pl_8003EB30(arg2, fp0->player_id, fp0->is_sub_fighter, fp1->player_id,
+                fp1->is_sub_fighter, fp0->x2070.x2073);
 }
 #ifdef MUST_MATCH
 #pragma pop
@@ -1534,8 +1534,9 @@ void ftColl_80078998(HSD_GObj* arg0, HSD_GObj* arg1, float arg2)
     if (ftLib_80086960(ip->owner)) {
         Fighter* owner_fp = ip->owner->user_data;
         Fighter* victim_fp = arg1->user_data;
-        pl_8003EB30(arg2, owner_fp->player_id, owner_fp->x221F_b4,
-                    victim_fp->player_id, victim_fp->x221F_b4, ip->xD90.x2073);
+        pl_8003EB30(arg2, owner_fp->player_id, owner_fp->is_sub_fighter,
+                    victim_fp->player_id, victim_fp->is_sub_fighter,
+                    ip->xD90.x2073);
     }
 }
 #ifdef MUST_MATCH
@@ -1575,7 +1576,7 @@ void ftColl_80078A2C(Fighter_GObj* this_gobj)
     this_fp = this_gobj->user_data;
     this_fp->victim_gobj = NULL;
     this_fp->unk_grab_val = F32_MAX;
-    victim_gobj = HSD_GObj_Entities->fighters;
+    victim_gobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER];
     while (victim_gobj != NULL) {
         if (!ftLib_80086FD4(this_gobj, victim_gobj)) {
             victim_fp = victim_gobj->user_data;
@@ -1656,7 +1657,7 @@ void ftColl_80078C70(Fighter_GObj* this_gobj)
     this_fp = this_gobj->user_data;
 
     if (gm_8016B1C4() == 0) {
-        victim_gobj = HSD_GObj_Entities->fighters;
+        victim_gobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER];
         is_same_gobj = false;
         while (victim_gobj != NULL) {
             if (this_gobj == victim_gobj) {
@@ -1935,7 +1936,7 @@ void ftColl_80078C70(Fighter_GObj* this_gobj)
                                                                                   ->player_id *
                                                                               2) +
                                                                              (u8) this_fp
-                                                                                 ->x221F_b4));
+                                                                                 ->is_sub_fighter));
                                                                     } else {
                                                                         this_fp
                                                                             ->x2160 = lbColl_80005BB0(
@@ -1945,7 +1946,7 @@ void ftColl_80078C70(Fighter_GObj* this_gobj)
                                                                                   ->player_id *
                                                                               2) +
                                                                              (u8) this_fp
-                                                                                 ->x221F_b4));
+                                                                                 ->is_sub_fighter));
                                                                     }
                                                                 }
                                                             }
@@ -2015,7 +2016,7 @@ void ftColl_8007925C(Fighter_GObj* gobj)
 
     fp = gobj->user_data;
 
-    for (entity = HSD_GObj_Entities->items; entity != NULL;
+    for (entity = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_ITEM]; entity != NULL;
          entity = entity->next)
     {
         item = entity->user_data;
@@ -2341,11 +2342,11 @@ void ftColl_8007925C(Fighter_GObj* gobj)
                         {
                             fp->x215C = lbColl_80005BB0(hurt,
                                 (0x72 + (fp->player_id * 2) +
-                                 (u8) fp->x221F_b4));
+                                 (u8) fp->is_sub_fighter));
                         } else {
                             fp->x2160 = lbColl_80005BB0(hurt,
                                 (0x7E + (fp->player_id * 2) +
-                                 (u8) fp->x221F_b4));
+                                 (u8) fp->is_sub_fighter));
                         }
                         break;
                     }
@@ -2934,7 +2935,7 @@ void ftColl_8007A06C(Fighter_GObj* gobj, void* dmg_ptr, void* log, size_t idx,
         tail_owner_gobj = ip->owner;
 
         if (ip->kind == It_Kind_BombHei) {
-            u32 b4 = victim_fp->x221F_b4;
+            u32 b4 = victim_fp->is_sub_fighter;
             int player_id = victim_fp->player_id;
             pl_80041B08(player_id, (UNK_T) (uintptr_t) b4, (u16) ip->x1C);
         }
@@ -3399,7 +3400,9 @@ void ftColl_8007B8CC(Fighter* fp, Fighter_GObj* grabber_gobj)
 void ftColl_8007B8E8(Fighter_GObj* gobj)
 {
     Fighter_GObj* curr;
-    for (curr = HSD_GObj_Entities->fighters; curr != NULL; curr = curr->next) {
+    for (curr = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; curr != NULL;
+         curr = curr->next)
+    {
         if (gobj != curr) {
             Fighter* fp = GET_FIGHTER(curr);
             if (fp->x1064_thrownHitbox.owner == gobj) {
@@ -3552,7 +3555,9 @@ void ftColl_8007BC90(Fighter_GObj* gobj)
     fp->target_item_gobj = 0;
     fp->unk_grab_val = F32_MAX;
 
-    for (cur = HSD_GObj_Entities->items; cur != NULL; cur = cur->next) {
+    for (cur = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_ITEM]; cur != NULL;
+         cur = cur->next)
+    {
         Item* ip = cur->user_data;
 
         if (ip->xD0C != 0) {
@@ -3700,9 +3705,9 @@ void ftColl_8007BE3C(Fighter_GObj* gobj)
                 ftColl_80076444(s2, fighter_victim);
                 src_fp = s2->user_data;
                 victim_fp = fighter_victim->user_data;
-                pl_8003EB30(dmg_amount, src_fp->player_id, src_fp->x221F_b4,
-                            victim_fp->player_id, victim_fp->x221F_b4,
-                            src_fp->x2070.x2073);
+                pl_8003EB30(dmg_amount, src_fp->player_id,
+                            src_fp->is_sub_fighter, victim_fp->player_id,
+                            victim_fp->is_sub_fighter, src_fp->x2070.x2073);
             }
             break;
         case HSD_GOBJ_CLASS_ITEM:
@@ -3719,8 +3724,9 @@ void ftColl_8007BE3C(Fighter_GObj* gobj)
                         owner_fp = ip->owner->user_data;
                         victim_fp = item_victim->user_data;
                         pl_8003EB30(dmg_amount, owner_fp->player_id,
-                                    owner_fp->x221F_b4, victim_fp->player_id,
-                                    victim_fp->x221F_b4, ip->xD90.x2073);
+                                    owner_fp->is_sub_fighter,
+                                    victim_fp->player_id,
+                                    victim_fp->is_sub_fighter, ip->xD90.x2073);
                     }
                 }
             }

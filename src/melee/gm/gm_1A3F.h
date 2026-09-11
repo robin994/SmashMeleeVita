@@ -17,5 +17,8 @@
 /* 1A4330 */ void gm_SetGameModeOverride(u8 (*)(void));
 /* 1A4340 */ bool gm_Is1PMode(u8 mode);
 /* 1A4510 */ void gm_801A4510(void);
+#ifdef MELEE_VITA_PLATFORM
+int mv_gm_vita_continue_mode(int mode_kind);
+#endif
 
 #endif

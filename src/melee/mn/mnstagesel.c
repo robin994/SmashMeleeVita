@@ -26,6 +26,9 @@
 #include <sysdolphin/baselib/lobj.h>
 #include <sysdolphin/baselib/memory.h>
 #include <sysdolphin/baselib/random.h>
+#ifdef MELEE_VITA_PLATFORM
+#include "sss_assets_vita.h"
+#endif
 
 /// @todo .sdata2 order hack
 #ifdef MUST_MATCH
@@ -452,6 +455,15 @@ void mnStageSel_Scene_OnEnter(void* arg0)
     sss_data = (SSSData*) arg0;
 
     if (sss_data->force_stage_id < 0) {
+#ifdef MELEE_VITA_PLATFORM
+        mnStageSel_804D6C94 = NULL;
+        void *vita_table = NULL;
+        HSD_ASSERTREPORT(0x1C8,
+                         mv_sss_vita_prepare(lbLang_IsSavedLanguageUS() != 0,
+                                             &vita_table) == 0,
+                         "Vita SSS native asset conversion failed\n");
+        temp_r3 = vita_table;
+#else
         if (lbLang_IsSavedLanguageUS() != 0) {
             mnStageSel_804D6C94 = lbArchive_LoadArchive("MnSlMap.usd");
         } else {
@@ -459,6 +471,7 @@ void mnStageSel_Scene_OnEnter(void* arg0)
         }
         temp_r3 = HSD_ArchiveGetPublicAddress(mnStageSel_804D6C94,
                                               "MnSelectStageDataTable");
+#endif
         MenMain_cam = temp_r3->unk0;
         mnStageSel_804D6C98 = &temp_r3->x10;
         mnStageSel_804D6CAF = 0;
@@ -473,11 +486,14 @@ void mnStageSel_Scene_OnEnter(void* arg0)
             HSD_GObj* gobj = mnStageSel_804D6C9C = GObj_Create(2, 3, 0x80);
             HSD_CObj* cobj = HSD_CObjLoadDesc(MenMain_cam);
             HSD_GObjObject_80390A70(gobj, HSD_GObj_CameraKind, cobj);
+#ifndef MELEE_VITA_PLATFORM
             GObj_SetupGXLinkMax(gobj, HSD_GObj_803910D8, 0);
             gobj->gxlink_prios = 0x11;
+#endif
             HSD_GObj_SetupProc(gobj, mn_8022BA1C, 5);
         }
 
+#ifndef MELEE_VITA_PLATFORM
         {
             HSD_GObj* gobj;
             HSD_LObj* lobj1;
@@ -496,6 +512,7 @@ void mnStageSel_Scene_OnEnter(void* arg0)
             HSD_GObjObject_80390A70(gobj, HSD_GObj_FogKind, fog);
             GObj_SetupGXLink(gobj, fn_8025A974, 0, 0x80);
         }
+#endif
 
         {
             HSD_JObj* jobj2;
@@ -528,7 +545,7 @@ void mnStageSel_Scene_OnEnter(void* arg0)
 
         for (i = 0; i < 0x1D; i++) {
             mnStageSel_803F06D0[i].x8 =
-                gm_80164430(mnStageSel_803F06D0[i].xB) ? 2 : 1;
+                gm_80164430(mnStageSel_803F06D0[i].stkind) ? 2 : 1;
         }
 
         for (i = 0; i <= 0xA; i++) {
@@ -827,17 +844,22 @@ void mnStageSel_Scene_OnFrame(void)
     }
     if (mnStageSel_804D6CAF == 2) {
         sss_data->vs.start.rules.stkind =
-            mnStageSel_803F06D0[mnStageSel_804D6CAE].xB;
+            mnStageSel_803F06D0[mnStageSel_804D6CAE].stkind;
         gm_801A4B60();
     }
 }
 
 void mnStageSel_Scene_OnExit(UNUSED void* exit_data)
 {
+#ifndef MELEE_VITA_PLATFORM
     if (mnStageSel_804D6C94 != NULL) {
         lbArchive_80016EFC(mnStageSel_804D6C94);
         mnStageSel_804D6C94 = NULL;
     }
+#else
+    /* The Vita scene owner destroys GObjs before freeing native descriptors. */
+    mnStageSel_804D6C94 = NULL;
+#endif
     {
         SSSData* sss = sss_data;
         sss->start_game = mnStageSel_804D6CAF == 2 ? true : false;
@@ -849,12 +871,12 @@ void mnStageSel_Scene_OnExit(UNUSED void* exit_data)
     }
 }
 
-int mnStageSel_8025BBD4(void)
+int mnSelStageRandom(void)
 {
-    return mnStageSel_803F06D0[mnStageSel_802599EC()].xB;
+    return mnStageSel_803F06D0[mnStageSel_802599EC()].stkind;
 }
 
 int mnStageSel_8025BC08(int idx)
 {
-    return mnStageSel_803F06D0[idx].xB;
+    return mnStageSel_803F06D0[idx].stkind;
 }

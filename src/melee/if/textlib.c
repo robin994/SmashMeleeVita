@@ -2,7 +2,9 @@
 
 #include <Runtime/platform.h>
 
+#ifndef MELEE_VITA_PLATFORM
 #include <printf.h> // IWYU pragma: keep
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>

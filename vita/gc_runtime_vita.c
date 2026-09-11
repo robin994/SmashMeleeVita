@@ -553,6 +553,12 @@ long DVDGetFileInfoStatus(DVDFileInfo *fileInfo)
     return fileInfo ? fileInfo->cb.state : DVD_STATE_FATAL_ERROR;
 }
 
+long DVDGetDriveStatus(void)
+{
+    /* All Vita file-backed DVD operations complete synchronously. */
+    return dvd_ready ? DVD_STATE_END : DVD_STATE_FATAL_ERROR;
+}
+
 void CARDInit(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita/save", 0777);
@@ -766,12 +772,14 @@ void OSResetSystem(int reset, u32 code, BOOL forceMenu)
     sceKernelExitProcess(reset ? 1 : 0);
 }
 
+#ifndef MELEE_VITA_FULL_GAMEPLAY_SCENE
 void lb_800192A8(void (*cb)(void))
 {
     /* Vita DVD reads complete synchronously, so the GameCube drive-state pump
      * collapses to the periodic callback used by Melee's wait loops. */
     if (cb) cb();
 }
+#endif
 
 bool HSD_DevComIsBusy(int idx)
 {
@@ -1013,3 +1021,7 @@ void DCFlushRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
 void DCFlushRangeNoSync(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
 void DCInvalidateRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
 void DCStoreRange(void *addr, u32 nBytes) { (void)addr; (void)nBytes; }
+
+BOOL DVDCheckDisk(void) { return 1; }
+long OSCheckActiveThreads(void) { return 0; }
+void OSSetProgressiveMode(u32 mode) { (void)mode; }

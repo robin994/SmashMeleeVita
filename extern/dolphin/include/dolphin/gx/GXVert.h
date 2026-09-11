@@ -29,7 +29,26 @@ volatile PPCWGPipe GXWGFifo : GXFIFO_ADDR;
 #define GXWGFifo (*(volatile PPCWGPipe *)GXFIFO_ADDR)
 #endif
 
-#if DEBUG
+#if defined(MELEE_VITA_PLATFORM)
+
+/* PS Vita has no GameCube write-gather MMIO. Route scalar GX vertex writes
+ * into the software FIFO consumed by the capture/replay backend. */
+void GXVitaWrite_u8(u8 x);
+void GXVitaWrite_u16(u16 x);
+void GXVitaWrite_u32(u32 x);
+void GXVitaWrite_s8(s8 x);
+void GXVitaWrite_s16(s16 x);
+void GXVitaWrite_s32(s32 x);
+void GXVitaWrite_f32(f32 x);
+
+#define FUNC_1PARAM(name, T) static inline void name##1##T(T x) { GXVitaWrite_##T(x); }
+#define FUNC_2PARAM(name, T) static inline void name##2##T(T x, T y) { GXVitaWrite_##T(x); GXVitaWrite_##T(y); }
+#define FUNC_3PARAM(name, T) static inline void name##3##T(T x, T y, T z) { GXVitaWrite_##T(x); GXVitaWrite_##T(y); GXVitaWrite_##T(z); }
+#define FUNC_4PARAM(name, T) static inline void name##4##T(T x, T y, T z, T w) { GXVitaWrite_##T(x); GXVitaWrite_##T(y); GXVitaWrite_##T(z); GXVitaWrite_##T(w); }
+#define FUNC_INDEX8(name) static inline void name##1x8(u8 x) { GXVitaWrite_u8(x); }
+#define FUNC_INDEX16(name) static inline void name##1x16(u16 x) { GXVitaWrite_u16(x); }
+
+#elif DEBUG
 
 // external functions
 

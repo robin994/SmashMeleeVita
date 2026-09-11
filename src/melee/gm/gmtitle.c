@@ -4,6 +4,9 @@
 #include "title_boot_vita.h"
 #endif
 
+#include <melee/cm/forward.h>
+#include <melee/if/forward.h>
+
 #include "gm_unsplit.h"
 #include "gmevent.h"
 #include "gmmain_lib.h"

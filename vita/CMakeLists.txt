@@ -5,6 +5,10 @@ endif()
 project(SmashMeleeVita C)
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 set(CMAKE_C_STANDARD 11)
+option(MELEE_VITA_FULL_GAMEPLAY_SCENE
+  "Link and enter the complete retail GS_VS/GS_TRAINING runtime frontier" ON)
+option(MELEE_VITA_SKIP_CLASSIC_INTRO
+  "Temporarily bypass the Classic GS_INTRO_EASY presentation and enter the first retail match" ON)
 add_library(melee_portable OBJECT ../src/sysdolphin/baselib/random.c
   ../extern/dolphin/src/dolphin/pad/PadClamp.c)
 target_include_directories(melee_portable PRIVATE ../src ../extern/dolphin/include)
@@ -13,7 +17,7 @@ add_library(melee_assets STATIC hsd_data.c hsd_anim.c hsd_scene.c hsd_matanim.c 
 target_include_directories(melee_assets PRIVATE ../src ../extern/dolphin/include)
 target_compile_options(melee_assets PRIVATE -Wall -Wextra -Werror -O2 -fno-short-enums)
 add_library(melee_hsd_runtime STATIC
-  hsd_runtime_platform.c hsd_runtime_probe.c hsd_anim_native.c hsd_matanim_native.c gx_capture_vita.c mtx_vita.c
+  hsd_runtime_platform.c hsd_runtime_probe.c hsd_anim_native.c hsd_matanim_native.c gx_capture_vita.c gx_state_vita.c mtx_vita.c
   ../extern/dolphin/src/dolphin/mtx/mtx44.c
   ../src/sysdolphin/baselib/wobj.c
   ../src/sysdolphin/baselib/spline.c
@@ -47,7 +51,6 @@ add_library(melee_hsd_runtime STATIC
   ../src/sysdolphin/baselib/robj.c
   ../src/sysdolphin/baselib/shadow.c
   ../src/sysdolphin/baselib/displayfunc.c
-  ../extern/dolphin/src/dolphin/gx/GXFrameBuf.c
   ../src/sysdolphin/baselib/id.c
   ../src/sysdolphin/baselib/jobj.c
   ../src/sysdolphin/baselib/dobj.c
@@ -110,6 +113,45 @@ add_library(melee_game_boot STATIC
   ../src/melee/gm/gmslomo.c
   ../src/melee/gm/gmtrainingmode.c
   ../src/melee/gm/gm_16F1.c
+  ../src/melee/gm/gm_1736.c
+  ../src/melee/cm/camera.c
+  ../src/melee/pl/player.c
+  ../src/melee/ft/ftdata.c
+  ../src/melee/ef/efasync.c
+  ../src/melee/ft/kinds/ftCLink/ftclink.c
+  ../src/melee/ft/kinds/ftCaptain/ftcaptain.c
+  ../src/melee/ft/kinds/ftCrazyHand/ftcrazyhand.c
+  ../src/melee/ft/kinds/ftDonkey/ftdonkey.c
+  ../src/melee/ft/kinds/ftDrMario/ftdrmario.c
+  ../src/melee/ft/kinds/ftEmblem/ftemblem.c
+  ../src/melee/ft/kinds/ftFalco/ftfalco.c
+  ../src/melee/ft/kinds/ftFox/ftfox.c
+  ../src/melee/ft/kinds/ftGameWatch/ftgamewatch.c
+  ../src/melee/ft/kinds/ftGanon/ftganon.c
+  ../src/melee/ft/kinds/ftGigaKoopa/ftgkoopa.c
+  ../src/melee/ft/kinds/ftKirby/ftkirby.c
+  ../src/melee/ft/kinds/ftKirby/ftkirbydata.c
+  ../src/melee/ft/kinds/ftKoopa/ftkoopa.c
+  ../src/melee/ft/kinds/ftLink/ftlink.c
+  ../src/melee/ft/kinds/ftLuigi/ftluigi.c
+  ../src/melee/ft/kinds/ftMario/ftmariostrings.c
+  ../src/melee/ft/kinds/ftMars/ftmars.c
+  ../src/melee/ft/kinds/ftMasterHand/ftmasterhand.c
+  ../src/melee/ft/kinds/ftMewtwo/ftmewtwo.c
+  ../src/melee/ft/kinds/ftNana/ftnana.c
+  ../src/melee/ft/kinds/ftNess/ftness.c
+  ../src/melee/ft/kinds/ftPeach/ftpeach.c
+  ../src/melee/ft/kinds/ftPichu/ftpichu.c
+  ../src/melee/ft/kinds/ftPikachu/ftpikachu.c
+  ../src/melee/ft/kinds/ftPopo/ftpopo.c
+  ../src/melee/ft/kinds/ftPurin/ftpurin.c
+  ../src/melee/ft/kinds/ftSamus/ftsamus.c
+  ../src/melee/ft/kinds/ftSandbag/ftsandbag.c
+  ../src/melee/ft/kinds/ftSeak/ftseak.c
+  ../src/melee/ft/kinds/ftYoshi/ftyoshi.c
+  ../src/melee/ft/kinds/ftZakoBoy/ftboy.c
+  ../src/melee/ft/kinds/ftZakoGirl/ftgirl.c
+  ../src/melee/ft/kinds/ftZelda/ftzelda.c
   ../src/melee/mn/mn_22EC.c
   ../src/melee/mn/mnmain.c
   ../src/melee/mn/mncharsel.c
@@ -149,14 +191,63 @@ add_library(melee_game_boot STATIC
   ../src/sysdolphin/baselib/synth.c
   ../src/sysdolphin/baselib/sislib.c
   ../src/sysdolphin/baselib/hsd_3B5C.c)
+if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
+  target_sources(melee_game_boot PRIVATE
+    ../src/melee/gm/gmscene.c
+    ../src/melee/gm/gm_16A2.c
+    ../src/melee/gm/gmpause.c
+    ../src/melee/sfx/sfx_unk.c
+    ../src/melee/gr/ground.c
+    ../src/melee/gr/grdatfiles.c
+    ../src/melee/gr/grpstadium.c
+    ../src/melee/gr/grhomerun.c
+    ../src/melee/gr/grcastle.c
+    ../src/melee/gr/grgarden.c
+    ../src/melee/gr/grzebes.c
+    ../src/melee/gr/grcorneria.c
+    ../src/melee/gr/grkinokoroute.c
+    ../src/melee/ft/ftlib.c
+    ../src/melee/ft/fighter.c
+    ../src/melee/pl/plstale.c
+    ../src/melee/pl/plattack.c
+    ../src/melee/pl/pl_040D.c
+    ../src/melee/if/if_2F6E.c
+    ../src/melee/if/ifstatus.c
+    ../src/melee/if/iftime.c
+    ../src/melee/if/ifall.c
+    ../src/melee/if/ifnametag.c
+    ../src/melee/it/item.c
+    ../src/melee/it/itspawn.c
+    ../src/melee/mp/mpcoll.c
+    ../src/melee/mp/mplib.c
+    ../src/melee/lb/lbvector.c
+    ../src/melee/lb/lbrefract.c
+    ../src/melee/lb/lbshadow.c
+    ../src/melee/lb/lbbgflash.c
+    ../src/melee/lb/lb_00F9.c
+    ../src/melee/ef/eflib.c
+    ../src/sysdolphin/baselib/particle.c
+    ../src/sysdolphin/baselib/psdisp.c
+    ../src/sysdolphin/baselib/fog.c)
+endif()
 target_include_directories(melee_game_boot PRIVATE . ../src ../extern/dolphin/include)
 target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_BOOT_PROBE=1 MELEE_VITA_SYNC_DVD=1 MELEE_VITA_AUDIO_BOOT_PROBE=1)
+if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/full_gameplay_sources.cmake)
+  target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_FULL_GAMEPLAY_SCENE=1)
+endif()
+if(MELEE_VITA_FULL_GAMEPLAY_SCENE AND MELEE_VITA_SKIP_CLASSIC_INTRO)
+  target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_SKIP_CLASSIC_INTRO=1)
+endif()
 target_compile_options(melee_game_boot PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
 
 set(MELEE_RENDER_SOURCES gx_replay_vitagl.c render_vitagl.c)
-add_executable(melee_vita main.c mode_route_vita.c pad_vita.c mth_player_vita.c thp_jpeg.c title_boot_vita.c menu_boot_vita.c css_assets_vita.c onep_boot_vita.c frame_telemetry_vita.c ${MELEE_RENDER_SOURCES} $<TARGET_OBJECTS:melee_portable>)
+add_executable(melee_vita main.c mode_route_vita.c pad_vita.c mth_player_vita.c thp_jpeg.c title_boot_vita.c menu_boot_vita.c css_assets_vita.c sss_assets_vita.c onep_boot_vita.c frame_telemetry_vita.c ${MELEE_RENDER_SOURCES} $<TARGET_OBJECTS:melee_portable>)
 target_include_directories(melee_vita PRIVATE ../src ../extern/dolphin/include)
 target_compile_definitions(melee_vita PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_INIT_PROBE=1 MELEE_VITAGL=1)
+if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
+  target_compile_definitions(melee_vita PRIVATE MELEE_VITA_FULL_GAMEPLAY_SCENE=1)
+endif()
 target_compile_options(melee_vita PRIVATE -Wall -Wextra -Werror -Wno-array-parameter -O2 -fno-short-enums)
 target_link_options(melee_vita PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/melee_vita.map" -Wl,--gc-sections -Wl,--wrap=__assert)
 target_link_libraries(melee_vita melee_assets melee_game_boot melee_hsd_runtime turbojpeg SceGxm_stub SceDisplay_stub SceCtrl_stub
@@ -166,7 +257,7 @@ target_link_libraries(melee_vita vitaGL vitashark SceShaccCgExt SceShaccCg_stub
   SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceSysmodule_stub SceAppMgr_stub)
 vita_create_self(eboot.bin melee_vita UNSAFE)
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 00.32 NAME "Melee Vita Runtime"
+  VERSION 00.40 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

@@ -197,6 +197,14 @@ void gm_Mode_InvisibleVs_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gminvisible = {
-    GM_INVISIBLE_VS, "GM_INVISIBLE_VS", gm_Mode_InvisibleVs_OnInit, gm_Mode_InvisibleVs_OnLoad, onEnterCss, onExitCss, onEnterSss, onExitSss
+    .mode = GM_INVISIBLE_VS, .name = "GM_INVISIBLE_VS",
+    .init = gm_Mode_InvisibleVs_OnInit, .load = gm_Mode_InvisibleVs_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = onEnterCss, .css_exit = onExitCss,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = onEnterSss, .sss_exit = onExitSss,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = onEnterVs, .vs_exit = onExitVs,
 };
 #endif

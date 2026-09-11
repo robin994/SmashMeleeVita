@@ -179,6 +179,14 @@ void gm_Mode_SlowMo_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmslomo = {
-    GM_SLOMO_VS, "GM_SLOMO_VS", gm_Mode_SlowMo_OnInit, gm_Mode_SlowMo_OnLoad, gm_801BA50C, gm_801BA538, gm_801BA560, gm_801BA588
+    .mode = GM_SLOMO_VS, .name = "GM_SLOMO_VS",
+    .init = gm_Mode_SlowMo_OnInit, .load = gm_Mode_SlowMo_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = gm_801BA50C, .css_exit = gm_801BA538,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = gm_801BA560, .sss_exit = gm_801BA588,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = gm_801BA5C0, .vs_exit = gm_801BA5F4,
 };
 #endif

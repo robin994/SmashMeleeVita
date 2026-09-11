@@ -17,6 +17,21 @@
 #include <dolphin/types.h>
 #include <melee/lb/lbarchive.h> ///< @todo Circular include
 
+static inline u16 sis_stream_u16(const void *ptr)
+{
+#ifdef MELEE_VITA_PLATFORM
+    const u8 *p = ptr;
+    return (u16)(((u16)p[0] << 8) | p[1]);
+#else
+    return *(const u16 *)ptr;
+#endif
+}
+
+static inline s16 sis_stream_s16(const void *ptr)
+{
+    return (s16)sis_stream_u16(ptr);
+}
+
 static inline f32 HSD_SisLib_GlyphWidth(HSD_Text* text, f32 scale_x)
 {
     return 32.0F * text->x80.x * scale_x;
@@ -327,8 +342,8 @@ loop_3:
         goto block_33;
     case 14:
         HSD_SisLib_803A7684(text, (u8*) cursor, 0x83U);
-        text->x80.x = (f32) * (u16*) ((u8*) cursor + 1) / 256.0F;
-        scale_val = *(u16*) ((u8*) cursor + 3);
+        text->x80.x = (f32) sis_stream_u16((u8*) cursor + 1) / 256.0F;
+        scale_val = sis_stream_u16((u8*) cursor + 3);
         cursor = (u8*) cursor + 4;
         text->x80.y = (f32) scale_val / 256.0F;
         goto block_33;
@@ -341,7 +356,7 @@ loop_3:
     case 10:
         if ((text->alloc_data == NULL) || (kern_enabled == 0)) {
             HSD_SisLib_803A7684(text, (u8*) cursor, 0x81U);
-            text->x78.x = (f32) * (s16*) ((u8*) cursor + 1) / 256.0F;
+            text->x78.x = (f32) sis_stream_s16((u8*) cursor + 1) / 256.0F;
         }
         cursor = (u8*) cursor + 4;
         goto block_33;
@@ -372,7 +387,7 @@ loop_3:
         if (opcode >= 0x20U) {
             *out_width += text->x80.x * (32.0F + text->x78.x);
             if (kern_enabled != 0) {
-                glyph_code = *(u16*) cursor;
+                glyph_code = sis_stream_u16(cursor);
                 if (glyph_code < 0x4000U) {
                     kern_width =
                         (s32) (default_kerning +
@@ -695,20 +710,20 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                                 skip_count -= 1;
                             } else {
                                 text->x98 = (u32) (text->x98 + 1);
-                                text->x94 = *(u16*) (sis_cursor + 1);
+                                text->x94 = sis_stream_u16(sis_cursor + 1);
                                 text->x60 = (void *) (sis_cursor + 3);
                             }
                             sis_cursor += 2;
                             break;
                         case 6:
-                            line_delay = *(u16*) (sis_cursor + 1);
-                            char_delay = *(u16*) (sis_cursor + 3);
+                            line_delay = sis_stream_u16(sis_cursor + 1);
+                            char_delay = sis_stream_u16(sis_cursor + 3);
                             sis_cursor += 4;
                             break;
                         case 7:
                             line_started = 1U;
                             HSD_SisLib_803A8134((void*) (sis_cursor + 5), text, &line_width_out, &line_height_out);
-                            x_origin = (f32) *(s16*) (sis_cursor + 1);
+                            x_origin = (f32) sis_stream_s16(sis_cursor + 1);
                             if (( text->fitting == 1) && (text->box_size_x < line_width_out)) {
                                 text->x88 = (text->box_size_x / line_width_out);
                             } else {
@@ -725,7 +740,7 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                                 text->current_width = x_origin;
                                 break;
                             }
-                            y_offset = *(s16*) (sis_cursor + 3);
+                            y_offset = sis_stream_s16(sis_cursor + 3);
                             sis_cursor += 4;
                             text->current_height = ((f32) y_offset * text->font_size.y);
                             break;
@@ -738,8 +753,8 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                         case 10:
                             if (((u32) text->alloc_data == 0U) || (saved_kerning == 0)) {
                                 HSD_SisLib_803A7684(text, sis_cursor, 1U);
-                                text->x78.x = (f32) *(s16*) (sis_cursor + 1) / 256.0F;
-                                text->x78.y = (f32) *(s16*) (sis_cursor + 3) / 256.0F;
+                                text->x78.x = (f32) sis_stream_s16(sis_cursor + 1) / 256.0F;
+                                text->x78.y = (f32) sis_stream_s16(sis_cursor + 3) / 256.0F;
                             }
                             sis_cursor += 4;
                             break;
@@ -760,8 +775,8 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                             break;
                         case 14:
                             HSD_SisLib_803A7684(text, sis_cursor, 3U);
-                            text->x80.x = (f32) *(u16*) (sis_cursor + 1) / 256.0F;
-                            text->x80.y = (f32) *(u16*) (sis_cursor + 3) / 256.0F;
+                            text->x80.x = (f32) sis_stream_u16(sis_cursor + 1) / 256.0F;
+                            text->x80.y = (f32) sis_stream_u16(sis_cursor + 3) / 256.0F;
                             sis_cursor += 4;
                             break;
                         case 15:
@@ -829,7 +844,7 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                                     measured_width = line_width_out;
                                     sisFitLineToBox(text, measured_width);
                                 }
-                                glyph_idx = *(u16 *)sis_cursor;
+                                glyph_idx = sis_stream_u16(sis_cursor);
                                 if (glyph_idx < 0x4000U) {
                                     tex_offset = glyph_idx - 0x2000;
                                 } else {
@@ -964,6 +979,39 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
     }
     // clang-format on
 }
+
+#ifdef MELEE_VITA_PLATFORM
+static HSD_GObj *HSD_SisLib_VitaFindCamera(const HSD_GObj *text_gobj)
+{
+    if (!text_gobj || text_gobj->gx_link >= 64 || !HSD_GObjPLinkHead) return NULL;
+    const u64 mask = (u64)1 << text_gobj->gx_link;
+    HSD_GObj **heads = HSD_GObjPLinkHead;
+    for (unsigned p = 0; p <= HSD_GObjLibInitData.p_link_max; ++p) {
+        for (HSD_GObj *gobj = heads[p]; gobj; gobj = gobj->next) {
+            if (gobj->obj_kind == HSD_GObj_CameraKind && gobj->hsd_obj &&
+                (gobj->gxlink_prios & mask))
+                return gobj;
+        }
+    }
+    return NULL;
+}
+
+int HSD_SisLib_VitaCaptureAll(void)
+{
+    int rendered = 0;
+    for (HSD_Text *text = HSD_SisLib_804D7978; text; text = text->next) {
+        if (!text->entity || text->hidden || !text->sis_buffer) continue;
+        HSD_GObj *camera = HSD_SisLib_VitaFindCamera(text->entity);
+        if (!camera) continue;
+        if (HSD_CObjSetCurrent((HSD_CObj *)camera->hsd_obj)) {
+            HSD_SisLib_803A84BC(text->entity, 2);
+            HSD_CObjEndCurrent();
+            ++rendered;
+        }
+    }
+    return rendered;
+}
+#endif
 
 HSD_Archive* HSD_SisLib_803A945C(char* path)
 {

@@ -1299,6 +1299,20 @@ void efAsync_LoadSync(int idx)
     if (lookup->data) {
         return;
     }
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_EF_LOAD_SYNC idx=%d file=%s root=%s data=%p\n", idx,
+             lookup->ef_DAT_file ? lookup->ef_DAT_file : "(null)",
+             lookup->effDataTable_name ? lookup->effDataTable_name : "(null)",
+             lookup->data);
+    /* Never pass a corrupted metadata pointer into strcmp().  The root cause
+     * fixed in ft_800852B0 was DOL-adjacent data being treated as contiguous
+     * after -fdata-sections, but keep this boundary fail-closed for hardware. */
+    if (lookup->effDataTable_name == NULL) {
+        OSReport("VITA_EF_METADATA_INVALID idx=%d file=%s\n", idx,
+                 lookup->ef_DAT_file);
+        return;
+    }
+#endif
     {
         bool chk = lbArchive_80017040(NULL, lookup->ef_DAT_file, &spC,
                                       lookup->effDataTable_name, 0);

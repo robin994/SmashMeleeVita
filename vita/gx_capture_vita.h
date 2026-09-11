@@ -114,6 +114,15 @@ typedef struct {
     uint8_t vtxfmt;
     uint16_t reserved;
     float pos_mtx[3][4];
+    /* GX camera state active when this draw was emitted.  Retail Melee can
+     * switch between world/HUD cameras inside one HSD traversal, so replay
+     * must keep projection/viewport per command rather than once per frame. */
+    float projection[4][4];
+    float viewport[6];
+    uint32_t projection_type;
+    uint8_t projection_valid;
+    uint8_t viewport_valid;
+    uint8_t camera_reserved[2];
     MvGxMaterialState material;
 } MvGxCaptureCommand;
 
@@ -163,8 +172,13 @@ typedef struct {
  * by ACGC-Vita-Port.  It records the authentic HSD GX display stream into a
  * bounded native queue but does not submit it to VitaGL/GXM yet. */
 void mv_gx_capture_reset(void);
+void mv_gx_capture_set_projection(const float matrix[4][4], uint32_t type);
+void mv_gx_capture_set_viewport(float x, float y, float w, float h,
+                                float near_z, float far_z);
 int mv_gx_capture_stats(MvGxCaptureStats *out);
 void mv_gx_capture_set_material(const MvGxMaterialState *material);
+/* Internal Vita GX compatibility layer: mutate the state snapshotted by the next draw. */
+MvGxMaterialState *mv_gx_capture_material_state(void);
 const MvGxCaptureCommand *mv_gx_capture_commands(uint32_t *count);
 const MvGxCaptureVertex *mv_gx_capture_vertices(uint32_t *count);
 int mv_gx_capture_replay_classify(MvGxReplayClassStats *out);

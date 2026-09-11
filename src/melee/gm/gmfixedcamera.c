@@ -180,6 +180,14 @@ void gm_Mode_CameraVs_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmfixedcamera = {
-    GM_CAMERA_VS, "GM_CAMERA_VS", gm_Mode_CameraVs_OnInit, gm_Mode_CameraVs_OnLoad, gm_801B9F10, gm_801B9F3C, gm_801B9F64, gm_801B9F8C
+    .mode = GM_CAMERA_VS, .name = "GM_CAMERA_VS",
+    .init = gm_Mode_CameraVs_OnInit, .load = gm_Mode_CameraVs_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = gm_801B9F10, .css_exit = gm_801B9F3C,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = gm_801B9F64, .sss_exit = gm_801B9F8C,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = gm_801B9FC8, .vs_exit = gm_801B9FFC,
 };
 #endif

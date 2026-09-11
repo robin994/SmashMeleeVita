@@ -54,7 +54,7 @@ struct grSh_Route_LightConfig {
     /* 0x30 */ GXDistAttnFn dist_func;
 };
 
-/* 2087B8 */ static void grShrineRoute_OnDemoInit(bool);
+/* 2087B8 */ static void grShrineRoute_OnDemoInit(int);
 /* 2087BC */ static void grShrineRoute_OnInit(void);
 /* 20882C */ static void grShrineRoute_OnLoad(void);
 /* 208850 */ static void grShrineRoute_OnStart(void);
@@ -98,7 +98,7 @@ struct grSh_Route_LightConfig {
 /* 20AE08 */ static s32 grShrineRoute_8020AE08(HSD_GObj*, HSD_GObj*, s32*);
 /* 20AF38 */ static void grShrineRoute_8020AF38(HSD_GObj*, s32);
 /* 20B020 */ static void grShrineRoute_8020B020(HSD_GObj* gobj, int r4,
-                                                bool hide);
+                                                int hide);
 /* 20B0AC */ static void grShrineRoute_8020B0AC(void);
 /* 20B104 */ static DynamicsDesc* grShrineRoute_OnTouchLine(enum_t);
 /* 20B10C */ static bool grShrineRoute_OnCheckShadowRender(Vec3*, int arg,
@@ -176,7 +176,7 @@ StageData grSh_Route_StageData = {
 
 static struct grShrineRoute_YakumonoParam* yakumono_param;
 
-void grShrineRoute_OnDemoInit(bool arg) {}
+void grShrineRoute_OnDemoInit(int arg) {}
 
 void grShrineRoute_OnInit(void)
 {
@@ -893,7 +893,7 @@ void grShrineRoute_8020A100(Ground_GObj* arg) {}
 void grShrineRoute_8020A104(Ground_GObj* gobj)
 {
     Ground* gp = GET_GROUND(gobj);
-    HSD_GObj* lgobj = HSD_GObj_Entities->xC;
+    HSD_GObj* lgobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_LIGHT];
     HSD_LObj* lobj;
 
     while (lgobj) {

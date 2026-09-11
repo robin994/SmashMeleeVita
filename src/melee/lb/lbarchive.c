@@ -4,9 +4,12 @@ extern int mv_menu_vita_archive_is_proxy(const HSD_Archive*);
 extern void *mv_menu_vita_archive_lookup(const char*);
 #endif
 #ifdef MELEE_VITA_BOOT_PROBE
+extern void mv_boot_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_boot_archive_prepare(HSD_Archive*, const char*);
+#define PREPARE_RAW(d, n, f) mv_boot_archive_prepare_raw(d, n, f)
 #define PREPARE_SCENE(a, f) mv_boot_archive_prepare(a, f)
 #else
+#define PREPARE_RAW(d, n, f) ((void)0)
 #define PREPARE_SCENE(a, f) ((void)0)
 #endif
 
@@ -84,6 +87,7 @@ static inline HSD_Archive* lbArchive_LoadArchive_inline(const char* filename)
     data = lbHeap_80015BD0(0, OSRoundUp32B(lbFileGetSize(filename)));
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
+    PREPARE_RAW(data, length, filename);
     lbArchive_InitializeDAT(archive, data, length);
     PREPARE_SCENE(archive, filename);
     return archive;
@@ -138,6 +142,7 @@ HSD_Archive* lbArchive_LoadSymbols(const char* filename, void* symbols, ...)
     data = lbHeap_80015BD0(0, OSRoundUp32B(lbFileGetSize(filename)));
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
+    PREPARE_RAW(data, length, filename);
     lbArchive_InitializeDAT(archive, data, length);
     PREPARE_SCENE(archive, filename);
     lbArchive_vLoadSectionsFatal(archive, symbols, sections);
@@ -159,6 +164,7 @@ HSD_Archive* lbArchive_80016DBC(const char* filename, void* symbols, ...)
     data = lbHeap_80015BD0(0, OSRoundUp32B(lbFileGetSize(filename)));
     archive = lbHeap_80015BD0(0, sizeof(HSD_Archive));
     lbFile_8001668C(filename, data, &length);
+    PREPARE_RAW(data, length, filename);
     lbArchive_InitializeDAT(archive, data, length);
     PREPARE_SCENE(archive, filename);
     lbArchive_vLoadSections(archive, symbols, sections);
@@ -191,6 +197,7 @@ bool lbArchive_80016F80(HSD_Archive** archive, const char* filename)
         data = lbHeap_80015BD0(0, OSRoundUp32B(lbFileGetSize(filename)));
         tmp = lbHeap_80015BD0(0, sizeof(HSD_Archive));
         lbFile_8001668C(filename, data, &length);
+        PREPARE_RAW(data, length, filename);
         lbArchive_InitializeDAT(tmp, data, length);
         var_r3 = tmp;
         result = false;
@@ -226,6 +233,7 @@ bool lbArchive_80017040(HSD_Archive** dst, const char* filename, void* symbols,
             tmp = data;
             archive2 = lbHeap_80015BD0(0, sizeof(HSD_Archive));
             lbFile_8001668C(filename, tmp, &length);
+            PREPARE_RAW(tmp, length, filename);
             lbArchive_InitializeDAT(archive2, tmp, length);
             archive = archive2;
         }
@@ -267,6 +275,7 @@ bool lbArchive_800171CC(HSD_Archive** dst, const char* filename, void* symbols,
             tmp = data;
             archive2 = lbHeap_80015BD0(0, sizeof(HSD_Archive));
             lbFile_8001668C(filename, tmp, &length);
+            PREPARE_RAW(tmp, length, filename);
             lbArchive_InitializeDAT(archive2, tmp, length);
             archive = archive2;
         }

@@ -24,7 +24,8 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.22\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.30\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_UPSTREAM_BASE 480b04454\n"); fflush(log); }
     if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=partial menu=mnMain_native\n"); fflush(log); }
     mv_runtime_set_log(log);
 
@@ -278,14 +279,30 @@ int main(void)
             pending_mode = mv_scene_vita_pending_mode();
             if (pending_mode < 0 || pending_mode >= GM_COUNT) break;
         } else {
-            onep_result = mv_onep_mode_run(log, pending_mode);
+            int completed_mode = pending_mode;
+            onep_result = mv_onep_mode_run(log, completed_mode);
             if (onep_result == -99) break;
+            if (onep_result < 0) {
+                if (log) {
+                    fprintf(log, "GAME_MODE_RETURN mode=%d result=%d destination=ERROR\n",
+                            completed_mode, onep_result);
+                    fflush(log);
+                }
+                break;
+            }
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+            if (completed_mode == GM_CLASSIC || completed_mode == GM_ADVENTURE)
+                pending_mode = onep_result;
+            else
+                pending_mode = GM_MENU;
+#else
+            pending_mode = GM_MENU;
+#endif
             if (log) {
-                fprintf(log, "GAME_MODE_RETURN mode=%d result=%d destination=GM_MENU\n",
-                        pending_mode, onep_result);
+                fprintf(log, "GAME_MODE_RETURN mode=%d result=%d destination=%d\n",
+                        completed_mode, onep_result, pending_mode);
                 fflush(log);
             }
-            pending_mode = GM_MENU;
         }
     }
     if (log) {

@@ -1,7 +1,9 @@
 #include "onep_boot_vita.h"
 #include "mode_route_vita.h"
 #include <melee/gm/gmvsmelee.h>
+#include <melee/gm/gmvs.h>
 #include "css_assets_vita.h"
+#include "sss_assets_vita.h"
 #include "frame_telemetry_vita.h"
 #include "gx_capture_vita.h"
 #include "gx_replay_vita.h"
@@ -21,9 +23,11 @@
 #include <melee/lb/lb_013B.h>
 #include <melee/lb/lbaudio_ax.h>
 #include <melee/mn/mncharsel.h>
+#include <melee/mn/mnstagesel.h>
 #include <melee/mn/types.h>
 #include <sysdolphin/baselib/controller.h>
 #include <sysdolphin/baselib/gobj.h>
+#include <sysdolphin/baselib/initialize.h>
 #include <sysdolphin/baselib/sislib.h>
 #include <psp2/ctrl.h>
 #include <stdint.h>
@@ -34,13 +38,157 @@ extern StartMeleeData gmClassic_80472AF8;
 extern MatchExitInfo gmClassic_8047086C;
 extern GameModeState gm_Mode_Classic_States[];
 
+static int capture_live_sss(MvGxReplay *replay, MvGxCaptureStats *stats,
+                            const MvCamera *camera, FILE *log, int initialize)
+{
+    unsigned roots = 0;
+    memset(stats, 0, sizeof(*stats));
+    for (unsigned p = 0; p <= HSD_GObjLibInitData.p_link_max; ++p) {
+        HSD_GObj *gobj = HSD_GObjPLinkHead[p];
+        for (; gobj; gobj = gobj->next) {
+            if (gobj->obj_kind != HSD_GObj_JObjKind || !gobj->hsd_obj) continue;
+            int r = mv_hsd_gx_capture_runtime((HSD_JObj *)gobj->hsd_obj,
+                                              roots == 0, initialize ? 0 : 1, stats);
+            if (r) {
+                if (log) {
+                    fprintf(log,
+                            "GAME_SSS_CAPTURE_ROOT_FAIL plink=%u gxlink=%u root=%u code=%d\n",
+                            p, gobj->gx_link, roots, r);
+                    fflush(log);
+                }
+                return -10 - r;
+            }
+            ++roots;
+        }
+    }
+    if (!roots) return -2;
+    int sis_count = HSD_SisLib_VitaCaptureAll();
+    if (mv_gx_capture_stats(stats)) return -4;
+    if (initialize) {
+        int r = mv_gx_replay_init_relaxed_from(replay, camera, log, 0);
+        if (r) return -3;
+            if (log) {
+            fprintf(log,
+                    "GAME_SSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u renderer=%s\n",
+                    roots, sis_count, stats->commands, stats->triangles, MV_RENDER_NAME);
+            fflush(log);
+        }
+    } else {
+        replay->relaxed_from_command = 0;
+    }
+    return 0;
+}
+
+static int run_route_sss(FILE *log, const MvModeRoute *route, int mode)
+{
+    if (!route || !route->sss_enter || !route->sss_exit || !route->sss_data)
+        return -60;
+    if (mv_render_init() < 0) return -61;
+
+    lbDvd_80018CF4(lbDvdPreload_3);
+    mv_scene_vita_objects_init();
+    gm_801A3E88();
+    mv_scene_vita_reset();
+    mv_sss_vita_set_log(log);
+
+    GameModeState sss_state = {0};
+    sss_state.id = route->sss_state_id;
+    sss_state.info.scene_kind = GS_SSS;
+    sss_state.info.enter_data = route->sss_data;
+    sss_state.info.exit_data = route->sss_data;
+    gm_SetGameModeStateId(sss_state.id);
+    route->sss_enter(&sss_state);
+
+    if (log) {
+        fprintf(log,
+                "GAME_SSS_ENTER mode=%s(%d) state=%u source=original_mode_callback+mnStageSel\n",
+                route->name, mode, (unsigned)sss_state.id);
+        fflush(log);
+    }
+    mnStageSel_Scene_OnEnter(route->sss_data);
+    const MvCamera *camera = mv_sss_vita_camera();
+    if (!camera) {
+        mv_scene_vita_objects_close();
+        mv_render_fini();
+        mv_sss_vita_release();
+        mv_sss_vita_set_log(NULL);
+        return -62;
+    }
+
+    MvGxReplay replay;
+    memset(&replay, 0, sizeof(replay));
+    MvGxCaptureStats capture = {0};
+    int result = capture_live_sss(&replay, &capture, camera, log, 1);
+    if (result) {
+        mv_scene_vita_objects_close();
+        mv_render_fini();
+        mv_sss_vita_release();
+        mv_sss_vita_set_log(NULL);
+        return -63 + result;
+    }
+
+    MvFrameTelemetry timing;
+    mv_frame_telemetry_init(&timing, log, "STAGE_SELECT");
+    unsigned frames = 0;
+    while (!mv_scene_vita_done()) {
+        uint64_t frame0 = mv_frame_time_us();
+        HSD_PadRenewStatus();
+        gm_EvaluateAllControllerInputs();
+        mnStageSel_Scene_OnFrame();
+        HSD_GObj_RunProcs();
+        if (mv_scene_vita_done()) break;
+
+        uint64_t cap0 = mv_frame_time_us();
+        result = capture_live_sss(&replay, &capture, camera, log, 0);
+        uint64_t cap1 = mv_frame_time_us();
+        if (result) break;
+        uint64_t replay0 = mv_frame_time_us();
+        mv_render_begin();
+        mv_gx_replay_draw(&replay, camera);
+        uint64_t replay1 = mv_frame_time_us();
+        mv_render_present();
+        uint64_t present1 = mv_frame_time_us();
+        ++frames;
+        mv_frame_telemetry_record(&timing, present1 - frame0, cap1 - cap0,
+                                  replay1 - replay0, present1 - replay1);
+        mv_frame_telemetry_flush(&timing, 0);
+        SceCtrlData pad = {0};
+        if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0 &&
+            (pad.buttons & (SCE_CTRL_SELECT | SCE_CTRL_START)) ==
+                (SCE_CTRL_SELECT | SCE_CTRL_START)) {
+            result = -99;
+            break;
+        }
+    }
+
+    mnStageSel_Scene_OnExit(NULL);
+    route->sss_exit(&sss_state);
+    SSSData *sss = (SSSData *)route->sss_data;
+    if (log) {
+        fprintf(log,
+                "GAME_SSS_EXIT mode=%s(%d) frames=%u start_game=%u stkind=%u result=%d state_exit=original\n",
+                route->name, mode, frames, (unsigned)sss->start_game,
+                (unsigned)sss->vs.start.rules.stkind, result);
+        fflush(log);
+    }
+    mv_frame_telemetry_flush(&timing, 1);
+    mv_gx_replay_close(&replay);
+    mv_render_fini();
+    mv_scene_vita_objects_close();
+    mv_sss_vita_release();
+    mv_sss_vita_set_log(NULL);
+
+    if (result) return result;
+    return sss->start_game ? 0 : 1;
+}
+
 static int capture_live_css(MvGxReplay *replay, MvGxCaptureStats *stats,
                             const MvCamera *camera, FILE *log, int initialize)
 {
     unsigned roots = 0;
     memset(stats, 0, sizeof(*stats));
     for (unsigned p = 0; p <= HSD_GObjLibInitData.p_link_max; ++p) {
-        HSD_GObj *gobj = ((HSD_GObj **)HSD_GObj_Entities)[p];
+        HSD_GObj *gobj = HSD_GObjPLinkHead[p];
         for (; gobj; gobj = gobj->next) {
             if (gobj->obj_kind != HSD_GObj_JObjKind || !gobj->hsd_obj) continue;
             int r = mv_hsd_gx_capture_runtime((HSD_JObj *)gobj->hsd_obj,
@@ -53,11 +201,13 @@ static int capture_live_css(MvGxReplay *replay, MvGxCaptureStats *stats,
         }
     }
     if (!roots) return -2;
+    int sis_count = HSD_SisLib_VitaCaptureAll();
+    if (mv_gx_capture_stats(stats)) return -4;
     if (initialize) {
         int r = mv_gx_replay_init_relaxed_from(replay, camera, log, 0);
         if (r) return -3;
         replay->relaxed_from_command = 0;
-        if (log) { fprintf(log, "GAME_CSS_CAPTURE_INIT_PASS roots=%u commands=%u triangles=%u renderer=%s\n", roots, stats->commands, stats->triangles, MV_RENDER_NAME); fflush(log); }
+        if (log) { fprintf(log, "GAME_CSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u renderer=%s\n", roots, sis_count, stats->commands, stats->triangles, MV_RENDER_NAME); fflush(log); }
     } else replay->relaxed_from_command = 0;
     return 0;
 }
@@ -85,10 +235,10 @@ int mv_onep_mode_run(FILE *log, int mode)
     mv_scene_vita_reset();
     mv_css_vita_set_log(log);
 
-    CSSData *css = route ? &gmVsMelee_CssData : &gmClassic_80470708;
+    CSSData *css = route ? (CSSData *)route->css_data : &gmClassic_80470708;
     GameModeState css_state;
     memset(&css_state, 0, sizeof(css_state));
-    css_state.id = 0x70;
+    css_state.id = route ? route->css_state_id : 0x70;
     css_state.info.scene_kind = GS_CSS;
     css_state.info.enter_data = css;
     css_state.info.exit_data = css;
@@ -112,7 +262,16 @@ int mv_onep_mode_run(FILE *log, int mode)
     lbAudioAx_VitaSfxStateTrace("1P_AFTER_MODE_ONLOAD");
 
     const u8 match_type = css->match_type;
-    if (log) { fprintf(log, "GAME_1P_CSS_ENTER mode=%d match_type=%u port=%u source=original_mode_onload+css_state_onenter\n", mode, match_type, (unsigned)gm_801677F0()); fflush(log); }
+    if (log) {
+        HSD_GObj **heads = HSD_GObjPLinkHead;
+        fprintf(log, "GAME_1P_CSS_ENTER mode=%d match_type=%u port=%u source=original_mode_onload+css_state_onenter\n",
+                mode, match_type, (unsigned)gm_801677F0());
+        fprintf(log, "GAME_CSS_GOBJ_HEAP_SYNC generation=%u entities=%p p3=%p low3=%p\n",
+                (unsigned)HSD_GetHeapGeneration(), (void *)HSD_GObjPLinkHead,
+                heads ? (void *)heads[3] : NULL,
+                plinklow_gobjs ? (void *)plinklow_gobjs[3] : NULL);
+        fflush(log);
+    }
     mnCharSel_Scene_OnEnter(css);
     const MvCamera *camera = mv_css_vita_camera();
     if (!camera) { mv_render_fini(); mv_css_vita_release(); return -3; }
@@ -129,7 +288,7 @@ int mv_onep_mode_run(FILE *log, int mode)
         HSD_PadRenewStatus();
         gm_EvaluateAllControllerInputs();
         mnCharSel_Scene_OnFrame();
-        HSD_GObj_80390CFC();
+        HSD_GObj_RunProcs();
         if (mv_scene_vita_done()) break;
 
         uint64_t cap0 = mv_frame_time_us();
@@ -168,15 +327,84 @@ int mv_onep_mode_run(FILE *log, int mode)
     mv_css_vita_set_log(NULL);
 
     if (result) return result;
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    if (!route && (mode == GM_CLASSIC || mode == GM_ADVENTURE)) {
+        if (log) {
+            fprintf(log,
+                    "GAME_1P_RETAIL_CONTINUE_BEGIN mode=%s(%d) css_pending=%u state=%u source=gm_1A3F.c\n",
+                    mode == GM_CLASSIC ? "CLASSIC" : "ADVENTURE", mode,
+                    (unsigned)css->pending_scene_change,
+                    (unsigned)gm_GetCurrentSceneIndex());
+            fflush(log);
+        }
+        int next_mode = mv_gm_vita_continue_mode(mode);
+        if (log) {
+            fprintf(log,
+                    "GAME_1P_RETAIL_CONTINUE_RETURN mode=%s(%d) next_mode=%d source=gm_1A3F.c\n",
+                    mode == GM_CLASSIC ? "CLASSIC" : "ADVENTURE", mode,
+                    next_mode);
+            fflush(log);
+        }
+        if (next_mode < 0 || next_mode >= GM_COUNT) return -6;
+        return next_mode;
+    }
+#endif
     if (css->pending_scene_change == CSSPendingSceneChange_2) return 1;
     if (route) {
-        GameModeState sss_state = {0};
-        sss_state.info.scene_kind = GS_SSS;
-        sss_state.info.enter_data = &gmVsMelee_SssData;
-        sss_state.info.exit_data = &gmVsMelee_SssData;
-        route->sss_enter(&sss_state);
-        if (log) { fprintf(log, "GAME_SSS_PREPARED mode=%d source=original_mode_callback\n", mode); fflush(log); }
-        return -80; /* Replaced by the native stage scene once its assets load. */
+        int sss_result = run_route_sss(log, route, mode);
+        if (sss_result != 0) return sss_result;
+
+        GameModeState vs_state = {0};
+        vs_state.id = route->vs_state_id;
+        vs_state.info.scene_kind = route->vs_scene_kind;
+        vs_state.info.enter_data = route->vs_enter_data;
+        vs_state.info.exit_data = route->vs_exit_data;
+
+        /* Match the retail gm_801A4014 ordering: preload the new state first,
+         * then run the mode-state on_enter, then initialize the GameScene and
+         * finally enter GS_VS/GS_TRAINING. */
+        lbDvd_80018CF4(lbDvdPreload_3);
+        mv_scene_vita_sis_init(0x4800);
+        gm_SetGameModeStateId(vs_state.id);
+        route->vs_enter(&vs_state);
+        StartMeleeData *start = (StartMeleeData *)route->vs_enter_data;
+        if (log) {
+            fprintf(log,
+                    "GAME_MODE_MATCH_PREPARED mode=%s(%d) state=%u scene=%u stkind=%u source=original_vs_state_onenter\n",
+                    route->name, mode, (unsigned)vs_state.id,
+                    (unsigned)vs_state.info.scene_kind,
+                    (unsigned)start->rules.stkind);
+            fflush(log);
+        }
+
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+        mv_scene_vita_objects_init();
+        gm_801A3E88();
+        mv_scene_vita_reset();
+        lb_80014534();
+        if (route->vs_scene_kind == GS_TRAINING)
+            gm_Scene_Training_OnEnter(route->vs_enter_data);
+        else
+            gm_Scene_Vs_OnEnter(route->vs_enter_data);
+        if (log) {
+            fprintf(log,
+                    "GAMEPLAY_SCENE_ENTER_PASS mode=%s(%d) scene=%s stkind=%u source=retail_gmvs\n",
+                    route->name, mode,
+                    route->vs_scene_kind == GS_TRAINING ? "GS_TRAINING" : "GS_VS",
+                    (unsigned)start->rules.stkind);
+            fflush(log);
+        }
+#else
+        if (log) {
+            fprintf(log,
+                    "GAMEPLAY_SCENE_FRONTIER_READY mode=%s(%d) scene=%s stkind=%u full_link=disabled source=original_vs_state_onenter\n",
+                    route->name, mode,
+                    route->vs_scene_kind == GS_TRAINING ? "GS_TRAINING" : "GS_VS",
+                    (unsigned)start->rules.stkind);
+            fflush(log);
+        }
+#endif
+        return 0;
     }
     if (ckind == ChKind_None) return -4;
 

@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <placeholder.h>
+#include <string.h>
 
 #include "aobj.h"
 #include "class.h"
@@ -291,12 +292,8 @@ static bool setupNormalCamera(HSD_CObj* cobj)
 
 static bool setupTopHalfCamera(HSD_CObj* cobj)
 {
-    int unused[3];
     GXProjectionType projection_type;
-    /// @todo Should be an `Mtx44` like the other three: `makeProjectionMtx`
-    /// writes 4 rows. Changing it here does not match, so the extra row
-    /// currently lands in `unused` above.
-    Mtx p;
+    Mtx44 p;
 
     f32 h_scale;
     f32 t;
@@ -1271,9 +1268,123 @@ static inline void CObjResetFlags(HSD_CObj* cobj, u32 flags)
     cobj->flags = (cobj->flags & 0xC0000000) | flags;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+static u16 CObjVitaSwap16(u16 value)
+{
+    return (u16)((value >> 8) | (value << 8));
+}
+
+static u32 CObjVitaSwap32(u32 value)
+{
+    return ((value & 0x000000FFu) << 24) |
+           ((value & 0x0000FF00u) << 8) |
+           ((value & 0x00FF0000u) >> 8) |
+           ((value & 0xFF000000u) >> 24);
+}
+
+static f32 CObjVitaSwapFloat(f32 value)
+{
+    u32 bits;
+    memcpy(&bits, &value, sizeof(bits));
+    bits = CObjVitaSwap32(bits);
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void CObjVitaNormalizeWObj(HSD_WObjDesc* out,
+                                  const HSD_WObjDesc* in)
+{
+    *out = *in;
+    out->pos.x = CObjVitaSwapFloat(in->pos.x);
+    out->pos.y = CObjVitaSwapFloat(in->pos.y);
+    out->pos.z = CObjVitaSwapFloat(in->pos.z);
+}
+
+/* HSD_ArchiveParse relocates pointer fields in retail DATs, but the scalar
+ * payload remains GameCube big-endian.  Native menu converters already feed
+ * little-endian descriptors, so only normalize when projection_type has the
+ * characteristic byte-swapped 0x0100/0x0200/0x0300 representation. */
+static int CObjVitaNormalizeDesc(HSD_CObjDesc* out, HSD_CObjDesc* in,
+                                 HSD_WObjDesc* eye, HSD_WObjDesc* interest,
+                                 Vec3* up)
+{
+    u16 projection = in->common.projection_type;
+    if (projection >= PROJ_PERSPECTIVE && projection <= PROJ_ORTHO)
+        return 0;
+
+    projection = CObjVitaSwap16(projection);
+    if (projection < PROJ_PERSPECTIVE || projection > PROJ_ORTHO)
+        return 0;
+
+    *out = *in;
+    out->common.flags = CObjVitaSwap16(in->common.flags);
+    out->common.projection_type = projection;
+    out->common.viewport.xmin = (s16)CObjVitaSwap16((u16)in->common.viewport.xmin);
+    out->common.viewport.xmax = (s16)CObjVitaSwap16((u16)in->common.viewport.xmax);
+    out->common.viewport.ymin = (s16)CObjVitaSwap16((u16)in->common.viewport.ymin);
+    out->common.viewport.ymax = (s16)CObjVitaSwap16((u16)in->common.viewport.ymax);
+    out->common.scissor.left = CObjVitaSwap16(in->common.scissor.left);
+    out->common.scissor.right = CObjVitaSwap16(in->common.scissor.right);
+    out->common.scissor.top = CObjVitaSwap16(in->common.scissor.top);
+    out->common.scissor.bottom = CObjVitaSwap16(in->common.scissor.bottom);
+    out->common.roll = CObjVitaSwapFloat(in->common.roll);
+    out->common.nnear = CObjVitaSwapFloat(in->common.nnear);
+    out->common.ffar = CObjVitaSwapFloat(in->common.ffar);
+
+    if (in->common.eyepos != NULL) {
+        CObjVitaNormalizeWObj(eye, in->common.eyepos);
+        out->common.eyepos = eye;
+    }
+    if (in->common.interest != NULL) {
+        CObjVitaNormalizeWObj(interest, in->common.interest);
+        out->common.interest = interest;
+    }
+    if (in->common.up_vector != NULL) {
+        up->x = CObjVitaSwapFloat(in->common.up_vector->x);
+        up->y = CObjVitaSwapFloat(in->common.up_vector->y);
+        up->z = CObjVitaSwapFloat(in->common.up_vector->z);
+        out->common.up_vector = up;
+    }
+
+    switch (projection) {
+    case PROJ_PERSPECTIVE:
+        out->perspective.fov = CObjVitaSwapFloat(in->perspective.fov);
+        out->perspective.aspect = CObjVitaSwapFloat(in->perspective.aspect);
+        break;
+    case PROJ_FRUSTUM:
+        out->frustum.top = CObjVitaSwapFloat(in->frustum.top);
+        out->frustum.bottom = CObjVitaSwapFloat(in->frustum.bottom);
+        out->frustum.left = CObjVitaSwapFloat(in->frustum.left);
+        out->frustum.right = CObjVitaSwapFloat(in->frustum.right);
+        break;
+    case PROJ_ORTHO:
+        out->ortho.top = CObjVitaSwapFloat(in->ortho.top);
+        out->ortho.bottom = CObjVitaSwapFloat(in->ortho.bottom);
+        out->ortho.left = CObjVitaSwapFloat(in->ortho.left);
+        out->ortho.right = CObjVitaSwapFloat(in->ortho.right);
+        break;
+    }
+    return 1;
+}
+#endif
+
 static int CObjLoad(HSD_CObj* cobj, HSD_CObjDesc* desc)
 {
     static Vec3 up = { 0.0f, 1.0f, 0.0f };
+#ifdef MELEE_VITA_PLATFORM
+    HSD_CObjDesc vita_desc;
+    HSD_WObjDesc vita_eye, vita_interest;
+    Vec3 vita_up;
+    if (CObjVitaNormalizeDesc(&vita_desc, desc, &vita_eye, &vita_interest,
+                              &vita_up)) {
+        desc = &vita_desc;
+        OSReport("VITA_COBJ_NATIVE_PASS projection=%u viewport=%d,%d,%d,%d near=%f far=%f\n",
+                 desc->common.projection_type, desc->common.viewport.xmin,
+                 desc->common.viewport.xmax, desc->common.viewport.ymin,
+                 desc->common.viewport.ymax, desc->common.nnear,
+                 desc->common.ffar);
+    }
+#endif
     cobj->flags = desc->common.flags;
     CObjResetFlags(cobj, desc->common.flags);
     HSD_CObjSetViewport(cobj, &desc->common.viewport);

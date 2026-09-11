@@ -5,8 +5,8 @@
 #include <math.h>
 #include <string.h>
 
-#define MV_CAPTURE_MAX_COMMANDS 512u
-#define MV_CAPTURE_MAX_VERTICES 8192u
+#define MV_CAPTURE_MAX_COMMANDS 2048u
+#define MV_CAPTURE_MAX_VERTICES 32768u
 #define MV_CAPTURE_MATRIX_SLOTS 10u
 
 typedef struct {
@@ -32,6 +32,25 @@ static float tex_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
 static uint32_t current_mtx, cull_mode;
 static MvGxCaptureStats stats;
 static MvGxMaterialState material_state;
+static float capture_projection[4][4];
+static float capture_viewport[6];
+static uint32_t capture_projection_type;
+static uint8_t capture_projection_valid;
+static uint8_t capture_viewport_valid;
+
+typedef struct {
+    uint8_t active;
+    uint8_t primitive;
+    uint8_t vtxfmt;
+    uint8_t reserved;
+    uint16_t expected_vertices;
+    uint16_t emitted_vertices;
+    uint16_t vertex_bytes;
+    uint16_t buffered_bytes;
+    uint8_t buffer[256];
+} MvImmediateState;
+
+static MvImmediateState immediate;
 
 static uint16_t read_be16(const uint8_t *p)
 {
@@ -224,6 +243,23 @@ static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vt
     return (out->present & 1u) ? 0 : -1;
 }
 
+void mv_gx_capture_set_projection(const float matrix[4][4], uint32_t type)
+{
+    if (!matrix) { capture_projection_valid = 0; return; }
+    memcpy(capture_projection, matrix, sizeof(capture_projection));
+    capture_projection_type = type;
+    capture_projection_valid = 1;
+}
+
+void mv_gx_capture_set_viewport(float x, float y, float w, float h,
+                                float near_z, float far_z)
+{
+    capture_viewport[0] = x; capture_viewport[1] = y;
+    capture_viewport[2] = w; capture_viewport[3] = h;
+    capture_viewport[4] = near_z; capture_viewport[5] = far_z;
+    capture_viewport_valid = w > 0.0f && h > 0.0f;
+}
+
 void mv_gx_capture_reset(void)
 {
     memset(&stats, 0, sizeof(stats));
@@ -236,6 +272,12 @@ void mv_gx_capture_reset(void)
     memset(nrm_mtx, 0, sizeof(nrm_mtx));
     memset(tex_mtx, 0, sizeof(tex_mtx));
     memset(&material_state, 0, sizeof(material_state));
+    memset(capture_projection, 0, sizeof(capture_projection));
+    memset(capture_viewport, 0, sizeof(capture_viewport));
+    capture_projection_type = 0;
+    capture_projection_valid = 0;
+    capture_viewport_valid = 0;
+    memset(&immediate, 0, sizeof(immediate));
     material_state.material_rgba = 0xffffffffu;
     current_mtx = GX_PNMTX0;
     cull_mode = GX_CULL_NONE;
@@ -290,6 +332,11 @@ void mv_gx_capture_set_material(const MvGxMaterialState *material)
     }
 }
 
+MvGxMaterialState *mv_gx_capture_material_state(void)
+{
+    return &material_state;
+}
+
 const MvGxCaptureCommand *mv_gx_capture_commands(uint32_t *count)
 {
     if (count) *count = stats.commands;
@@ -304,21 +351,31 @@ const MvGxCaptureVertex *mv_gx_capture_vertices(uint32_t *count)
 
 int mv_gx_material_custom_tev_cpu_bakeable(const MvGxMaterialState *material)
 {
-    if (!material || !material->tev_valid || material->tev_active == 0) return 1;
+    if (!material || !material->tev_valid) return 1;
+    const uint32_t active = material->tev_active;
+    const int color_active = (active & 0x40000000u) != 0;
+    const int alpha_active = (active & 0x80000000u) != 0;
+    if (!color_active && !alpha_active) return 1;
 
-    /* MenMainBack's active custom stages all implement the same exact HSD
-     * color generator: lerp(TEV0.rgb, KONST.rgb, texture.rgb). The selectors
-     * below are the HSD extension tokens for TEV0/KONST plus GX_CC_TEXC/ZERO.
-     * Keep this matcher intentionally narrow; any other TEV graph remains
-     * fail-closed until the shader backend exists. */
-    static const uint8_t expected_ops[16] = {
-        GX_TEV_ADD, GX_TEV_ADD, GX_TB_ZERO, GX_TB_ZERO,
-        GX_CS_SCALE_1, GX_CS_SCALE_1, GX_ENABLE, GX_ENABLE,
-        0x85, 0x80, GX_CC_TEXC, GX_CC_ZERO,
-        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO,
-    };
-    if (material->tev_active != 0x40000077u) return 0;
-    return memcmp(material->tev_op, expected_ops, sizeof(expected_ops)) == 0;
+    const uint8_t *op = material->tev_op;
+    /* All custom single-texture stages in MnSlChr use HSD's generated
+     * TEV0/KONST interpolation graph.  Validate every field we evaluate so
+     * unrelated gameplay TEV graphs remain fail-closed. */
+    if (color_active) {
+        if (op[0] != GX_TEV_ADD || op[2] != GX_TB_ZERO ||
+            op[4] != GX_CS_SCALE_1 || op[6] != GX_ENABLE ||
+            op[8] != 0x85 || op[9] != 0x80 ||
+            op[10] != GX_CC_TEXC || op[11] != GX_CC_ZERO)
+            return 0;
+    }
+    if (alpha_active) {
+        if (op[1] != GX_TEV_ADD || op[3] != GX_TB_ZERO ||
+            op[5] > GX_CS_DIVIDE_2 || op[7] != GX_ENABLE ||
+            op[12] != 0x44 || op[13] != 0x43 ||
+            op[14] != GX_CA_TEXA || op[15] != GX_CA_ZERO)
+            return 0;
+    }
+    return 1;
 }
 
 static int uv_mtx_identity(const float m[2][3], uint8_t valid)
@@ -583,12 +640,121 @@ void GXSetVtxAttrFmt(GXVtxFmt vtxfmt, GXAttr attr, GXCompCnt count,
 
 void GXSetCurrentMtx(u32 id) { current_mtx = id; }
 
+static size_t immediate_vertex_bytes(GXVtxFmt vtxfmt)
+{
+    size_t total = 0;
+    if ((unsigned)vtxfmt >= GX_MAX_VTXFMT) return 0;
+    for (unsigned attr_index = GX_VA_PNMTXIDX; attr_index <= GX_VA_TEX7; ++attr_index) {
+        GXAttrType type = attr_types[attr_index];
+        if (type == GX_NONE) continue;
+        const MvAttrFormat *fmt = &formats[vtxfmt][attr_index];
+        if (type == GX_DIRECT) {
+            size_t bytes = element_size((GXAttr)attr_index, fmt);
+            if (!bytes) return 0;
+            total += bytes;
+        } else if (type == GX_INDEX8 || type == GX_INDEX16) {
+            unsigned index_count = (attr_index == GX_VA_NRM && fmt->count == GX_NRM_NBT3) ? 3u : 1u;
+            total += (type == GX_INDEX8 ? 1u : 2u) * index_count;
+        } else {
+            return 0;
+        }
+    }
+    return total;
+}
+
+static void capture_snapshot_camera(MvGxCaptureCommand *command)
+{
+    if (capture_projection_valid) {
+        memcpy(command->projection, capture_projection, sizeof(command->projection));
+        command->projection_type = capture_projection_type;
+        command->projection_valid = 1;
+    }
+    if (capture_viewport_valid) {
+        memcpy(command->viewport, capture_viewport, sizeof(command->viewport));
+        command->viewport_valid = 1;
+    }
+}
+
 static int matrix_slot(u32 id)
 {
     if (id % 3u) return -1;
     unsigned slot = id / 3u;
     return slot < MV_CAPTURE_MATRIX_SLOTS ? (int)slot : -1;
 }
+
+static void capture_apply_vertex_matrices(MvGxCaptureCommand *command, uint32_t first, uint16_t count)
+{
+    if (!(command->attr_mask & (1u << GX_VA_PNMTXIDX))) return;
+    for (uint16_t i = 0; i < count; ++i) {
+        MvGxCaptureVertex *vertex = &vertices[first + i];
+        int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
+        if (vertex_slot < 0) { ++stats.errors; return; }
+        float x = vertex->position[0], y = vertex->position[1], z = vertex->position[2];
+        vertex->position[0] = pos_mtx[vertex_slot][0][0] * x + pos_mtx[vertex_slot][0][1] * y + pos_mtx[vertex_slot][0][2] * z + pos_mtx[vertex_slot][0][3];
+        vertex->position[1] = pos_mtx[vertex_slot][1][0] * x + pos_mtx[vertex_slot][1][1] * y + pos_mtx[vertex_slot][1][2] * z + pos_mtx[vertex_slot][1][3];
+        vertex->position[2] = pos_mtx[vertex_slot][2][0] * x + pos_mtx[vertex_slot][2][1] * y + pos_mtx[vertex_slot][2][2] * z + pos_mtx[vertex_slot][2][3];
+    }
+    memset(command->pos_mtx, 0, sizeof(command->pos_mtx));
+    command->pos_mtx[0][0] = 1.0f;
+    command->pos_mtx[1][1] = 1.0f;
+    command->pos_mtx[2][2] = 1.0f;
+}
+
+static void immediate_finish(void)
+{
+    MvGxCaptureCommand *command = &commands[stats.commands];
+    capture_apply_vertex_matrices(command, stats.vertices, immediate.expected_vertices);
+    if (stats.errors) { immediate.active = 0; return; }
+    ++stats.commands;
+    stats.vertices += immediate.expected_vertices;
+    stats.triangles += command->triangle_count;
+    if (command->primitive == GX_LINES || command->primitive == GX_LINESTRIP || command->primitive == GX_POINTS) ++stats.line_point_commands;
+    immediate.active = 0;
+}
+
+static void immediate_write(const uint8_t *bytes, size_t count)
+{
+    if (!immediate.active || stats.errors) return;
+    while (count--) {
+        if (immediate.buffered_bytes >= immediate.vertex_bytes || immediate.buffered_bytes >= sizeof(immediate.buffer)) { ++stats.errors; immediate.active = 0; return; }
+        immediate.buffer[immediate.buffered_bytes++] = *bytes++;
+        if (immediate.buffered_bytes == immediate.vertex_bytes) {
+            const uint8_t *cursor = immediate.buffer;
+            const uint8_t *end = cursor + immediate.vertex_bytes;
+            MvGxCaptureCommand *command = &commands[stats.commands];
+            if (immediate.emitted_vertices >= immediate.expected_vertices || decode_vertex(&cursor, end, (GXVtxFmt)immediate.vtxfmt, &vertices[stats.vertices + immediate.emitted_vertices], &command->attr_mask) || cursor != end) { ++stats.errors; immediate.active = 0; return; }
+            ++immediate.emitted_vertices;
+            immediate.buffered_bytes = 0;
+            if (immediate.emitted_vertices == immediate.expected_vertices) immediate_finish();
+        }
+    }
+}
+
+void GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts)
+{
+    uint32_t triangles = primitive_triangles((uint8_t)type, nverts);
+    size_t bytes = immediate_vertex_bytes(vtxfmt);
+    if (immediate.active || !nverts || !bytes || bytes > sizeof(immediate.buffer) || triangles == UINT32_MAX || stats.commands >= MV_CAPTURE_MAX_COMMANDS || stats.vertices + nverts > MV_CAPTURE_MAX_VERTICES) { ++stats.errors; immediate.active = 0; return; }
+    MvGxCaptureCommand *command = &commands[stats.commands];
+    memset(command, 0, sizeof(*command));
+    command->first_vertex = stats.vertices; command->vertex_count = nverts; command->triangle_count = triangles;
+    command->primitive = (uint8_t)type; command->vtxfmt = (uint8_t)vtxfmt; command->current_mtx = current_mtx; command->cull_mode = cull_mode; command->material = material_state;
+    capture_snapshot_camera(command);
+    int slot = matrix_slot(current_mtx);
+    if (slot >= 0) memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx));
+    memset(&immediate, 0, sizeof(immediate));
+    immediate.active = 1; immediate.primitive = (uint8_t)type; immediate.vtxfmt = (uint8_t)vtxfmt; immediate.expected_vertices = nverts; immediate.vertex_bytes = (uint16_t)bytes;
+}
+
+static void write_be16_value(uint16_t value) { uint8_t b[2] = {(uint8_t)(value >> 8), (uint8_t)value}; immediate_write(b, sizeof(b)); }
+static void write_be32_value(uint32_t value) { uint8_t b[4] = {(uint8_t)(value >> 24), (uint8_t)(value >> 16), (uint8_t)(value >> 8), (uint8_t)value}; immediate_write(b, sizeof(b)); }
+void GXVitaWrite_u8(u8 x) { immediate_write(&x, 1); }
+void GXVitaWrite_s8(s8 x) { uint8_t b = (uint8_t)x; immediate_write(&b, 1); }
+void GXVitaWrite_u16(u16 x) { write_be16_value(x); }
+void GXVitaWrite_s16(s16 x) { write_be16_value((uint16_t)x); }
+void GXVitaWrite_u32(u32 x) { write_be32_value(x); }
+void GXVitaWrite_s32(s32 x) { write_be32_value((uint32_t)x); }
+void GXVitaWrite_f32(f32 x) { uint32_t bits; memcpy(&bits, &x, sizeof(bits)); write_be32_value(bits); }
 
 void GXLoadPosMtxImm(f32 mtx[3][4], u32 id)
 {
@@ -664,6 +830,7 @@ void GXCallDisplayList(void *list, u32 nbytes)
         command->current_mtx = current_mtx;
         command->cull_mode = cull_mode;
         command->material = material_state;
+        capture_snapshot_camera(command);
         int slot = matrix_slot(current_mtx);
         if (slot >= 0) memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx));
         for (uint16_t i = 0; i < count; ++i) {

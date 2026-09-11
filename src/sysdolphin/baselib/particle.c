@@ -114,9 +114,20 @@ void hsd_803983A4(HSD_Generator* gen)
     }
 }
 
+#ifdef MELEE_VITA_PLATFORM
+static void psInitDataBankLocateVita(void* cmd_bank, void* tex_bank,
+                                     void* form_bank);
+#endif
+
 void psInitDataBankLoad(int bank, const int* cmdBank, const int* texBank,
                         const u32* ref, const int* formBank)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Async/preload callers may enter the load-only path.  Make it robust to
+     * either a raw GameCube bank or an already-located native bank. */
+    psInitDataBankLocateVita((void*) cmdBank, (void*) texBank,
+                             (void*) formBank);
+#endif
     u16 version;
 
     (void) hsd_804D0908;
@@ -156,9 +167,297 @@ void psInitDataBankLoad(int bank, const int* cmdBank, const int* texBank,
     }
 }
 
+#ifdef MELEE_VITA_PLATFORM
+#define MV_PS_BANK_MAX_OFFSET (32u * 1024u * 1024u)
+#define MV_PS_BANK_MAX_COMMANDS 8192u
+#define MV_PS_BANK_MAX_GROUPS 1024u
+#define MV_PS_BANK_MAX_TABLE_ENTRIES 8192u
+
+static u16 ps_vita_be16(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u16) ((u16) p[0] << 8 | p[1]);
+}
+
+static u32 ps_vita_be32(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u32) p[0] << 24 | (u32) p[1] << 16 | (u32) p[2] << 8 | p[3];
+}
+
+static u16 ps_vita_native16(const void* ptr)
+{
+    u16 value;
+    memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+static u32 ps_vita_native32(const void* ptr)
+{
+    u32 value;
+    memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+static void ps_vita_store16(void* ptr, u16 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static void ps_vita_store32(void* ptr, u32 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static int ps_vita_version_valid(u16 version)
+{
+    return version == 0 || (version >= 0x40 && version <= 0x43);
+}
+
+static void* ps_vita_reloc_offset(void* base, u32 offset, const char* label)
+{
+    if (offset == 0) {
+        return NULL;
+    }
+    if (offset >= MV_PS_BANK_MAX_OFFSET) {
+        OSReport("VITA_PS_BANK_FAIL reason=%s offset=%08x base=%p\n", label,
+                 offset, base);
+        OSPanic(__FILE__, __LINE__, "particle bank offset out of range");
+    }
+    return (u8*) base + offset;
+}
+
+static void ps_vita_convert_cmd_header(HSD_PSCmdList* cmd)
+{
+    u8* p = (u8*) cmd;
+    ps_vita_store16(p + 0x00, ps_vita_be16(p + 0x00));
+    ps_vita_store16(p + 0x02, ps_vita_be16(p + 0x02));
+    ps_vita_store16(p + 0x04, ps_vita_be16(p + 0x04));
+    ps_vita_store16(p + 0x06, ps_vita_be16(p + 0x06));
+    ps_vita_store32(p + 0x08, ps_vita_be32(p + 0x08));
+    for (u32 off = 0x0C; off <= 0x38; off += 4) {
+        ps_vita_store32(p + off, ps_vita_be32(p + off));
+    }
+    cmd->kind = (cmd->kind & 0xF1FFFFFFu) | 0x08000000u;
+}
+
+static int ps_vita_seen_pointer(u32* table, u32 count, u32 value)
+{
+    for (u32 i = 0; i < count; ++i) {
+        if (table[i] == value) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ps_vita_convert_cmd_bank(void* cmd_bank, u16 version,
+                                     u32* out_base, u32* out_count)
+{
+    u8* bytes = cmd_bank;
+    u32 base_id = 0;
+    u32 count;
+    u32 table_word;
+
+    ps_vita_store16(bytes + 0x00, version);
+    ps_vita_store16(bytes + 0x02, ps_vita_be16(bytes + 0x02));
+
+    if (version == 0) {
+        count = ps_vita_be32(bytes + 0x04);
+        table_word = 2;
+        ps_vita_store32(bytes + 0x04, count);
+    } else {
+        base_id = ps_vita_be32(bytes + 0x04);
+        count = ps_vita_be32(bytes + 0x08);
+        table_word = 3;
+        ps_vita_store32(bytes + 0x04, base_id);
+        ps_vita_store32(bytes + 0x08, count);
+    }
+
+    if (count > MV_PS_BANK_MAX_COMMANDS || base_id > 0x100000u ||
+        base_id + count < base_id) {
+        OSReport("VITA_PS_BANK_FAIL reason=cmd_count version=%u base=%u count=%u\n",
+                 version, base_id, count);
+        OSPanic(__FILE__, __LINE__, "particle command bank count out of range");
+    }
+
+    u32* table = (u32*) bytes + table_word;
+    for (u32 i = 0; i < count; ++i) {
+        u32 offset = ps_vita_be32(&table[i]);
+        HSD_PSCmdList* cmd = ps_vita_reloc_offset(cmd_bank, offset, "cmd");
+        u32 native_ptr = (u32) (uintptr_t) cmd;
+        int seen = cmd != NULL && ps_vita_seen_pointer(table, i, native_ptr);
+        ps_vita_store32(&table[i], native_ptr);
+        if (cmd != NULL && !seen) {
+            ps_vita_convert_cmd_header(cmd);
+        }
+    }
+
+    *out_base = base_id;
+    *out_count = count;
+}
+
+static u32 ps_vita_tex_pointer_count(const HSD_PSTexGroup* group)
+{
+    u32 count = group->num;
+    if (group->fmt >= GX_TF_C4 && group->fmt <= GX_TF_C14X2) {
+        if (group->palflag & 1) {
+            count += 1;
+        } else if (group->palnum != 0) {
+            count += group->palnum;
+        } else {
+            count *= 2;
+        }
+    }
+    return count;
+}
+
+static void ps_vita_convert_tex_group(void* tex_bank, HSD_PSTexGroup* group)
+{
+    u8* p = (u8*) group;
+    ps_vita_store32(p + 0x00, ps_vita_be32(p + 0x00));
+    ps_vita_store32(p + 0x04, ps_vita_be32(p + 0x04));
+    ps_vita_store32(p + 0x08, ps_vita_be32(p + 0x08));
+    ps_vita_store32(p + 0x0C, ps_vita_be32(p + 0x0C));
+    ps_vita_store32(p + 0x10, ps_vita_be32(p + 0x10));
+    ps_vita_store16(p + 0x14, ps_vita_be16(p + 0x14));
+    ps_vita_store16(p + 0x16, ps_vita_be16(p + 0x16));
+
+    u32 ptr_count = ps_vita_tex_pointer_count(group);
+    if (group->num > MV_PS_BANK_MAX_TABLE_ENTRIES ||
+        group->palnum > MV_PS_BANK_MAX_TABLE_ENTRIES ||
+        ptr_count > MV_PS_BANK_MAX_TABLE_ENTRIES || group->width > 8192u ||
+        group->height > 8192u) {
+        OSReport("VITA_PS_BANK_FAIL reason=tex_group num=%u fmt=%u palnum=%u size=%ux%u ptrs=%u\n",
+                 group->num, group->fmt, group->palnum, group->width,
+                 group->height, ptr_count);
+        OSPanic(__FILE__, __LINE__, "particle texture group out of range");
+    }
+
+    for (u32 i = 0; i < ptr_count; ++i) {
+        u32 offset = ps_vita_be32(&group->texTable[i]);
+        void* target = ps_vita_reloc_offset(tex_bank, offset, "texture");
+        u32 native_ptr = (u32) (uintptr_t) target;
+        ps_vita_store32(&group->texTable[i], native_ptr);
+    }
+}
+
+static u32 ps_vita_convert_tex_bank(void* tex_bank)
+{
+    u8* bytes = tex_bank;
+    u32 groups = ps_vita_be32(bytes);
+    if (groups > MV_PS_BANK_MAX_GROUPS) {
+        OSReport("VITA_PS_BANK_FAIL reason=tex_groups groups=%u base=%p\n",
+                 groups, tex_bank);
+        OSPanic(__FILE__, __LINE__, "particle texture group count out of range");
+    }
+    ps_vita_store32(bytes, groups);
+
+    u32* table = (u32*) bytes + 1;
+    for (u32 i = 0; i < groups; ++i) {
+        u32 offset = ps_vita_be32(&table[i]);
+        HSD_PSTexGroup* group = ps_vita_reloc_offset(tex_bank, offset, "tex_group");
+        u32 native_ptr = (u32) (uintptr_t) group;
+        int seen = group != NULL && ps_vita_seen_pointer(table, i, native_ptr);
+        ps_vita_store32(&table[i], native_ptr);
+        if (group != NULL && !seen) {
+            ps_vita_convert_tex_group(tex_bank, group);
+        }
+    }
+    return groups;
+}
+
+static void ps_vita_convert_form_bank(void* form_bank, u32 expected_groups)
+{
+    if (form_bank == NULL) {
+        return;
+    }
+    u8* bytes = form_bank;
+    u32 groups = ps_vita_be32(bytes);
+    if (groups != expected_groups || groups > MV_PS_BANK_MAX_GROUPS) {
+        OSReport("VITA_PS_BANK_FAIL reason=form_groups groups=%u expected=%u\n",
+                 groups, expected_groups);
+        OSPanic(__FILE__, __LINE__, "particle form group count mismatch");
+    }
+    ps_vita_store32(bytes, groups);
+
+    u32* table = (u32*) bytes + 1;
+    for (u32 i = 0; i < groups; ++i) {
+        u32 offset = ps_vita_be32(&table[i]);
+        HSD_PSFormGroup* group = ps_vita_reloc_offset(form_bank, offset, "form_group");
+        u32 native_ptr = (u32) (uintptr_t) group;
+        int seen = group != NULL && ps_vita_seen_pointer(table, i, native_ptr);
+        ps_vita_store32(&table[i], native_ptr);
+        if (group == NULL || seen) {
+            continue;
+        }
+        u32 count = ps_vita_be32(&group->num);
+        if (count > MV_PS_BANK_MAX_TABLE_ENTRIES) {
+            OSPanic(__FILE__, __LINE__, "particle form count out of range");
+        }
+        ps_vita_store32(&group->num, count);
+        for (u32 j = 0; j < count; ++j) {
+            u32 form_offset = ps_vita_be32(&group->formTable[j]);
+            void* target = ps_vita_reloc_offset(form_bank, form_offset, "form");
+            ps_vita_store32(&group->formTable[j], (u32) (uintptr_t) target);
+        }
+    }
+}
+
+static int ps_vita_bank_is_native(void* cmd_bank, void* tex_bank)
+{
+    u16 native_version = ps_vita_native16(cmd_bank);
+    u16 be_version = ps_vita_be16(cmd_bank);
+    if (native_version != 0 && ps_vita_version_valid(native_version) &&
+        !ps_vita_version_valid(be_version)) {
+        return 1;
+    }
+    if (native_version == 0 && be_version == 0) {
+        u32 native_groups = ps_vita_native32(tex_bank);
+        u32 be_groups = ps_vita_be32(tex_bank);
+        if (native_groups <= MV_PS_BANK_MAX_GROUPS &&
+            (be_groups > MV_PS_BANK_MAX_GROUPS || native_groups == 0)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void psInitDataBankLocateVita(void* cmd_bank, void* tex_bank,
+                                     void* form_bank)
+{
+    if (cmd_bank == NULL || tex_bank == NULL) {
+        OSPanic(__FILE__, __LINE__, "null particle bank");
+    }
+    if (ps_vita_bank_is_native(cmd_bank, tex_bank)) {
+        return;
+    }
+
+    u16 version = ps_vita_be16(cmd_bank);
+    if (!ps_vita_version_valid(version)) {
+        OSReport("VITA_PS_BANK_FAIL reason=version raw=%04x native=%04x cmd=%p tex=%p\n",
+                 version, ps_vita_native16(cmd_bank), cmd_bank, tex_bank);
+        OSPanic(__FILE__, __LINE__, "unsupported particle bank version");
+    }
+
+    u32 base_id = 0;
+    u32 command_count = 0;
+    ps_vita_convert_cmd_bank(cmd_bank, version, &base_id, &command_count);
+    u32 tex_groups = ps_vita_convert_tex_bank(tex_bank);
+    ps_vita_convert_form_bank(form_bank, tex_groups);
+
+    OSReport("VITA_PS_BANK_NATIVE_PASS cmd=%p tex=%p version=%u base=%u commands=%u tex_groups=%u form=%u\n",
+             cmd_bank, tex_bank, version, base_id, command_count, tex_groups,
+             form_bank != NULL);
+}
+#endif
+
 void psInitDataBankLocate(HSD_Archive* cmdBank, HSD_Archive* texBank,
                           int* formBank)
 {
+#ifdef MELEE_VITA_PLATFORM
+    psInitDataBankLocateVita(cmdBank, texBank, formBank);
+#else
     s32 num;
     s32* ptr;
     s32* group;
@@ -321,6 +620,7 @@ done_cmd:
             }
         }
     }
+#endif
 }
 
 void psInitDataBank(int bank, int* cmdBank, int* texBank, u32* ref,
@@ -631,10 +931,18 @@ s32 hsd_803991D8(HSD_Generator* gen, HSD_JObj* jobj, f32 force, f32 range)
 static inline void psReadFloat(u8** stream)
 {
     u8* p = *stream;
+#ifdef MELEE_VITA_PLATFORM
+    /* Particle bytecode keeps GameCube byte order.  Decode the IEEE-754 bits
+     * explicitly instead of copying BE bytes into a little-endian float. */
+    hsd_804D78D0 = (u32) p[0] << 24 | (u32) p[1] << 16 |
+                    (u32) p[2] << 8 | p[3];
+    p += 4;
+#else
     ((ParticleFloatBytes*) &hsd_804D78D0)->bytes[0] = *p++;
     ((ParticleFloatBytes*) &hsd_804D78D0)->bytes[1] = *p++;
     ((ParticleFloatBytes*) &hsd_804D78D0)->bytes[2] = *p++;
     ((ParticleFloatBytes*) &hsd_804D78D0)->bytes[3] = *p++;
+#endif
     *stream = p;
 }
 

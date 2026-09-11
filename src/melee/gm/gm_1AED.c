@@ -80,14 +80,14 @@ int gm_VitaMemCardSceneEnterProbe(u32 out[8])
     lb_8001C5A4();
     lb_8001D1F4();
     HSD_GObjLibInitDataType init = { 0 };
-    HSD_GObj_803912E0(&init);
+    HSD_GObjSetInitDefaults(&init);
     init.gproc_pri_max = 0x18;
-    HSD_GObj_80391304(&init);
+    HSD_GObjInit(&init);
     out[0] = 3;
     OSReport("GS_MEMCARD_BEGIN ON_ENTER\n");
     gm_Scene_MemCard_OnEnter(gm_VitaBootGetEnterData());
     out[0] = 7;
-    HSD_GObj** entities = (HSD_GObj**)HSD_GObj_Entities;
+    HSD_GObj** entities = HSD_GObjPLinkHead;
     HSD_GObj* camera = entities[21];
     if (!camera || camera->classifier != 20 || !camera->hsd_obj) return -2;
     HSD_CObj* cobj = camera->hsd_obj;
@@ -100,7 +100,7 @@ int gm_VitaMemCardSceneEnterProbe(u32 out[8])
     if (count != 2 || !entities[17] || !entities[17]->proc) return -4;
     /* Executes the registered original message-object process. This is not
      * gm_Scene_MemCard_OnFrame or the scene-manager main loop. */
-    HSD_GObj_80390CFC();
+    HSD_GObj_RunProcs();
     out[1] = count;
     out[2] = cobj->projection_type;
     out[3] = (u32)cobj->viewport.xmax;

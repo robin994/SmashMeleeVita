@@ -1,11 +1,13 @@
 VITASDK ?= /usr/local/vitasdk
 export VITASDK
 BUILD_DIR ?= build/vita
+FULL_GAMEPLAY ?= ON
+CMAKE_ARGS ?= -DMELEE_VITA_FULL_GAMEPLAY_SCENE=$(FULL_GAMEPLAY)
 .PHONY: all configure audit asset-check test-env arm-boot-check arm-check assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
-	cmake -S vita -B "$(BUILD_DIR)"
+	cmake -S vita -B "$(BUILD_DIR)" $(CMAKE_ARGS)
 audit:
 	python3 vita/tools/compile_audit.py
 asset-check:

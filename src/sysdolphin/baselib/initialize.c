@@ -40,6 +40,12 @@ static s32 init_done;
 static s32 shown;
 
 static volatile OSHeapHandle current_heap = -1;
+#ifdef MELEE_VITA_PLATFORM
+/* Direct Vita scene runners rebuild the HSD main heap at retail preload
+ * boundaries. Track that lifetime so heap-owned scene control structures can
+ * never be reused after OSCreateHeap replaces their backing storage. */
+static u32 vita_heap_generation;
+#endif
 static GXRenderModeObj* rmode = &GXNtsc480IntDf;
 static int current_z_fmt = GX_ZC_MID;
 static u32 iparam_fifo_size = HSD_DEFAULT_FIFO_SIZE;
@@ -207,6 +213,13 @@ OSHeapHandle HSD_GetHeap(void)
     return current_heap;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+u32 HSD_GetHeapGeneration(void)
+{
+    return vita_heap_generation;
+}
+#endif
+
 void HSD_SetHeap(OSHeapHandle handle)
 {
     current_heap = handle;
@@ -248,6 +261,9 @@ OSHeapHandle HSD_CreateMainHeap(void* lo, void* hi)
     HSD_ObjSetHeap((uintptr_t) hsd_heap_next_arena_hi -
                        (uintptr_t) hsd_heap_next_arena_lo,
                    NULL);
+#ifdef MELEE_VITA_PLATFORM
+    vita_heap_generation++;
+#endif
     return current_heap;
 }
 

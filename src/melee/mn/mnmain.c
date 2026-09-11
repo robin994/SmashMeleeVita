@@ -1684,13 +1684,16 @@ HSD_GObj* mn_8022BE34(void)
 static inline HSD_GObj* mn_8022BE34_OnEnter(Vec3* pos)
 {
 #ifdef MELEE_VITA_PLATFORM
-    /* The replay camera is the converted ScMenMain descriptor.  A GameCube
-     * camera GX callback is unnecessary and would execute EFB-only code. */
-    if (pos != NULL) {
-        pos->x = pos->y = pos->z = 0.0f;
-    }
-    mn_804D6BAC = NULL;
-    return NULL;
+    /* Keep a real HSD camera object for SIS text placement, but do not install
+     * the GameCube EFB render callback. The model layer still uses the
+     * converted replay camera while SIS capture borrows this native CObj. */
+    HSD_GObj* gobj = GObj_Create(2, 3, 0x80);
+    HSD_CObj* cobj = HSD_CObjLoadDesc(MenMain_cam);
+    mn_804D6BAC = gobj;
+    HSD_CObjGetEyePosition(cobj, pos);
+    HSD_GObjObject_80390A70(gobj, HSD_GObj_CameraKind, cobj);
+    gobj->gxlink_prios = 0x7F;
+    return gobj;
 #else
     HSD_GObj* gobj = GObj_Create(2, 3, 0x80);
     HSD_CObj* cobj;
@@ -1709,10 +1712,16 @@ static inline HSD_GObj* mn_8022BE34_OnEnter(Vec3* pos)
 void mn_8022BEDC(HSD_GObj* gobj)
 {
 #ifdef MELEE_VITA_PLATFORM
-    (void) gobj;
-    mn_804D6BB0 = NULL;
-    mn_804D6BB4 = 0;
-    mn_804D6BB5 = 0;
+    HSD_GObj* temp_r3;
+    HSD_CObj* cobj;
+
+    mn_804D6BB5 = HSD_SisLib_803A611C(0, gobj, 7, 8, 0x80, 5, 0x80, 0);
+    temp_r3 = GObj_Create(2, 3, 0x80);
+    mn_804D6BB0 = temp_r3;
+    cobj = HSD_CObjLoadDesc(MenMain_cam);
+    HSD_GObjObject_80390A70(temp_r3, HSD_GObj_CameraKind, cobj);
+    temp_r3->gxlink_prios = 0x80;
+    mn_804D6BB4 = HSD_SisLib_803A611C(0, temp_r3, 7, 8, 0x80, 7, 0x80, 0);
 #else
     HSD_GObj* temp_r3;
     HSD_CObj* cobj;
@@ -2838,6 +2847,13 @@ void mnMain_Scene_OnEnter(void* user_data)
                          "Vita MnMaAll native conversion failed\n");
         mn_804D6BB8 = mv_menu_vita_archive_proxy();
         OSReport("GAME_MENU_PROXY_READY source=MnMaAll.usd mode=lazy_native\n");
+        if (lbLang_IsSavedLanguageUS()) {
+            HSD_SisLib_803A62A0(0, "SdMenu.usd", "SIS_MenuData");
+        } else {
+            HSD_SisLib_803A62A0(0, "SdMenu.dat", "SIS_MenuData");
+        }
+        HSD_SisLib_803A62A0(3, "SdToy.dat", "SIS_ToyData");
+        OSReport("GAME_MENU_SIS_PASS file=SdMenu font=0 renderer=capture\n");
         gm_801BA8FC();
         OSReport("GAME_MENU_EVENT_TABLE_LOADED source=GmEvent.dat symbol=sqEventInitDataLevelTbl\n");
         OSReport("GAME_MENU_AUDIO_TABLE_BEGIN file=LbAd.dat "
@@ -3043,9 +3059,9 @@ bool mn_IsFighterUnlocked(SelectableCharacterKind selkind)
 void mn_8022E978(u8 item_idx, u8 enable)
 {
     if (enable) {
-        gmMainLib_8015CC58()->item_mask |= 1 << item_idx;
+        gmMainLib_GetGamePrefs()->item_mask |= 1 << item_idx;
     } else {
-        gmMainLib_8015CC58()->item_mask &= ~(1 << item_idx);
+        gmMainLib_GetGamePrefs()->item_mask &= ~(1 << item_idx);
     }
 }
 

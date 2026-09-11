@@ -169,18 +169,36 @@ void ft_8008521C(HSD_GObj* gobj)
 static inline void ft_800852B0_Reset_ft_8045993C(ftData** list, int i)
 {
     /// @todo Bitfields seem off
+#ifdef MELEE_VITA_PLATFORM
+    /* The DOL places ft_8045993C immediately after gFtDataList.  The Vita
+     * link uses -fdata-sections, so that adjacency is not an ABI guarantee. */
+    (void) list;
+    ft_8045993C[i].pad_x0 = 0;
+    ft_8045993C[i].x6_b0 = 0;
+    ft_8045993C[i].x6_b1_b2 = 0;
+#else
     ((ft_8045993C_t*) &list[Ft_Kind_Max])[i].pad_x0 = 0;
     ((ft_8045993C_t*) &list[Ft_Kind_Max])[i].x6_b0 = 0;
     ((ft_8045993C_t*) &list[Ft_Kind_Max])[i].x6_b1_b2 = 0;
+#endif
 }
 
 void ft_800852B0(void)
 {
     ftData** list;
+#ifdef MELEE_VITA_PLATFORM
+    /* These are adjacent to CostumeListsForeachCharacter in the original DOL
+     * (.data:803C0FC8 and .data:803C25F4), but are independent sections in
+     * the ARM link.  Address them by symbol so fighter init cannot overwrite
+     * whichever section the linker happens to place next. */
+    ftData_UnkCountStruct* unk0 = ftData_Table_Unk0;
+    ftData_UnkCountStruct* pairs = ftData_UnkIntPairs;
+#else
     ftData_UnkCountStruct* unk0 =
         (ftData_UnkCountStruct*) &CostumeListsForeachCharacter[Ft_Kind_Max];
     ftData_UnkCountStruct* pairs =
         (ftData_UnkCountStruct*) ((u8*) CostumeListsForeachCharacter + 5940);
+#endif
     int i;
     int new_var = 0;
 
@@ -206,6 +224,11 @@ void ft_800852B0(void)
     ft_800852B0_Reset_ft_8045993C(list, 3);
     ft_800852B0_Reset_ft_8045993C(list, 4);
     ft_800852B0_Reset_ft_8045993C(list, 5);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FTDATA_LAYOUT_SAFE_PASS list=%p runtime=%p table0=%p pairs=%p\n",
+             (void*) gFtDataList, (void*) ft_8045993C,
+             (void*) ftData_Table_Unk0, (void*) ftData_UnkIntPairs);
+#endif
 }
 
 void ft_8008549C(void)
@@ -1643,7 +1666,9 @@ void ftData_800859A8(Fighter* fp)
     if (temp_r6 == -1) {
         return;
     }
-    for (gobj = HSD_GObj_Entities->fighters; gobj != NULL; gobj = gobj->next) {
+    for (gobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; gobj != NULL;
+         gobj = gobj->next)
+    {
         Fighter* cur_fp = GET_FIGHTER(gobj);
         if (fp != cur_fp && temp_r6 == cur_fp->x61C) {
             return;

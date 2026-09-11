@@ -19,7 +19,7 @@ s32 HSD_GObj_804D783C;
 HSD_GObjProc* HSD_GObj_CurrentInvokedProc;
 s32 HSD_GObj_CurrentInvokedSLink;
 HSD_GObjProc* HSD_GObj_NextInvokedProc;
-HSD_GObjList* HSD_GObj_Entities;
+HSD_GObj** HSD_GObjPLinkHead;
 HSD_GObj** plinklow_gobjs;
 HSD_GObj** HSD_GObjGXLinkHead;
 HSD_GObj** HSD_GObj_804D7820;
@@ -85,7 +85,7 @@ void HSD_GObj_80390CD4(HSD_GObj* gobj)
 }
 
 /// GObj_RunProcs
-void HSD_GObj_80390CFC(void)
+void HSD_GObj_RunProcs(void)
 {
     s32 i;
     HSD_GObjProc* proc;

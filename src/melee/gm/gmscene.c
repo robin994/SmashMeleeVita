@@ -1,11 +1,11 @@
-#include "gm_1A45.h"
+#include "gmscene.h"
 
 #include "gm_1A36.h"
-#include "gm_1A45.static.h"
 #include "gm_unsplit.h"
 #include "gmmain_lib.h"
 #include "gmscdata.h"
 #include <dolphin/os/OSThread.h>
+#include <dolphin/vi.h>
 #include <melee/db/db.h>
 #include <melee/if/ifcoget.h>
 #include <melee/lb/lb_013B.h>
@@ -23,15 +23,51 @@
 #include <sysdolphin/baselib/perf.h>
 #include <sysdolphin/baselib/sobjlib.h>
 
+/* 479D30 */ static HSD_GObjLibInitDataType gobj_init_data;
+/* 479D58 */ static struct gm_80479D58_t gm_80479D58;
+/* 4D672C */ HSD_GObj* gm_804D672C;
+/* 4D6728 */ UNK_T gm_804D6728;
+/* 4D6724 */ void (*gm_804D6724)(void);
+/* 4D6720 */ struct GameSceneInfo* gm_804D6720;
+
+#ifdef MELEE_VITA_PLATFORM
+/* Direct title/menu/CSS scenes use a small Vita wrapper, while the full
+ * gameplay profile re-enters the retail GameScene loop. Track that boundary
+ * so shared callbacks resolve the correct exit-data owner. */
+static int mv_vita_retail_scene_active;
+
+void mv_gm_vita_scene_complete(void)
+{
+    gm_80479D58.unk_C = 1;
+}
+
+void* mv_gm_vita_current_scene_exit_data(void)
+{
+    return mv_vita_retail_scene_active && gm_804D6720 != NULL
+               ? gm_804D6720->exit_data
+               : NULL;
+}
+
+int mv_gm_vita_retail_scene_active(void)
+{
+    return mv_vita_retail_scene_active;
+}
+
+void mv_gm_vita_set_retail_scene_active(int active)
+{
+    mv_vita_retail_scene_active = active != 0;
+}
+#endif
+
 static u64 gm_803DA888[8] = {
     0, 0x82FFFA, 0, 0x8EFFFA, 0x800FFA, 0x808FFA, 0x800FFA, 0,
 };
 
 u64 gm_803DA8C8[2] = { -1, -1 };
 
-bool gm_801A45E8(int bit)
+bool gm_GetDbPauseFlag(int bit)
 {
-    return gm_80479D58.unk_10.x0 & (1ULL << bit);
+    return (gm_80479D58.unk_10.x0 & (1ULL << bit)) != 0;
 }
 
 int gm_801A4624(void)
@@ -39,12 +75,12 @@ int gm_801A4624(void)
     return gm_80479D58.unk_10.x0;
 }
 
-void gm_801A4634(int bit)
+void gm_SetDbPauseFlag(int bit)
 {
     gm_80479D58.unk_10.x0 |= 1ULL << bit;
 }
 
-void gm_801A4674(int bit)
+void gm_ClearDbPauseFlag(int bit)
 {
     gm_80479D58.unk_10.x0 &= ~(1ULL << bit);
 }
@@ -95,7 +131,7 @@ u64 gm_801A48A4(u8 arg0)
     return result;
 }
 
-void gm_801A4970(bool (**arg0)(void))
+void gm_801A4970(struct gm_DbPauseInputHandlers* db_input)
 {
     HSD_PadStatus* temp_r3;
     s8 var_r26;
@@ -132,34 +168,35 @@ void gm_801A4970(bool (**arg0)(void))
         }
     }
 
-    if (arg0[0] != NULL && arg0[0]()) {
-        if (gm_801A45E8(0)) {
+    if (db_input->check_pause != NULL && db_input->check_pause()) {
+        if (gm_GetDbPauseFlag(0)) {
             gm_80479D58.unk_10.x0 &= ~1;
         } else {
             gm_80479D58.unk_10.x0 |= 1;
         }
     }
-    if (gm_801A45E8(0)) {
-        if (arg0[1] != NULL && arg0[1]()) {
+    if (gm_GetDbPauseFlag(0)) {
+        if (db_input->check_framestep != NULL && db_input->check_framestep()) {
             gm_80479D58.unk_10.x2 |= 1;
         }
     }
 }
 
-void gm_801A4B08(bool (*arg0)(void), bool (*arg1)(void))
+void gm_SetDbPauseInputHandlers(Predicate check_db_pause,
+                                Predicate check_db_framestep)
 {
-    gm_80479D58.unk_10.x4[0] = arg0;
-    gm_80479D58.unk_10.x4[1] = arg1;
+    gm_80479D58.unk_10.db_input.check_pause = check_db_pause;
+    gm_80479D58.unk_10.db_input.check_framestep = check_db_framestep;
 }
 
 void gm_801A4B1C(void)
 {
-    gm_801A4B08(fn_801A46F4, fn_801A47E4);
+    gm_SetDbPauseInputHandlers(fn_801A46F4, fn_801A47E4);
 }
 
-void gm_801A4B40(UNK_T arg0)
+void gm_SetPreGObjProcCallback(Event cb)
 {
-    gm_80479D58.unk_10.unk_30 = arg0;
+    gm_80479D58.unk_10.pre_gobj_proc = cb;
 }
 
 void gm_801A4B50(int arg0)
@@ -167,10 +204,12 @@ void gm_801A4B50(int arg0)
     gm_80479D58.unk_10.unk_34 = arg0;
 }
 
+#ifndef MELEE_VITA_PLATFORM
 void gm_801A4B60(void)
 {
     gm_80479D58.unk_C = 1;
 }
+#endif
 
 void gm_801A4B74(void)
 {
@@ -189,10 +228,12 @@ void* gm_GetCurrentSceneEnterData(void)
 }
 
 /// @brief returns a pointer to the current scenes exit data
+#ifndef MELEE_VITA_PLATFORM
 void* gm_GetCurrentSceneExitData(void)
 {
     return gm_804D6720->exit_data;
 }
+#endif
 
 u32 gm_801A4BA8(void)
 {
@@ -215,18 +256,18 @@ void gm_801A4BD4(void)
 {
     PAD_STACK(0x18);
 
-    gm_801A4B08(fn_801A46F4, fn_801A47E4);
-    gm_801A4B40(0);
+    gm_SetDbPauseInputHandlers(fn_801A46F4, fn_801A47E4);
+    gm_SetPreGObjProcCallback(NULL);
     gm_801A4B50(0);
 
-    lb_80019880(OSSecondsToTicks(1.0F / 60));
-    HSD_GObj_803912E0(&gm_80479D48.initdata);
-    gm_80479D48.initdata.gproc_pri_max = 0x18;
+    lb_80019880(OSSecondsToTicks(1.0F / GM_FPS));
+    HSD_GObjSetInitDefaults(&gobj_init_data);
+    gobj_init_data.gproc_pri_max = 0x18;
     HSD_SObjLib_804D7960 =
-        HSD_GObj_803912A8(&gm_80479D48.initdata, &HSD_SObjLib_8040C3A4);
+        HSD_GObj_803912A8(&gobj_init_data, &HSD_SObjLib_8040C3A4);
     HSD_SObjLib_803A44A4();
-    gm_80479D48.initdata.unk_2 = &gm_80479D58.unk_10.unk_28;
-    HSD_GObj_80391304(&gm_80479D48.initdata);
+    gobj_init_data.unk_2 = &gm_80479D58.unk_10.unk_28;
+    HSD_GObjInit(&gobj_init_data);
     hsd_80392474();
     un_802FF78C();
     gm_804D672C = GObj_Create(14, 0, 0);
@@ -284,6 +325,12 @@ void gm_801A4D34(void (*on_frame)(void), UNUSED GameSceneInfo* info)
 
         while ((pad_queue_count = lb_80019894()) == 0) {
             lb_800195D0();
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+            /* Vita emulates the GameCube alarm interrupt from the VBlank
+             * pump. Yielding here lets the periodic PAD alarm enqueue the
+             * next raw sample instead of spinning forever at qcount == 0. */
+            VIWaitForRetrace();
+#endif
         }
         lb_800195D0();
 
@@ -296,9 +343,9 @@ void gm_801A4D34(void (*on_frame)(void), UNUSED GameSceneInfo* info)
             HSD_PerfSetStartTime();
             lb_800198E0();
             if (DbLevel >= DbLKind_DebugRom) {
-                gm_801A4970(temp_r25->unk_10.x4);
+                gm_801A4970(&temp_r25->unk_10.db_input);
             }
-            if (gm_801A46B8(0) || !gm_801A45E8(0)) {
+            if (gm_801A46B8(0) || !gm_GetDbPauseFlag(0)) {
                 temp_r25->unk_10.unk_38_0 = true;
             } else {
                 temp_r25->unk_10.unk_38_0 = false;
@@ -334,10 +381,10 @@ void gm_801A4D34(void (*on_frame)(void), UNUSED GameSceneInfo* info)
                 db_CheckScreenshot();
             }
             lbAudioAx_80027DF8();
-            if (temp_r25->unk_10.unk_30 != NULL) {
-                temp_r25->unk_10.unk_30();
+            if (temp_r25->unk_10.pre_gobj_proc != NULL) {
+                temp_r25->unk_10.pre_gobj_proc();
             }
-            HSD_GObj_80390CFC();
+            HSD_GObj_RunProcs();
             if (temp_r25->unk_0 != -2) {
                 temp_r25->unk_0++;
             }

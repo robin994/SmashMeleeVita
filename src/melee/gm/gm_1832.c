@@ -1,8 +1,8 @@
 #include "gm_1832.h"
 
 #include "gm_1601.h"
-#include "gm_1A45.h"
 #include "gm_unsplit.h"
+#include "gmscene.h"
 #include <melee/cm/camera.h>
 #include <melee/ef/efasync.h>
 #include <melee/ef/eflib.h>
@@ -848,7 +848,7 @@ s32 fn_80185A0C(void)
     proc = HSD_GObj_SetupProc(gobj2, fn_801859C8, 0);
     proc->flags_3 = HSD_GObj_804D783C;
 
-    count = gm_80169238(lbl_8047368C.xF4[0]);
+    count = gm_GetNumCostumesForCKind(lbl_8047368C.xF4[0]);
     lbl_804735E8.xE0 = (s32) count > 3 ? 3 : count;
 
     img_idx = lbl_804735E8.xD0 - 0x90;
@@ -1055,12 +1055,19 @@ static inline void* gm_80186634_LoadLightList(void)
 
 static inline void gm_80186634_SetupLight(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* The Vita capture backend currently treats GX lighting state as a no-op.
+     * Do not instantiate big-endian retail LObj descriptors just to discard
+     * their state; the model itself is converted by the typed Intro proxy. */
+    return;
+#else
     HSD_GObj* gobj;
 
     gobj = GObj_Create(0xB, 3, 0);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_LightKind,
                             gm_80186634_LoadLightList());
     GObj_SetupGXLink(gobj, HSD_GObj_LObjCallback, 0, 0);
+#endif
 }
 
 static inline void gm_80186634_SetupCamera(void)
@@ -1104,6 +1111,11 @@ static inline void gm_80186634_SetupModel(void)
 
 static inline void gm_80186634_SetupFog(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* GXSetFog is not emitted by the Vita renderer yet; avoid consuming the
+     * still-big-endian retail FogDesc on this bounded Classic Intro path. */
+    return;
+#else
     HSD_GObj* gobj;
     HSD_Fog* fog;
 
@@ -1111,6 +1123,7 @@ static inline void gm_80186634_SetupFog(void)
     fog = HSD_FogLoadDesc(lbl_804D65FC->fogs[0].desc);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_FogKind, fog);
     GObj_SetupGXLink(gobj, HSD_GObj_FogCallback, 0xB, 0);
+#endif
 }
 
 void fn_80186634(void* arg0)

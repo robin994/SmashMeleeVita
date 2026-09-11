@@ -181,6 +181,14 @@ void gm_Mode_GiantVs_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmgiant = {
-    GM_GIANT_VS, "GM_GIANT_VS", gm_Mode_GiantVs_OnInit, gm_Mode_GiantVs_OnLoad, gm_801B8FB8, gm_801B8FE4, gm_801B900C, gm_801B9034
+    .mode = GM_GIANT_VS, .name = "GM_GIANT_VS",
+    .init = gm_Mode_GiantVs_OnInit, .load = gm_Mode_GiantVs_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = gm_801B8FB8, .css_exit = gm_801B8FE4,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = gm_801B900C, .sss_exit = gm_801B9034,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = gm_801B9084, .vs_exit = gm_801B90B8,
 };
 #endif

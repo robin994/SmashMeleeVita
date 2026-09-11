@@ -4,8 +4,8 @@
 
 #include "gm_1601.h"
 #include "gm_1A36.h"
-#include "gm_1A45.h"
 #include "gm_unsplit.h"
+#include "gmscene.h"
 #include "types.h"
 #include <dolphin/pad.h>
 #include <melee/gr/stage.h>
@@ -425,7 +425,7 @@ void fn_80188EE8(HSD_GObj* gobj)
 
     PAD_STACK(8);
 
-    if (gm_801A45E8(2) != 0) {
+    if (gm_GetDbPauseFlag(2) != 0) {
         HSD_SisLib_803A6368(sub->text, 0x1E);
         HSD_JObjSetFlagsAll(sub->jobjs[3], JOBJ_HIDDEN);
     } else {
@@ -547,7 +547,7 @@ void fn_801891F4(void)
     buttons = gm_801A36C0((u8) lbl_80473700.mode);
     sub = &gm_80473814;
 
-    if (gm_801A45E8(2) != 0) {
+    if (gm_GetDbPauseFlag(2) != 0) {
         if (sub->x01 == 0) {
             fn_801651FC(0, 0);
             gm_801891F4_SetCpuType(0);
@@ -780,9 +780,16 @@ void fn_801891F4(void)
             {
                 f32 selected_speed =
                     speed_stack.speeds.values[sub->menu_values[0]];
+#ifdef MELEE_VITA_PLATFORM
+                /* This timing value is positive and comfortably below 2^32;
+                 * avoid the CodeWarrior __cvt_dbl_usll runtime helper on ARM. */
+                lb_80019880((u64)(u32)(0.016666668f / selected_speed *
+                                       (f32)gm_801891F4_GetTickRate()));
+#else
                 lb_80019880(
                     __cvt_dbl_usll((f64) (0.016666668f / selected_speed *
                                           (f32) gm_801891F4_GetTickRate())));
+#endif
             }
 
             fn_80188550(sub->menu_values[2] + 1);

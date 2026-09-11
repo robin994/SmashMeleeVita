@@ -17,8 +17,8 @@
 #include <melee/cm/camera.h>
 #include <melee/ft/ftlib.h>
 #include <melee/gm/gm_1879.h>
-#include <melee/gm/gm_1A45.h>
 #include <melee/gm/gmregclear.h>
+#include <melee/gm/gmscene.h>
 #include <melee/if/ifcoget.h>
 #include <melee/if/ifstatus.h>
 #include <melee/it/item.h>
@@ -2152,7 +2152,7 @@ void grCorneria_801E1348(Ground_GObj* gobj)
         int found = 0;
         lb_8000B1CC(Ground_801C3FA4(gobj, 2), NULL, &cannon_pos);
         {
-            HSD_GObj* fighter = HSD_GObj_Entities->fighters;
+            HSD_GObj* fighter = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER];
             while (fighter != NULL) {
                 ftLib_80086644(fighter, &fighter_pos);
                 if (ABS(cannon_pos.y - fighter_pos.y) <= 10.0f) {
@@ -2467,7 +2467,7 @@ void smashTaunt_801E24AC(Ground_GObj* gobj, int renderpass)
     Ground* gp = GET_GROUND(gobj);
     PAD_STACK(8);
 
-    if (gm_801A45E8(1) || gm_801A45E8(2) || Camera_8003010C()) {
+    if (gm_GetDbPauseFlag(1) || gm_GetDbPauseFlag(2) || Camera_8003010C()) {
         if (gp->u.smashtaunt.text == NULL) {
             return;
         }

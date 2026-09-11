@@ -132,12 +132,13 @@ void gm_801B1C24(GameModeState* arg0)
     vs->start.players[1].cpu_kind = 0;
     for (; i < 4; i++, j++) {
         vs->start.players[i] = vs->start.players[1];
-        vs->start.players[i].color = (vs->start.players[i - 1].color + 1) %
-                                     gm_80169238(vs->start.players[j].ckind);
+        vs->start.players[i].color =
+            (vs->start.players[i - 1].color + 1) %
+            gm_GetNumCostumesForCKind(vs->start.players[j].ckind);
         if (vs->start.players[i].color == vs->start.players[0].color) {
             vs->start.players[i].color =
                 (vs->start.players[i].color + 1) %
-                gm_80169238(vs->start.players[j].ckind);
+                gm_GetNumCostumesForCKind(vs->start.players[j].ckind);
         }
         vs->start.players[i].slot_type = 3;
     }
@@ -298,6 +299,14 @@ void gm_Mode_Training_OnLoad(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmtrainingmode = {
-    GM_TRAINING, "GM_TRAINING", gm_Mode_Training_OnInit, gm_Mode_Training_OnLoad, gm_801B1B74, gm_801B1C24, gm_801B1EB8, gm_801B1EEC
+    .mode = GM_TRAINING, .name = "GM_TRAINING",
+    .init = gm_Mode_Training_OnInit, .load = gm_Mode_Training_OnLoad,
+    .css_state_id = 0, .css_data = &css_data,
+    .css_enter = gm_801B1B74, .css_exit = gm_801B1C24,
+    .sss_state_id = 1, .sss_data = &sss_data,
+    .sss_enter = gm_801B1EB8, .sss_exit = gm_801B1EEC,
+    .vs_state_id = 2, .vs_scene_kind = GS_TRAINING,
+    .vs_enter_data = &training_enter_data, .vs_exit_data = &training_exit_data,
+    .vs_enter = gm_801B1F70, .vs_exit = gm_801B2204,
 };
 #endif

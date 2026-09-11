@@ -350,3 +350,54 @@ u32 PSMTXInverse(Mtx src, Mtx inv)
     if (m == tmp) PSMTXCopy(tmp, inv);
     return 1;
 }
+
+void PSMTXTranspose(Mtx src, Mtx dst)
+{
+    Mtx tmp;
+    f32 (*out)[4] = src == dst ? tmp : dst;
+    out[0][0]=src[0][0]; out[0][1]=src[1][0]; out[0][2]=src[2][0]; out[0][3]=0.0f;
+    out[1][0]=src[0][1]; out[1][1]=src[1][1]; out[1][2]=src[2][1]; out[1][3]=0.0f;
+    out[2][0]=src[0][2]; out[2][1]=src[1][2]; out[2][2]=src[2][2]; out[2][3]=0.0f;
+    if (out == tmp) PSMTXCopy(tmp, dst);
+}
+
+void MTXRotRad(Mtx m, char axis, f32 rad)
+{
+    f32 s = sinf(rad), c = cosf(rad);
+    PSMTXIdentity(m);
+    switch (axis | 0x20) {
+    case 'x': m[1][1]=c; m[1][2]=-s; m[2][1]=s; m[2][2]=c; break;
+    case 'y': m[0][0]=c; m[0][2]=s; m[2][0]=-s; m[2][2]=c; break;
+    case 'z': m[0][0]=c; m[0][1]=-s; m[1][0]=s; m[1][1]=c; break;
+    default: break;
+    }
+}
+
+void MTXLightFrustum(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 n,
+                     f32 scaleS, f32 scaleT, f32 transS, f32 transT)
+{
+    f32 inv = 1.0f / (r - l);
+    m[0][0]=scaleS*(2.0f*n*inv); m[0][1]=0.0f; m[0][2]=scaleS*(inv*(r+l))-transS; m[0][3]=0.0f;
+    inv = 1.0f / (t - b);
+    m[1][0]=0.0f; m[1][1]=scaleT*(2.0f*n*inv); m[1][2]=scaleT*(inv*(t+b))-transT; m[1][3]=0.0f;
+    m[2][0]=0.0f; m[2][1]=0.0f; m[2][2]=-1.0f; m[2][3]=0.0f;
+}
+
+void MTXLightPerspective(Mtx m, f32 fovY, f32 aspect, f32 scaleS,
+                         f32 scaleT, f32 transS, f32 transT)
+{
+    f32 cot = 1.0f / tanf(0.5f * fovY * 0.017453293f);
+    m[0][0]=scaleS*(cot/aspect); m[0][1]=0.0f; m[0][2]=-transS; m[0][3]=0.0f;
+    m[1][0]=0.0f; m[1][1]=cot*scaleT; m[1][2]=-transT; m[1][3]=0.0f;
+    m[2][0]=0.0f; m[2][1]=0.0f; m[2][2]=-1.0f; m[2][3]=0.0f;
+}
+
+void MTXLightOrtho(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 scaleS,
+                   f32 scaleT, f32 transS, f32 transT)
+{
+    f32 inv = 1.0f / (r - l);
+    m[0][0]=2.0f*inv*scaleS; m[0][1]=0.0f; m[0][2]=0.0f; m[0][3]=transS + scaleS*(inv*-(r+l));
+    inv = 1.0f / (t - b);
+    m[1][0]=0.0f; m[1][1]=2.0f*inv*scaleT; m[1][2]=0.0f; m[1][3]=transT + scaleT*(inv*-(t+b));
+    m[2][0]=0.0f; m[2][1]=0.0f; m[2][2]=0.0f; m[2][3]=1.0f;
+}

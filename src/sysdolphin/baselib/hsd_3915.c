@@ -416,9 +416,15 @@ GlyphEntry lbl_80408898[4] = {
     { 0xB3808000, hsd_80392194 },
 };
 
+#ifdef MELEE_VITA_PLATFORM
+/* The generated GameCube debug-console atlas is not part of this checkout.
+ * Retail menu/game text uses SIS data; keep a neutral debug fallback on Vita. */
+DebugFontGlyph HSD_DebugFontAtlas[128] = {0};
+#else
 DebugFontGlyph HSD_DebugFontAtlas[] = {
 #include <sysdolphin/baselib/debug_font.inc>
 };
+#endif
 
 void hsd_803921B8(void* bitmap, s32 x, s32 y, s32 dst, s32 w, s32 h,
                   s32 stride, void* tbl)

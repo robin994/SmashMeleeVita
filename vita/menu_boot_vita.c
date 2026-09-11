@@ -391,7 +391,7 @@ int mv_menu_vita_prepare(StaticModelDesc *back, StaticModelDesc *panel,
 
 static HSD_GObj *find_menu_gobj(unsigned p_link, unsigned gx_link)
 {
-    HSD_GObj *gobj = ((HSD_GObj **)HSD_GObj_Entities)[p_link];
+    HSD_GObj *gobj = HSD_GObjPLinkHead[p_link];
     for (; gobj != NULL; gobj = gobj->next) {
         if (gobj->gx_link == gx_link && gobj->obj_kind == HSD_GObj_JObjKind &&
             gobj->hsd_obj != NULL)
@@ -482,6 +482,8 @@ static int capture_live_menu(MvGxReplay *replay, MvGxCaptureStats *stats,
     }
 
     if (!roots) return -91;
+    int sis_count = HSD_SisLib_VitaCaptureAll();
+    if (mv_gx_capture_stats(stats)) return -92;
     if (initialize) {
         if (mv_gx_replay_init_relaxed_from(replay, &menu_camera, menu_log,
                                            background_commands))
@@ -489,9 +491,9 @@ static int capture_live_menu(MvGxReplay *replay, MvGxCaptureStats *stats,
         replay->relaxed_from_command = background_commands;
         if (menu_log) {
             fprintf(menu_log,
-                    "GAME_MENU_DYNAMIC_CAPTURE_PASS roots=%u dynamic=%u "
+                    "GAME_MENU_DYNAMIC_CAPTURE_PASS roots=%u dynamic=%u sis=%d "
                     "commands=%u triangles=%u\n",
-                    roots, dynamic_roots, stats->commands, stats->triangles);
+                    roots, dynamic_roots, sis_count, stats->commands, stats->triangles);
             fflush(menu_log);
         }
     } else {
@@ -600,7 +602,7 @@ int mv_main_menu_run(FILE *log)
         uint64_t frame_start = mv_frame_time_us();
         HSD_PadRenewStatus();
         gm_EvaluateAllControllerInputs();
-        HSD_GObj_80390CFC();
+        HSD_GObj_RunProcs();
         if (mn_804A04F0.cur_menu != last_menu) {
             if (log) {
                 fprintf(log, "GAME_MENU_NODE_EXIT menu=%u selection=%u\n",

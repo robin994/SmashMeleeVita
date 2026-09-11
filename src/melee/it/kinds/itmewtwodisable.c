@@ -102,7 +102,7 @@ bool itMewtwodisable_UnkMotion0_Anim(Item_GObj* item_gobj)
 
 void itMewtwodisable_UnkMotion0_Phys(Item_GObj* item_gobj) {}
 
-int itMewtwodisable_UnkMotion0_Coll(Item_GObj* item_gobj)
+bool itMewtwodisable_UnkMotion0_Coll(Item_GObj* item_gobj)
 {
     u32 coll_flags = 0;
 

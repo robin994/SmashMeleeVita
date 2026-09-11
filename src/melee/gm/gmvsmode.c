@@ -263,6 +263,14 @@ void onExitResults(GameModeState* state)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmvsmode = {
-    GM_VS, "GM_VS", gmVsMelee_Mode_OnInit, gmVsMelee_Mode_OnLoad, onEnterCss, onExitCss, onEnterSss, onExitSss
+    .mode = GM_VS, .name = "GM_VS",
+    .init = gmVsMelee_Mode_OnInit, .load = gmVsMelee_Mode_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = onEnterCss, .css_exit = onExitCss,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = onEnterSss, .sss_exit = onExitSss,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = onEnterVs, .vs_exit = onExitVs,
 };
 #endif

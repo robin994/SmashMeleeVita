@@ -192,11 +192,11 @@ void fn_8017C1A4(HSD_GObj* unused)
         temp_r27_2 = temp_r31 + temp_r29;
         if (tmp->x8 == 0) {
             ftBossLib_8015CB9C(tmp->x4);
-            gm_801A4634(6);
+            gm_SetDbPauseFlag(6);
         } else if (tmp->x8 == temp_r31) {
             lbAudioAx_8002438C(0x4E200);
             ftBossLib_8015CC14();
-            gm_801A4674(6);
+            gm_ClearDbPauseFlag(6);
             gm_SetGameSpeed(0.5f);
         } else if (tmp->x8 >= temp_r27_2) {
             gm_SetGameSpeed(1.0f);
@@ -221,7 +221,7 @@ void fn_8017C1A4(HSD_GObj* unused)
                 tmp->x4 = 2;
             }
             ftBossLib_8015CB9C(tmp->x4);
-            gm_801A4634(6);
+            gm_SetDbPauseFlag(6);
             Player_80031790(0);
             Player_80036844(0, 1);
             temp_r3_4 = gmVs_GetController_0();
@@ -229,7 +229,7 @@ void fn_8017C1A4(HSD_GObj* unused)
         } else if (tmp->x8 == temp_r31) {
             lbAudioAx_8002438C(0x4E200);
             ftBossLib_8015CC14();
-            gm_801A4674(6);
+            gm_ClearDbPauseFlag(6);
             gm_SetGameSpeed(0.5f);
             lbBgFlash_80020688(temp_r27);
         } else if (tmp->x8 == temp_r28) {
@@ -483,7 +483,7 @@ u8 gm_8017CD94(UnkAdventureData* arg0, int arg1, int arg2, int arg3)
     u8 num_colors;
     u8 result;
 
-    num_colors = gm_80169238(arg1);
+    num_colors = gm_GetNumCostumesForCKind(arg1);
     if (arg0->x0.x54 != NULL) {
         result = arg0->x0.x54(arg2, arg0->x0.x0.cpu_level, arg3);
         if (num_colors != 0) {
@@ -516,7 +516,7 @@ static inline void gm_8017CE34_SetupColors(Unk1PData* arg1, s32 count,
     u8 result;
 
     for (color_idx = 0; color_idx < 3; color_idx++) {
-        num_colors = gm_80169238((u8) arg2[color_idx]);
+        num_colors = gm_GetNumCostumesForCKind((u8) arg2[color_idx]);
         if (arg1->x54 != NULL) {
             result = arg1->x54(count, arg1->x0.cpu_level, color_idx);
             if (num_colors != 0) {

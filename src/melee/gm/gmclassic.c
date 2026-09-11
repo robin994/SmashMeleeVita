@@ -97,7 +97,7 @@ gmClassicIntroData gmClassicIntroDataBuffer;
 static gmClassicRuntimeData gmClassic_vita_runtime;
 #endif
 
-#ifdef MELEE_VITA_PLATFORM
+#if defined(MELEE_VITA_PLATFORM) && !defined(MELEE_VITA_FULL_GAMEPLAY_SCENE)
 GameModeState gm_Mode_Classic_States[] = {
     {
         0, lbDvdPreload_3, 0, gmClassic_801B3500, NULL,

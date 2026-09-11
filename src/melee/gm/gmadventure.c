@@ -54,7 +54,7 @@ enum {
     ADVENTURE_BACK_TO_CSS = 0x70,
 };
 
-#ifdef MELEE_VITA_PLATFORM
+#if defined(MELEE_VITA_PLATFORM) && !defined(MELEE_VITA_FULL_GAMEPLAY_SCENE)
 GameModeState gm_Mode_Adventure_States[] = {
     {
         ADVENTURE_INTRO, 2, 0, gm_801B3F40, NULL,

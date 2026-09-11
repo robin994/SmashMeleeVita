@@ -409,7 +409,7 @@ void grVenom_8020362C(void)
         }
     }
 }
-void grVenom_80203B14(bool arg) {}
+void grVenom_80203B14(int arg) {}
 
 static inline void inlineA0(void)
 {
@@ -526,7 +526,7 @@ void grVenom_80203DD0(void)
     HSD_GObj* gobj;
     HSD_LObj* lobj;
 
-    gobj = HSD_GObj_Entities->xC;
+    gobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_LIGHT];
     while (gobj != NULL) {
         if (HSD_GObjGetClassifier(gobj) == 0xC) {
             lobj = GET_LOBJ(gobj);

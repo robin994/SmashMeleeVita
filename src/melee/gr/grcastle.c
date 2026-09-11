@@ -214,7 +214,7 @@ typedef struct grCastle_YOffsets {
     f32 v[6];
 } grCastle_YOffsets;
 
-void grCastle_801CD338(bool arg0)
+void grCastle_801CD338(int arg0)
 {
     HSD_GObj* gobj;
     HSD_JObj* jobj;
@@ -1497,7 +1497,7 @@ static inline void grCastle_PickSatellite(Ground* gp, s32* wp)
             s32 random_idx = HSD_Randi(11);
             idx = random_idx;
         }
-        entity = HSD_GObj_Entities->x14;
+        entity = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_GROUND];
         {
             s32 want = targets.e[idx].map_id;
             for (; entity != NULL; entity = entity->next) {

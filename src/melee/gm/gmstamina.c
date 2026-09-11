@@ -236,6 +236,14 @@ void fn_801B9850(void)
 #include "mode_route_vita.h"
 /* Bind the original callbacks without retaining unrelated results states. */
 const MvModeRoute mv_route_gmstamina = {
-    GM_STAMINA_VS, "GM_STAMINA_VS", gm_Mode_StaminaVs_OnInit, gm_Mode_StaminaVs_OnLoad, gm_801B91C8, gm_801B922C, gm_801B9254, gm_801B927C
+    .mode = GM_STAMINA_VS, .name = "GM_STAMINA_VS",
+    .init = gm_Mode_StaminaVs_OnInit, .load = gm_Mode_StaminaVs_OnLoad,
+    .css_state_id = 0, .css_data = &gmVsMelee_CssData,
+    .css_enter = gm_801B91C8, .css_exit = gm_801B922C,
+    .sss_state_id = 1, .sss_data = &gmVsMelee_SssData,
+    .sss_enter = gm_801B9254, .sss_exit = gm_801B927C,
+    .vs_state_id = 2, .vs_scene_kind = GS_VS,
+    .vs_enter_data = &gmVsMelee_StartData, .vs_exit_data = &gmVsMelee_VsExitInfo,
+    .vs_enter = gm_801B931C, .vs_exit = gm_801B9560,
 };
 #endif

@@ -33,6 +33,9 @@ void HSD_GXSetFifoObj(GXFifoObj* fifo);
 void** HSD_AllocateXFB(s32 nbuffer, GXRenderModeObj* rm);
 GXFifoObj* HSD_AllocateFifo(u32 size);
 OSHeapHandle HSD_GetHeap(void);
+#ifdef MELEE_VITA_PLATFORM
+u32 HSD_GetHeapGeneration(void);
+#endif
 void HSD_SetHeap(OSHeapHandle handle);
 void HSD_GetNextArena(void** lo, void** hi);
 OSHeapHandle HSD_CreateMainHeap(void* lo, void* hi);

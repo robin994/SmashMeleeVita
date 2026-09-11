@@ -359,7 +359,7 @@ static struct grMc_YakumonoParam* yakumono_param;
 
 static s32 grMc_804D69D4;
 
-void grMuteCity_801EFC68(bool arg) {}
+void grMuteCity_801EFC68(int arg) {}
 
 void grMuteCity_801EFC6C(void)
 {
@@ -1838,7 +1838,7 @@ void grMuteCity_801F290C(Ground_GObj* gobj)
     HSD_LObj* lobj;
     if (grLib_801C96E8(gobj) != 0) {
         if (gp->u.mutecity2.xC4_flags.b0) {
-            lgobj = HSD_GObj_Entities->xC;
+            lgobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_LIGHT];
             while (lgobj != NULL) {
                 if (HSD_GObjGetClassifier(lgobj) == 0xC) {
                     break;
@@ -1863,7 +1863,7 @@ void grMuteCity_801F290C(Ground_GObj* gobj)
             gp->u.mutecity2.xC4_flags.b0 = 0;
         }
     } else {
-        lgobj = HSD_GObj_Entities->xC;
+        lgobj = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_LIGHT];
         while (lgobj != NULL) {
             if (HSD_GObjGetClassifier(lgobj) == 0xC) {
                 break;
