@@ -584,6 +584,11 @@ static void MObjInfoInit(void)
                      sizeof(HSD_MObjInfo), sizeof(HSD_MObj));
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
+    /* Scene heap recreation calls hsdForgetClassLibrary().  Preserve upstream
+     * amnesia and release so temporary material/texture graphs do not leak
+     * inside a scene. */
+    HSD_CLASS_INFO(&hsdMObj)->amnesia = MObjAmnesia;
+    HSD_CLASS_INFO(&hsdMObj)->release = MObjRelease;
     HSD_MOBJ_INFO(&hsdMObj)->load = MObjLoad;
     HSD_MOBJ_INFO(&hsdMObj)->setup = HSD_MObjSetup;
     HSD_MOBJ_INFO(&hsdMObj)->unset = HSD_MObjUnset;

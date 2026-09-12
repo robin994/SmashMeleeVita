@@ -286,10 +286,11 @@ static s32 PObjLoad(HSD_PObj* pobj, HSD_PObjDesc* desc)
     pobj->n_display = desc->n_display;
     pobj->display = desc->display;
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    /* The Vita native converter now supports the bounded envelope descriptor
-       subset used by MnMaAll plus shared-skin JObj references. Shape animation
-       remains fail-closed until its native adapter exists. */
+    /* ShapeSet descriptors are nativeized before HSD relocation on Vita. */
     switch (pobj_type(pobj)) {
+    case POBJ_SHAPEANIM:
+        pobj->u.shape_set = loadShapeSetDesc(desc->u.shape_set);
+        break;
     case POBJ_ENVELOPE:
         pobj->u.envelope_list = loadEnvelopeDesc(desc->u.envelope_p);
         break;
@@ -420,6 +421,8 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
     switch (pobj_type(pobj)) {
+    case POBJ_SHAPEANIM:
+        break;
     case POBJ_ENVELOPE:
         resolveEnvelope(pobj->u.envelope_list, pdesc->u.envelope_p);
         break;
@@ -1459,6 +1462,9 @@ static void PObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_pobj",
                      sizeof(HSD_PObjInfo), sizeof(HSD_PObj));
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
+    /* The cached vertex descriptor pointers are scene-heap owned. */
+    HSD_CLASS_INFO(&hsdPObj)->amnesia = PObjAmnesia;
+    HSD_CLASS_INFO(&hsdPObj)->release = PObjRelease;
     HSD_POBJ_INFO(&hsdPObj)->load = PObjLoad;
     HSD_POBJ_INFO(&hsdPObj)->disp = HSD_PObjDisp;
     HSD_POBJ_INFO(&hsdPObj)->setup_mtx = PObjSetupMtx;

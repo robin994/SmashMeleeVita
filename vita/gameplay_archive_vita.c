@@ -703,6 +703,10 @@ static void fighter_convert_visibility(MvDat* dat, uint32_t model_num,
              (unsigned) temp_entries, (unsigned) byte_indices);
 }
 
+static void fighter_convert_x48(MvDat* dat, const char* root_name,
+                                int table_present, uint32_t table,
+                                const char* filename);
+
 static void fighter_convert(MvDat* dat, const char* root_name,
                             uint32_t root, const char* filename)
 {
@@ -894,6 +898,13 @@ static void fighter_convert(MvDat* dat, const char* root_name,
         gp_swap32(dat, t[22] + 0x0C, root_name, "x58 float");
         gp_swap32(dat, t[22] + 0x18, root_name, "x58 float");
     }
+
+    /* x48 is not one homogeneous pointer table.  The fighter OnLoad
+     * callbacks identify which entries are Article records and a small set of
+     * additional entries are direct HSD roots/accessory bundles.  Nativeize
+     * that typed schema here rather than treating the whole table as Article[]
+     * (which would corrupt Link/Yoshi/Samus/etc. special entries). */
+    fighter_convert_x48(dat, root_name, r[18], t[18], filename);
 
     OSReport("VITA_FIGHTER_DATA_NATIVE_PASS file=%s root=%s motions=%u demos=%u ext=%u\n",
              filename != NULL ? filename : "?", root_name,
@@ -1099,8 +1110,18 @@ static void itco_convert_model(MvDat* dat, uint32_t off,
 {
     uint8_t* m = gp_span(dat, off, 0x10, "ItCo", "ItemModelDesc");
     uint32_t joint = 0;
-    int joint_result =
-        gp_pointer(dat, off, &joint, "ItCo", "ItemModelDesc.joint");
+    uint32_t joint_word = mv_be32(m);
+    int joint_result;
+    /* Some fighter-owned Articles (for example Ice Climbers' GumStrings)
+     * use -1 as the serialized "no model joint" sentinel.  It is endian
+     * invariant, so preserve it and do not mistake it for a malformed
+     * relocation. */
+    if (!gp_is_pointer(dat, off) && joint_word == UINT32_MAX) {
+        joint_result = 0;
+    } else {
+        joint_result =
+            gp_pointer(dat, off, &joint, "ItCo", "ItemModelDesc.joint");
+    }
     if (joint_result == 1) {
         (void) gp_mark_unique(joint_roots, joint_root_count, 128, joint,
                               "ItCo", "item model HSD root set overflow");
@@ -1212,6 +1233,180 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
     {
         itco_convert_dynamics(dat, field[5], seen_sources, source_count, 32);
     }
+}
+
+typedef struct FighterItemArticleSchema {
+    const char* root;
+    uint32_t mask;
+} FighterItemArticleSchema;
+
+static uint32_t fighter_item_article_mask(const char* root_name)
+{
+    /* Bits are derived from the retail OnLoad registrations which call
+     * it_8026B3F8(x48_items[index], ...).  Entries outside the mask are
+     * deliberately not guessed: several are direct HSD roots or unrelated
+     * accessory data. */
+    static const FighterItemArticleSchema schema[] = {
+        { "ftDataCrazyhand", 0x007u }, { "ftDataClink", 0x03Fu },
+        { "ftDataDrmario", 0x00Au },   { "ftDataFalco", 0x00Bu },
+        { "ftDataFox", 0x007u },       { "ftDataGamewatch", 0x3FFu },
+        { "ftDataGkoopa", 0x001u },    { "ftDataKirby", 0x00Fu },
+        { "ftDataKoopa", 0x001u },     { "ftDataLink", 0x01Fu },
+        { "ftDataLuigi", 0x001u },     { "ftDataMario", 0x005u },
+        { "ftDataMasterhand", 0x003u },{ "ftDataMewtwo", 0x003u },
+        { "ftDataNess", 0x7FFu },      { "ftDataPeach", 0x01Fu },
+        { "ftDataPichu", 0x007u },     { "ftDataPikachu", 0x007u },
+        { "ftDataPopo", 0x007u },      { "ftDataSamus", 0x00Fu },
+        { "ftDataSeak", 0x00Fu },      { "ftDataYoshi", 0x007u },
+        { "ftDataZelda", 0x003u },
+    };
+    for (size_t i = 0; i < sizeof(schema) / sizeof(schema[0]); ++i) {
+        if (strcmp(root_name, schema[i].root) == 0) return schema[i].mask;
+    }
+    return 0;
+}
+
+static void fighter_x48_add_direct_joint(MvDat* dat, uint32_t table,
+                                         uint32_t index, const char* root_name,
+                                         uint32_t* roots, size_t* root_count)
+{
+    uint32_t joint = 0;
+    if (gp_pointer(dat, table + index * 4, &joint, root_name,
+                   "x48 direct HSD joint") != 1)
+    {
+        gp_fail(root_name, "x48 direct HSD joint missing", table + index * 4);
+    }
+    (void) gp_mark_unique(roots, root_count, 128, joint, root_name,
+                          "x48 HSD joint set overflow");
+}
+
+static void fighter_convert_x48(MvDat* dat, const char* root_name,
+                                int table_present, uint32_t table,
+                                const char* filename)
+{
+    uint32_t mask = fighter_item_article_mask(root_name);
+    int has_special_hsd =
+        strcmp(root_name, "ftDataClink") == 0 ||
+        strcmp(root_name, "ftDataLink") == 0 ||
+        strcmp(root_name, "ftDataKirby") == 0 ||
+        strcmp(root_name, "ftDataSamus") == 0 ||
+        strcmp(root_name, "ftDataSeak") == 0 ||
+        strcmp(root_name, "ftDataYoshi") == 0;
+
+    if (mask == 0 && !has_special_hsd) return;
+    if (table_present != 1) gp_fail(root_name, "required x48 table missing", table);
+
+    uint32_t seen_articles[128] = { 0 };
+    uint32_t seen_attrs[128] = { 0 };
+    uint32_t seen_hurts[64] = { 0 };
+    uint32_t seen_models[128] = { 0 };
+    uint32_t seen_dynamics[16] = { 0 };
+    uint32_t seen_sources[32] = { 0 };
+    uint32_t joint_roots[128] = { 0 };
+    uint32_t anim_roots[32] = { 0 };
+    uint32_t matanim_roots[16] = { 0 };
+    size_t article_count = 0, attr_count = 0, hurt_count = 0;
+    size_t model_count = 0, dynamics_count = 0, source_count = 0;
+    size_t joint_root_count = 0, anim_root_count = 0, matanim_root_count = 0;
+
+    if (mask != 0) {
+        uint32_t highest = 0;
+        for (uint32_t i = 0; i < 32; ++i) if (mask & (1u << i)) highest = i;
+        (void) gp_span(dat, table, ((size_t) highest + 1) * 4, root_name,
+                       "x48 Article table");
+        for (uint32_t i = 0; i <= highest; ++i) {
+            if ((mask & (1u << i)) == 0) continue;
+            uint32_t article = 0;
+            if (gp_pointer(dat, table + i * 4, &article, root_name,
+                           "x48 Article") != 1)
+            {
+                gp_fail(root_name, "x48 Article missing", table + i * 4);
+            }
+            if (gp_mark_unique(seen_articles, &article_count, 128, article,
+                               root_name, "x48 Article set overflow"))
+            {
+                itco_convert_article(dat, article, seen_attrs, &attr_count,
+                                     seen_hurts, &hurt_count, seen_models,
+                                     &model_count, seen_dynamics,
+                                     &dynamics_count, seen_sources,
+                                     &source_count, joint_roots,
+                                     &joint_root_count);
+            }
+        }
+    }
+
+    /* Direct HSD entries in the same x48 table, identified from their actual
+     * consumers rather than by structural guessing. */
+    if (strcmp(root_name, "ftDataClink") == 0 ||
+        strcmp(root_name, "ftDataLink") == 0)
+    {
+        fighter_x48_add_direct_joint(dat, table, 6, root_name,
+                                     joint_roots, &joint_root_count);
+    } else if (strcmp(root_name, "ftDataKirby") == 0) {
+        fighter_x48_add_direct_joint(dat, table, 4, root_name,
+                                     joint_roots, &joint_root_count);
+    } else if (strcmp(root_name, "ftDataSeak") == 0) {
+        fighter_x48_add_direct_joint(dat, table, 4, root_name,
+                                     joint_roots, &joint_root_count);
+        fighter_x48_add_direct_joint(dat, table, 5, root_name,
+                                     joint_roots, &joint_root_count);
+    } else if (strcmp(root_name, "ftDataYoshi") == 0) {
+        fighter_x48_add_direct_joint(dat, table, 3, root_name,
+                                     joint_roots, &joint_root_count);
+    } else if (strcmp(root_name, "ftDataSamus") == 0) {
+        uint32_t bundle = 0;
+        if (gp_pointer(dat, table + 4 * 4, &bundle, root_name,
+                       "Samus x48 accessory bundle") != 1)
+        {
+            gp_fail(root_name, "Samus x48 accessory bundle missing", table + 16);
+        }
+        (void) gp_span(dat, bundle, 0x10, root_name, "Samus accessory bundle");
+        uint32_t joint = 0, anim_table = 0, anim = 0, matanim = 0;
+        if (gp_pointer(dat, bundle + 0x00, &joint, root_name, "Samus accessory joint") != 1 ||
+            gp_pointer(dat, bundle + 0x04, &anim_table, root_name, "Samus accessory anim table") != 1 ||
+            gp_pointer(dat, bundle + 0x08, &anim, root_name, "Samus accessory anim") != 1 ||
+            gp_pointer(dat, bundle + 0x0C, &matanim, root_name, "Samus accessory matanim") != 1)
+        {
+            gp_fail(root_name, "Samus accessory HSD root missing", bundle);
+        }
+        (void) gp_mark_unique(joint_roots, &joint_root_count, 128, joint,
+                              root_name, "x48 HSD joint set overflow");
+        (void) gp_mark_unique(anim_roots, &anim_root_count, 32, anim,
+                              root_name, "x48 anim set overflow");
+        (void) gp_mark_unique(matanim_roots, &matanim_root_count, 16, matanim,
+                              root_name, "x48 matanim set overflow");
+        size_t anim_span = gp_target_span(dat, anim_table);
+        if (anim_span == 0 || anim_span > 0x40 || (anim_span & 3) != 0) {
+            gp_fail(root_name, "Samus accessory anim table span", anim_table);
+        }
+        for (size_t i = 0; i < anim_span / 4; ++i) {
+            uint32_t anim_root = 0;
+            int ar = gp_pointer(dat, anim_table + (uint32_t) i * 4,
+                                &anim_root, root_name,
+                                "Samus accessory anim table entry");
+            if (ar == 1) {
+                (void) gp_mark_unique(anim_roots, &anim_root_count, 32,
+                                      anim_root, root_name,
+                                      "x48 anim set overflow");
+            }
+        }
+    }
+
+    if (joint_root_count != 0 || anim_root_count != 0 || matanim_root_count != 0) {
+        mv_hsd_graph_set_prepare_raw(
+            (void*) (uintptr_t) dat->file, dat->file_size,
+            joint_roots, joint_root_count,
+            anim_roots, anim_root_count,
+            matanim_roots, matanim_root_count,
+            NULL, 0, filename, "ftData.x48_items");
+    }
+
+    OSReport("VITA_FIGHTER_X48_NATIVE_PASS file=%s root=%s articles=%u attrs=%u hurts=%u models=%u joint_roots=%u anim_roots=%u matanim_roots=%u dynamics=%u\n",
+             filename != NULL ? filename : "?", root_name,
+             (unsigned) article_count, (unsigned) attr_count,
+             (unsigned) hurt_count, (unsigned) model_count,
+             (unsigned) joint_root_count, (unsigned) anim_root_count,
+             (unsigned) matanim_root_count, (unsigned) dynamics_count);
 }
 
 static void itco_convert(MvDat* dat, uint32_t root, const char* filename)

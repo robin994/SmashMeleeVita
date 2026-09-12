@@ -3,7 +3,7 @@ export VITASDK
 BUILD_DIR ?= build/vita
 FULL_GAMEPLAY ?= ON
 CMAKE_ARGS ?= -DMELEE_VITA_FULL_GAMEPLAY_SCENE=$(FULL_GAMEPLAY)
-.PHONY: all configure audit asset-check test-env arm-boot-check arm-check pause-raw-check item-hsd-check player-mapping-check endian-preflight assets
+.PHONY: all configure audit asset-check test-env arm-boot-check arm-check pause-raw-check item-hsd-check player-mapping-check figatrack-arm-check fighter-x48-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-raw-check endian-preflight assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
@@ -33,7 +33,34 @@ item-hsd-check: test-env
 player-mapping-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_player_mapping_arm.py
 
-endian-preflight: item-hsd-check player-mapping-check
+figatrack-arm-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_lbanim_figatrack_arm.py
+
+fighter-x48-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_fighter_x48_arm.py
+
+hsd-amnesia-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_hsd_amnesia_arm.py
+
+hsd-release-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_hsd_release_arm.py
+
+ifall-hsd-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_ifall_hsd_arm.py
+
+scene-sidecar-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_scene_sidecars_arm.py
+
+stage-light-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_lights_arm.py
+
+stage-map-plit-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_map_plit_arm.py
+
+stage-raw-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_raw.py --elf $(BUILD_DIR)/melee_vita --assets orig/GALE01/files --output $(BUILD_DIR)/stage-raw-check.json
+
+endian-preflight: pause-raw-check item-hsd-check player-mapping-check figatrack-arm-check fighter-x48-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-raw-check
 	node vita/tools/audit_gameplay_dat.js orig/GALE01/files
 	node vita/tools/audit_figatree_dat.js
 

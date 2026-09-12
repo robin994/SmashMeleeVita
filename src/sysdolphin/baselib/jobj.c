@@ -630,11 +630,12 @@ s32 JObjLoad(HSD_JObj* jobj, HSD_Joint* joint, HSD_JObj* parent)
 {
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
     /* Spline descriptors are now pre-nativeized on Vita and are needed by
-       legitimate HSD_A_J_PATH effect animations. Instance and particle union
-       payloads still require dedicated ownership/reference adapters. */
-    if (joint->flags & (JOBJ_INSTANCE | JOBJ_PTCL)) {
+       legitimate HSD_A_J_PATH effect animations. INSTANCE uses the original
+       HSD ID-table reference resolution below and is now covered by a linked
+       ARM regression. Particle union payloads still need a dedicated adapter. */
+    if (joint->flags & JOBJ_PTCL) {
         HSD_Panic(__FILE__, __LINE__,
-                  "load-only JObj instance/particle tree unsupported\n");
+                  "load-only JObj particle tree unsupported\n");
     }
 #endif
     if (!(joint->flags & JOBJ_INSTANCE)) {
@@ -697,18 +698,12 @@ void HSD_JObjResolveRefs(HSD_JObj* jobj, HSD_Joint* joint)
     }
 
     HSD_RObjResolveRefsAll(jobj->robj, joint->robjdesc);
-#ifdef MELEE_VITA_HSD_LOAD_ONLY
-    if (jobj->flags & JOBJ_INSTANCE) {
-        HSD_Panic(__FILE__, __LINE__, "load-only JObj instance refs unsupported\n");
-    }
-#else
     if (!!(jobj->flags & JOBJ_INSTANCE)) {
         HSD_JObjUnref(jobj->child);
         jobj->child = HSD_IDGetDataFromTable(NULL, (u32) joint->child, NULL);
         HSD_ASSERT(1108, jobj->child);
         HSD_JObjRef(jobj->child);
     }
-#endif
     if (union_type_dobj(jobj)) {
         HSD_DObjResolveRefsAll(jobj->u.dobj, joint->u.dobjdesc);
     }
@@ -1576,11 +1571,17 @@ void JObjInfoInit(void)
                      "sysdolphin_base_library", "hsd_jobj",
                      sizeof(HSD_JObjInfo), sizeof(HSD_JObj));
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
-    /* The Vita port now reaches retail game scenes that invoke the original
-       HSD display walk. Keep the load-only ownership/release policy, but
-       expose the authentic render callbacks so their GX traffic can be
-       captured by the Vita backend. */
+    /* Heap recreation must still clear current_jobj/default-class state. */
+    HSD_CLASS_INFO(&hsdJObj)->init = JObjInit;
+    HSD_CLASS_INFO(&hsdJObj)->amnesia = JObjAmnesia;
+    /* Retail scene setup creates and destroys temporary HSD graphs before the
+       first rendered frame.  Keeping only the base class release leaks every
+       child graph (DObj/MObj/PObj/TObj/AObj), eventually exhausting the main
+       HSD heap.  INSTANCE refs are already supported; PTCL still fails closed
+       at load time, so the original release graph is safe to restore. */
+    HSD_CLASS_INFO(&hsdJObj)->release = JObjRelease;
     HSD_JOBJ_INFO(&hsdJObj)->load = JObjLoad;
+    HSD_JOBJ_INFO(&hsdJObj)->release_child = JObjReleaseChild;
     HSD_JOBJ_INFO(&hsdJObj)->make_mtx = HSD_JObjMakeMatrix;
     HSD_JOBJ_INFO(&hsdJObj)->make_pmtx = HSD_JObjMakePositionMtx;
     HSD_JOBJ_INFO(&hsdJObj)->disp = HSD_JObjDispSub;

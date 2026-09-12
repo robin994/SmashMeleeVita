@@ -1618,6 +1618,10 @@ static void TObjInfoInit(void)
                      sizeof(HSD_TObjInfo), sizeof(HSD_TObj));
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
+    /* Cache/list heads may point into the scene heap; reset them when the
+     * class library is forgotten. */
+    HSD_CLASS_INFO(&hsdTObj)->amnesia = TObjAmnesia;
+    HSD_CLASS_INFO(&hsdTObj)->release = TObjRelease;
     HSD_TOBJ_INFO(&hsdTObj)->load = TObjLoad;
     HSD_TOBJ_INFO(&hsdTObj)->make_texp = TObjMakeTExp;
     hsdTObj.make_mtx = MakeTextureMtx;

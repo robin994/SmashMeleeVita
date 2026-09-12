@@ -59,10 +59,23 @@ HSD_FObj* fn_8001E60C(FigaTrack* track, s8 frames)
             fobj->ad_head = track->ad_head;
             fobj->length = track->length;
             fobj->flags = 0;
+#ifndef MELEE_VITA_PLATFORM
             track++;
+#endif
         }
+#ifdef MELEE_VITA_PLATFORM
+        /* The retail Figa stream advances for every track. Types 5/6/7 are
+         * intentionally filtered from the JObj FObj list, not repeated. */
+        track++;
+#endif
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (prev != NULL) {
+        prev->next = NULL;
+    }
+#else
     fobj->next = NULL;
+#endif
     return first;
 }
 

@@ -325,6 +325,13 @@ static NativeEntry *begin_entry(NativeBuild *b, uint8_t kind, uint32_t offset, s
 
 static int pointer_offset(const MvDat *dat, uint32_t field, uint32_t *offset)
 {
+    /* Cross-archive edges have no in-file target before HSD extern linking.
+       Validate/nativeize the owner archive independently and leave this field
+       untouched so HSD_ArchiveLocateExtern() can resolve it later. */
+    if (mv_dat_external(dat, field)) {
+        *offset = UINT32_MAX;
+        return 0;
+    }
     int result = mv_dat_pointer(dat, field, offset);
     if (result < 0) return -1;
     if (!result) *offset = UINT32_MAX;
@@ -388,6 +395,7 @@ static HSD_MObjDesc *build_mobj(NativeBuild *b, uint32_t offset);
 static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset);
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset);
 static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset);
+static int validate_raw_shape_set(NativeBuild *b, uint32_t offset);
 
 static int validate_raw_spline(const MvDat *dat, uint32_t offset)
 {
@@ -417,12 +425,19 @@ static int validate_raw_spline(const MvDat *dat, uint32_t offset)
     for (size_t i = 0; i < (size_t)numcv; ++i)
         if (!isfinite(be_float(lengths + i * 4))) return -1;
 
+    /* Linear splines never consult segPoly: splArcLengthGetParameter() uses
+       only the cumulative segLength table for type 0. Retail GrSt map 2
+       therefore legitimately serializes a NULL segPoly pointer. Curved
+       splines (types 1-3) do use the polynomial coefficients and require it. */
     size_t poly_count = ((size_t)numcv - 1u) * 5u;
-    if (mv_dat_pointer(dat, offset + 0x14, &target) != 1) return -1;
-    const uint8_t *poly = mv_dat_span(dat, target, poly_count * sizeof(float));
-    if (!poly) return -1;
-    for (size_t i = 0; i < poly_count; ++i)
-        if (!isfinite(be_float(poly + i * 4))) return -1;
+    int poly_result = mv_dat_pointer(dat, offset + 0x14, &target);
+    if (poly_result < 0 || (type != 0 && poly_result != 1)) return -1;
+    if (poly_result == 1) {
+        const uint8_t *poly = mv_dat_span(dat, target, poly_count * sizeof(float));
+        if (!poly) return -1;
+        for (size_t i = 0; i < poly_count; ++i)
+            if (!isfinite(be_float(poly + i * 4))) return -1;
+    }
     return 0;
 }
 
@@ -702,6 +717,68 @@ static HSD_VtxDescList *build_vtx(NativeBuild *b, uint32_t offset)
     return out;
 }
 
+static int validate_raw_shape_index_lists(NativeBuild *b, uint32_t list_offset,
+                                          uint16_t nb_shape, int32_t index_count,
+                                          uint32_t desc_offset)
+{
+    const uint8_t *desc = mv_dat_span(b->dat, desc_offset, 24);
+    if (!desc || index_count <= 0) return -1;
+    uint32_t attr_type = mv_be32(desc + 4);
+    size_t index_size;
+    if (attr_type == 2u) index_size = 1u;
+    else if (attr_type == 3u) index_size = 2u;
+    else return -1;
+    if ((size_t) index_count > SIZE_MAX / index_size) return -1;
+    size_t bytes = (size_t) index_count * index_size;
+    for (uint16_t i = 0; i < nb_shape; ++i) {
+        uint32_t target;
+        if (pointer_offset(b->dat, list_offset + (uint32_t) i * 4u,
+                           &target) != 1 ||
+            mv_dat_span(b->dat, target, bytes) == NULL)
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int validate_raw_shape_set(NativeBuild *b, uint32_t offset)
+{
+    const uint8_t *p = mv_dat_span(b->dat, offset, 28);
+    if (!p) return -1;
+    uint16_t nb_shape = mv_be16(p + 2);
+    int32_t nb_vertex_index = (int32_t) mv_be32(p + 4);
+    int32_t nb_normal_index = (int32_t) mv_be32(p + 16);
+    if (nb_shape == 0 || nb_shape > 1024 || nb_vertex_index < 0 ||
+        nb_vertex_index > (1 << 20) || nb_normal_index < 0 ||
+        nb_normal_index > (1 << 20))
+    {
+        return -1;
+    }
+    uint32_t desc, lists;
+    if (nb_vertex_index != 0) {
+        if (pointer_offset(b->dat, offset + 8, &desc) != 1 ||
+            pointer_offset(b->dat, offset + 12, &lists) != 1 ||
+            validate_raw_shape_index_lists(b, lists, nb_shape,
+                                           nb_vertex_index, desc) != 0 ||
+            build_vtx(b, desc) == NULL)
+        {
+            return -1;
+        }
+    }
+    if (nb_normal_index != 0) {
+        if (pointer_offset(b->dat, offset + 20, &desc) != 1 ||
+            pointer_offset(b->dat, offset + 24, &lists) != 1 ||
+            validate_raw_shape_index_lists(b, lists, nb_shape,
+                                           nb_normal_index, desc) != 0 ||
+            build_vtx(b, desc) == NULL)
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset)
 {
     int existing;
@@ -797,7 +874,8 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
     out->flags = mv_be16(p + 12);
     out->n_display = mv_be16(p + 14);
     const uint16_t pobj_type = out->flags & MV_POBJ_TYPE_MASK;
-    if (pobj_type == MV_POBJ_SHAPEANIM || pobj_type == MV_POBJ_TYPE_MASK) {
+    if (pobj_type == MV_POBJ_TYPE_MASK ||
+        (pobj_type == MV_POBJ_SHAPEANIM && !b->raw_validation)) {
         mark_unsupported(b, MV_NATIVE_UNSUPPORTED_POBJ_TYPE,
                          offset, out->flags);
         return NULL;
@@ -805,7 +883,13 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
     uint32_t target;
     int result = pointer_offset(b->dat, offset + 20, &target);
     if (result < 0) { b->status = -1; return NULL; }
-    if (pobj_type == MV_POBJ_ENVELOPE) {
+    if (pobj_type == MV_POBJ_SHAPEANIM) {
+        if (result != 1 || validate_raw_shape_set(b, target) != 0) {
+            if (!b->status) b->status = -1;
+            return NULL;
+        }
+        out->u.shape_set = (void *)(uintptr_t) mv_dat_span(b->dat, target, 28);
+    } else if (pobj_type == MV_POBJ_ENVELOPE) {
         if (result != 1 ||
             !(out->u.envelope_p = build_envelope_descs(b, target))) {
             if (!b->status) b->status = -1;
@@ -873,10 +957,11 @@ static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset)
     if (!p || class_name(b->dat, offset, &out->class_name) < 0) { b->status = -1; return NULL; }
     out->flags = mv_be32(p + 4);
     uint32_t unsupported_flags = out->flags &
-        (MV_JOBJ_PTCL | MV_JOBJ_INSTANCE | MV_JOBJ_USE_QUATERNION |
+        (MV_JOBJ_PTCL | MV_JOBJ_USE_QUATERNION |
          MV_JOBJ_JOINT_MASK | MV_JOBJ_USER_DEF_MTX);
     if (!b->raw_validation) {
-        unsupported_flags |= out->flags & (MV_JOBJ_SPLINE | MV_JOBJ_PBILLBOARD);
+        unsupported_flags |= out->flags &
+            (MV_JOBJ_INSTANCE | MV_JOBJ_SPLINE | MV_JOBJ_PBILLBOARD);
     }
     const uint32_t billboard = out->flags & MV_JOBJ_BILLBOARD_FIELD;
     if (billboard) {

@@ -336,6 +336,8 @@ static void DObjInfoInit(void)
                      sizeof(HSD_DObjInfo), sizeof(HSD_DObj));
 
 #ifdef MELEE_VITA_HSD_LOAD_ONLY
+    HSD_CLASS_INFO(&hsdDObj)->amnesia = DObjAmnesia;
+    HSD_CLASS_INFO(&hsdDObj)->release = DObjRelease;
     HSD_DOBJ_INFO(&hsdDObj)->load = DObjLoad;
     HSD_DOBJ_INFO(&hsdDObj)->disp = HSD_DObjDisp;
 #else

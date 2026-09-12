@@ -46,6 +46,8 @@ extern void mv_effect_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_fighter_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_gameplay_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_pause_scene_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_ifall_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_scene_sidecar_archive_prepare_raw(void*, size_t, const char*);
 
 typedef struct {
     int ready;
@@ -161,6 +163,14 @@ void mv_boot_archive_prepare_raw(void *bytes, size_t size, const char *filename)
      * through stage/fighter/effect public roots.  GmPause is the first retail
      * gameplay archive to hit this path on hardware. */
     mv_pause_scene_archive_prepare_raw(bytes, size, filename);
+    /* IfAll is commonly loaded through preload type 2, where filename is
+     * intentionally unavailable. Detect and nativeize its complete HUD model
+     * schema from public roots before relocation. */
+    mv_ifall_archive_prepare_raw(bytes, size, filename);
+    /* SceneDesc sidecars such as IfCoGet/IfPrize are independent archives
+       loaded from gameplay/UI callbacks, not children of IfAll. Nativeize the
+       whole source-derived family before HSD relocation as well. */
+    mv_scene_sidecar_archive_prepare_raw(bytes, size, filename);
     classic_easy_prepare_raw(bytes, size, filename);
 
     int index = intro_name_index(filename);
@@ -251,27 +261,7 @@ void mv_boot_archive_prepare(HSD_Archive* a, const char* filename)
         mv_event_menu_archive_prepare(a);
         return;
     }
-    if (strcmp(filename,"NtMsgWin.dat") != 0) return;
-    SceneDesc* scene = HSD_ArchiveGetPublicAddress(a,"ScNtcCommon_scene_data");
-    require_range(a,scene,sizeof(*scene));
-    require_range(a,scene->cameras,2*sizeof(*scene->cameras));
-    if (scene->cameras[1].desc || scene->cameras[0].anims)
-        HSD_Panic(__FILE__,__LINE__,"unsupported message scene camera list");
-    HSD_CObjDesc* c = scene->cameras[0].desc;
-    require_range(a,c,0x30);
-    if (c->class_name) HSD_Panic(__FILE__,__LINE__,"unsupported camera class");
-    swap16(&c->common.flags); swap16(&c->common.projection_type);
-    for (unsigned i=8;i<24;i+=2) swap16((uint8_t*)c+i);
-    swap32(&c->common.roll); swap32(&c->common.nnear); swap32(&c->common.ffar);
-    if (c->common.up_vector) vector(a,c->common.up_vector);
-    world(a,c->common.eyepos);
-    if (c->common.interest != c->common.eyepos) world(a,c->common.interest);
-    unsigned count = c->common.projection_type == PROJ_PERSPECTIVE ? 2 : 4;
-    if (c->common.projection_type < 1 || c->common.projection_type > 3)
-        HSD_Panic(__FILE__,__LINE__,"unsupported camera projection");
-    require_range(a,c,0x30+4*count);
-    for (unsigned i=0;i<count;i++) swap32((uint8_t*)c+0x30+4*i);
-    OSReport("GS_MEMCARD_CAMERA_NATIVE_PASS projection=%u viewport=%d,%d,%d,%d\n",
-        c->common.projection_type,c->common.viewport.xmin,c->common.viewport.xmax,
-        c->common.viewport.ymin,c->common.viewport.ymax);
+    /* SceneDesc descriptor scalars are now nativeized once, pre-relocation,
+       by mv_scene_sidecar_archive_prepare_raw().  The old NtMsgWin camera
+       post-pass would byte-swap a correctly native descriptor a second time. */
 }

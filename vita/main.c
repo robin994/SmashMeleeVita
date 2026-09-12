@@ -24,7 +24,7 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.52\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.56\n"); fflush(log); }
     if (log) { fprintf(log, "MELEE_VITA_UPSTREAM_BASE 480b04454\n"); fflush(log); }
     if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=partial menu=mnMain_native\n"); fflush(log); }
     mv_runtime_set_log(log);

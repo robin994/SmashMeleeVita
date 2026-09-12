@@ -19,6 +19,25 @@ const extSizes = {
   ftDataSamus: 0x0d4, ftDataYoshi: 0x138, ftDataZelda: 0x0a8,
 };
 
+// Source-derived indices passed to it_8026B3F8(x48_items[index], ...).
+// x48_items is heterogeneous, so entries not present in these masks must not
+// be guessed to be Article records.
+const fighterItemArticleMasks = {
+  ftDataCrazyhand: 0x007, ftDataClink: 0x03f, ftDataDrmario: 0x00a,
+  ftDataFalco: 0x00b, ftDataFox: 0x007, ftDataGamewatch: 0x3ff,
+  ftDataGkoopa: 0x001, ftDataKirby: 0x00f, ftDataKoopa: 0x001,
+  ftDataLink: 0x01f, ftDataLuigi: 0x001, ftDataMario: 0x005,
+  ftDataMasterhand: 0x003, ftDataMewtwo: 0x003, ftDataNess: 0x7ff,
+  ftDataPeach: 0x01f, ftDataPichu: 0x007, ftDataPikachu: 0x007,
+  ftDataPopo: 0x007, ftDataSamus: 0x00f, ftDataSeak: 0x00f,
+  ftDataYoshi: 0x007, ftDataZelda: 0x003,
+};
+
+const fighterItemDirectJointIndices = {
+  ftDataClink: [6], ftDataLink: [6], ftDataKirby: [4],
+  ftDataSeak: [4, 5], ftDataYoshi: [3],
+};
+
 function die(message) {
   throw new Error(message);
 }
@@ -385,6 +404,183 @@ function auditFighterPartsHsd(dat, root) {
   };
 }
 
+function auditKnownInstanceTree(dat, root, label) {
+  const seen = new Set();
+  let instances = 0;
+  let particles = 0;
+  function walk(off) {
+    if (off === null || seen.has(off)) return;
+    seen.add(off);
+    dat.requireSpan(off, 0x40, label);
+    const flags = dat.word(off + 4);
+    if (flags & 0x1000) instances++;
+    if (flags & 0x20) particles++;
+    const child = dat.pointer(off + 8);
+    const next = dat.pointer(off + 0x0c);
+    // INSTANCE child is a reference to an existing JObj, not a structural
+    // child to instantiate recursively.
+    if (!(flags & 0x1000) && child !== null) walk(child);
+    if (next !== null) walk(next);
+  }
+  walk(root);
+  return { nodes: seen.size, instances, particles };
+}
+
+function auditFighterX48(dat, name, table) {
+  const mask = fighterItemArticleMasks[name] || 0;
+  const directIndices = fighterItemDirectJointIndices[name] || [];
+  if (!mask && directIndices.length === 0 && name !== 'ftDataSamus') {
+    return {
+      articles: 0, models: 0, articleHsdRefs: 0, articleHsdRoots: 0, directHsdRoots: 0,
+      joints: 0, dobjs: 0, mobjs: 0, pobjs: 0, tobjs: 0, robjs: 0,
+      samusInstanceNodes: 0, samusInstances: 0,
+    };
+  }
+  if (table === null) die(`${dat.file}: ${name} requires x48_items`);
+
+  let highest = -1;
+  for (let i = 0; i < 32; ++i) if (mask & (1 << i)) highest = i;
+  for (const i of directIndices) highest = Math.max(highest, i);
+  if (name === 'ftDataSamus') highest = Math.max(highest, 4);
+  dat.requireSpan(table, (highest + 1) * 4, `${name} x48_items`);
+
+  const articles = new Set();
+  const attrs = new Set();
+  const hurts = new Set();
+  const models = new Set();
+  const dynamics = new Set();
+  const dynamicsSources = new Set();
+  const articleRoots = new Set();
+  const directRoots = new Set();
+  let articleHsdRefs = 0;
+
+  for (let i = 0; i < 32; ++i) {
+    if (!(mask & (1 << i))) continue;
+    const article = dat.pointer(table + i * 4, false);
+    articles.add(article);
+  }
+
+  for (const article of articles) {
+    dat.requireSpan(article, 0x18, `${name} x48 Article`);
+    const fields = Array.from({ length: 6 }, (_, i) => dat.pointer(article + i * 4));
+    if (fields[0] !== null) attrs.add(fields[0]);
+    if (fields[2] !== null) hurts.add(fields[2]);
+    if (fields[4] !== null) models.add(fields[4]);
+    if (fields[5] !== null) dynamics.add(fields[5]);
+  }
+
+  for (const attr of attrs) {
+    dat.requireSpan(attr, 0x84, `${name} x48 ItemAttr`);
+    assertNoRelocations(dat, attr, 0x84, `${name} x48 ItemAttr`);
+  }
+  for (const hurt of hurts) {
+    dat.requireSpan(hurt, 8, `${name} x48 ItHurtBoneList`);
+    const count = dat.word(hurt);
+    const descs = dat.pointer(hurt + 4);
+    if (count > 2 || (count && descs === null)) {
+      die(`${dat.file}: invalid ${name} x48 hurt count ${count}`);
+    }
+    if (count) {
+      dat.requireSpan(descs, count * 0x20, `${name} x48 ItHurtBoneDesc`);
+      assertNoRelocations(dat, descs, count * 0x20, `${name} x48 ItHurtBoneDesc`);
+    }
+  }
+
+  let joints = 0, dobjs = 0, mobjs = 0, pobjs = 0, tobjs = 0, robjs = 0;
+  function addHsdStats(stats) {
+    joints += stats.joints; dobjs += stats.dobjs; mobjs += stats.mobjs;
+    pobjs += stats.pobjs; tobjs += stats.tobjs; robjs += stats.robjs;
+  }
+  for (const model of models) {
+    dat.requireSpan(model, 0x10, `${name} x48 ItemModelDesc`);
+    const boneCount = dat.word(model + 4);
+    const attachId = dat.word(model + 8) | 0;
+    if (boneCount > 100 || attachId < -1 || attachId > 100) {
+      die(`${dat.file}: invalid ${name} x48 ItemModelDesc ${boneCount}/${attachId}`);
+    }
+    assertNoRelocations(dat, model + 4, 8, `${name} x48 ItemModelDesc scalars`);
+    const rawJoint = dat.word(model);
+    let joint = null;
+    if (dat.pointerFields.has(model)) joint = dat.pointer(model, false);
+    else if (rawJoint !== 0 && rawJoint !== 0xffffffff) {
+      die(`${dat.file}: invalid ${name} x48 ItemModelDesc joint 0x${rawJoint.toString(16)}`);
+    }
+    if (joint !== null) {
+      articleHsdRefs++;
+      articleRoots.add(joint);
+      addHsdStats(auditFighterPartsHsd(dat, joint));
+    }
+  }
+
+  for (const dyn of dynamics) {
+    dat.requireSpan(dyn, 0x10, `${name} x48 ItemDynamics`);
+    const boneCount = dat.word(dyn);
+    const boneDescs = dat.pointer(dyn + 4);
+    const collCount = dat.word(dyn + 8);
+    const collDescs = dat.pointer(dyn + 0x0c);
+    if (boneCount > 24 || collCount > 2 ||
+        (boneCount && boneDescs === null) || (collCount && collDescs === null)) {
+      die(`${dat.file}: invalid ${name} x48 ItemDynamics ${boneCount}/${collCount}`);
+    }
+    for (let i = 0; i < boneCount; ++i) {
+      const desc = boneDescs + i * 0x18;
+      dat.requireSpan(desc, 0x18, `${name} x48 BoneDynamicsDesc`);
+      const boneId = dat.word(desc) | 0;
+      const source = dat.pointer(desc + 4);
+      const count = dat.word(desc + 8);
+      if (boneId < 0 || boneId >= 100 || count > 32 || (count && source === null)) {
+        die(`${dat.file}: invalid ${name} x48 BoneDynamicsDesc ${boneId}/${count}`);
+      }
+      assertNoRelocations(dat, desc, 0x18, `${name} x48 BoneDynamicsDesc`, new Set([4]));
+      if (count) {
+        dynamicsSources.add(`${source}:${count}`);
+        dat.requireSpan(source, count * 0x3c, `${name} x48 dynamics source`);
+        assertNoRelocations(dat, source, count * 0x3c, `${name} x48 dynamics source`);
+      }
+    }
+    if (collCount) {
+      dat.requireSpan(collDescs, collCount * 0x14, `${name} x48 ItCollDynamicsDesc`);
+      assertNoRelocations(dat, collDescs, collCount * 0x14, `${name} x48 ItCollDynamicsDesc`);
+    }
+  }
+
+  for (const index of directIndices) {
+    const root = dat.pointer(table + index * 4, false);
+    directRoots.add(root);
+    addHsdStats(auditFighterPartsHsd(dat, root));
+  }
+
+  let samusInstanceNodes = 0;
+  let samusInstances = 0;
+  if (name === 'ftDataSamus') {
+    const bundle = dat.pointer(table + 4 * 4, false);
+    dat.requireSpan(bundle, 0x10, 'Samus x48 grapple bundle');
+    const root = dat.pointer(bundle, false);
+    const animTable = dat.pointer(bundle + 4, false);
+    const anim = dat.pointer(bundle + 8, false);
+    const matanim = dat.pointer(bundle + 0x0c, false);
+    dat.requireSpan(animTable, 4, 'Samus x48 grapple anim table');
+    dat.requireSpan(anim, 0x14, 'Samus x48 grapple AnimJoint');
+    dat.requireSpan(matanim, 0x0c, 'Samus x48 grapple MatAnimJoint');
+    const instanceTree = auditKnownInstanceTree(dat, root, 'Samus x48 grapple JObj');
+    if (instanceTree.instances === 0 || instanceTree.particles !== 0) {
+      die(`${dat.file}: unexpected Samus x48 INSTANCE/PTCL profile ${instanceTree.instances}/${instanceTree.particles}`);
+    }
+    samusInstanceNodes = instanceTree.nodes;
+    samusInstances = instanceTree.instances;
+  }
+
+  return {
+    articles: articles.size,
+    models: models.size,
+    articleHsdRefs,
+    articleHsdRoots: articleRoots.size,
+    directHsdRoots: directRoots.size,
+    joints, dobjs, mobjs, pobjs, tobjs, robjs,
+    samusInstanceNodes, samusInstances,
+  };
+}
+
 function auditFighter(file) {
   const dat = parseDat(file);
   const roots = dat.publics.filter((entry) => entry.name.startsWith('ftData'));
@@ -554,6 +750,7 @@ function auditFighter(file) {
       }
     }
   }
+  const x48 = auditFighterX48(dat, name, fields[18]);
   const partsHsd = auditFighterPartsHsd(dat, fields[23]);
   return {
     name,
@@ -565,6 +762,7 @@ function auditFighter(file) {
     visTemps: visTemps.size,
     visTempEntries,
     visByteIndices,
+    x48,
     partsHsd,
   };
 }
@@ -854,6 +1052,19 @@ function main() {
   let partsHsdMobjs = 0;
   let partsHsdPobjs = 0;
   let partsHsdTobjs = 0;
+  let fighterX48Articles = 0;
+  let fighterX48Models = 0;
+  let fighterX48ArticleRefs = 0;
+  let fighterX48ArticleRoots = 0;
+  let fighterX48DirectRoots = 0;
+  let fighterX48Joints = 0;
+  let fighterX48Dobjs = 0;
+  let fighterX48Mobjs = 0;
+  let fighterX48Pobjs = 0;
+  let fighterX48Tobjs = 0;
+  let fighterX48Robjs = 0;
+  let samusX48InstanceNodes = 0;
+  let samusX48Instances = 0;
   for (const name of fighterFiles) {
     const result = auditFighter(path.join(assets, name));
     motions += result.motionCount;
@@ -871,12 +1082,33 @@ function main() {
     partsHsdMobjs += result.partsHsd.mobjs;
     partsHsdPobjs += result.partsHsd.pobjs;
     partsHsdTobjs += result.partsHsd.tobjs;
+    fighterX48Articles += result.x48.articles;
+    fighterX48Models += result.x48.models;
+    fighterX48ArticleRefs += result.x48.articleHsdRefs;
+    fighterX48ArticleRoots += result.x48.articleHsdRoots;
+    fighterX48DirectRoots += result.x48.directHsdRoots;
+    fighterX48Joints += result.x48.joints;
+    fighterX48Dobjs += result.x48.dobjs;
+    fighterX48Mobjs += result.x48.mobjs;
+    fighterX48Pobjs += result.x48.pobjs;
+    fighterX48Tobjs += result.x48.tobjs;
+    fighterX48Robjs += result.x48.robjs;
+    samusX48InstanceNodes += result.x48.samusInstanceNodes;
+    samusX48Instances += result.x48.samusInstances;
+  }
+  if (fighterX48Articles !== 83 || fighterX48Models !== 83 ||
+      fighterX48ArticleRefs !== 71 || fighterX48ArticleRoots !== 70 ||
+      fighterX48DirectRoots !== 6) {
+    die(`fighter x48 census drift articles/models/article_refs/article_roots/direct_roots=${fighterX48Articles}/${fighterX48Models}/${fighterX48ArticleRefs}/${fighterX48ArticleRoots}/${fighterX48DirectRoots}`);
+  }
+  if (samusX48InstanceNodes !== 34 || samusX48Instances !== 25) {
+    die(`Samus x48 INSTANCE census drift nodes/instances=${samusX48InstanceNodes}/${samusX48Instances}`);
   }
   const plco = auditPlCo(path.join(assets, 'PlCo.dat'));
   const itcoDat = auditItCo(path.join(assets, 'ItCo.dat'));
   const itcoUsd = auditItCo(path.join(assets, 'ItCo.usd'));
   const colorHist = [...plco.colorCommands.histogram.entries()].sort((a, b) => a[0] - b[0]).map(([op, n]) => `${op}:${n}`).join(',');
-  console.log(`GAMEPLAY_DAT_AUDIT_PASS fighters=${fighterFiles.length} motions=${motions} demos=${demos} costume_tobj_arrays=${costumeTobjArrays} costume_tobj_indices=${costumeTobjIndices} vis_lookups=${visLookups} vis_temp_arrays=${visTemps} vis_temp_entries=${visTempEntries} vis_byte_indices=${visByteIndices} fighter_parts_hsd=${partsHsdFiles}/${partsHsdNull} fighter_parts_nodes=${partsHsdJoints}/${partsHsdDobjs}/${partsHsdMobjs}/${partsHsdPobjs}/${partsHsdTobjs} plco=1 plco_special_parts=${plco.specialPartsRecords}/${plco.specialPartsEntries} plco_model_shift_vecs=${plco.modelShiftVectors} plco_common_hsd=${plco.commonModels.map((x) => x.joints).join('/')} plco_common_anim=${plco.commonAnimJoints} plco_color_cmds=${plco.colorCommands.commands}[${colorHist}] plco_cpu_attacks=${plco.cpuAttackLists}/${plco.cpuAttackEntries} itco=2 articles=${itcoDat.articles}/${itcoUsd.articles} item_model_hsd=${itcoDat.modelHsdRoots}/${itcoUsd.modelHsdRoots} item_model_nodes=${itcoDat.modelHsdJoints}/${itcoDat.modelHsdDobjs}/${itcoDat.modelHsdMobjs}/${itcoDat.modelHsdPobjs}/${itcoDat.modelHsdTobjs}/${itcoDat.modelHsdRobjs}:${itcoUsd.modelHsdJoints}/${itcoUsd.modelHsdDobjs}/${itcoUsd.modelHsdMobjs}/${itcoUsd.modelHsdPobjs}/${itcoUsd.modelHsdTobjs}/${itcoUsd.modelHsdRobjs} hurts=${itcoDat.hurts}/${itcoUsd.hurts} dynamics=${itcoDat.dynamics}/${itcoUsd.dynamics}`);
+  console.log(`GAMEPLAY_DAT_AUDIT_PASS fighters=${fighterFiles.length} motions=${motions} demos=${demos} costume_tobj_arrays=${costumeTobjArrays} costume_tobj_indices=${costumeTobjIndices} vis_lookups=${visLookups} vis_temp_arrays=${visTemps} vis_temp_entries=${visTempEntries} vis_byte_indices=${visByteIndices} fighter_parts_hsd=${partsHsdFiles}/${partsHsdNull} fighter_parts_nodes=${partsHsdJoints}/${partsHsdDobjs}/${partsHsdMobjs}/${partsHsdPobjs}/${partsHsdTobjs} fighter_x48_articles=${fighterX48Articles} fighter_x48_models=${fighterX48Models} fighter_x48_hsd=${fighterX48ArticleRefs}/${fighterX48ArticleRoots}/${fighterX48DirectRoots} fighter_x48_nodes=${fighterX48Joints}/${fighterX48Dobjs}/${fighterX48Mobjs}/${fighterX48Pobjs}/${fighterX48Tobjs}/${fighterX48Robjs} samus_x48_instance=${samusX48InstanceNodes}/${samusX48Instances} plco=1 plco_special_parts=${plco.specialPartsRecords}/${plco.specialPartsEntries} plco_model_shift_vecs=${plco.modelShiftVectors} plco_common_hsd=${plco.commonModels.map((x) => x.joints).join('/')} plco_common_anim=${plco.commonAnimJoints} plco_color_cmds=${plco.colorCommands.commands}[${colorHist}] plco_cpu_attacks=${plco.cpuAttackLists}/${plco.cpuAttackEntries} itco=2 articles=${itcoDat.articles}/${itcoUsd.articles} item_model_hsd=${itcoDat.modelHsdRoots}/${itcoUsd.modelHsdRoots} item_model_nodes=${itcoDat.modelHsdJoints}/${itcoDat.modelHsdDobjs}/${itcoDat.modelHsdMobjs}/${itcoDat.modelHsdPobjs}/${itcoDat.modelHsdTobjs}/${itcoDat.modelHsdRobjs}:${itcoUsd.modelHsdJoints}/${itcoUsd.modelHsdDobjs}/${itcoUsd.modelHsdMobjs}/${itcoUsd.modelHsdPobjs}/${itcoUsd.modelHsdTobjs}/${itcoUsd.modelHsdRobjs} hurts=${itcoDat.hurts}/${itcoUsd.hurts} dynamics=${itcoDat.dynamics}/${itcoUsd.dynamics}`);
 }
 
 try {

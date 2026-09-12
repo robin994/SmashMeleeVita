@@ -4,6 +4,7 @@
 
 #include <dolphin/os.h>
 #include <sysdolphin/baselib/archive.h>
+#include <sysdolphin/baselib/cobj.h>
 #include <sysdolphin/baselib/debug.h>
 #include <sysdolphin/baselib/forward.h>
 #include <sysdolphin/baselib/jobj.h>
@@ -54,9 +55,23 @@ enum StageHsdRawKind {
     STAGE_HSD_RAW_SPLINE_SEG_POLY,
     STAGE_HSD_RAW_SHAPE_JOINT,
     STAGE_HSD_RAW_SHAPE_DOBJ,
+    STAGE_HSD_RAW_SHAPE_ANIM,
     STAGE_HSD_RAW_ROBJ,
     STAGE_HSD_RAW_BCEXP,
     STAGE_HSD_RAW_RVALUE_LIST,
+    STAGE_HSD_RAW_SHAPE_SET,
+    STAGE_HSD_RAW_VEC3,
+    STAGE_HSD_RAW_WOBJ_DESC,
+    STAGE_HSD_RAW_ROBJ_ANIM,
+    STAGE_HSD_RAW_WOBJ_ANIM,
+    STAGE_HSD_RAW_CAMERA_ANIM,
+    STAGE_HSD_RAW_CAMERA_DESC,
+    STAGE_HSD_RAW_LIGHT_PARAM,
+    STAGE_HSD_RAW_LIGHT_DESC,
+    STAGE_HSD_RAW_LIGHT_ANIM,
+    STAGE_HSD_RAW_FOG_ADJ,
+    STAGE_HSD_RAW_FOG_DESC,
+    STAGE_HSD_RAW_FOG_ANIM,
     STAGE_HSD_RAW_KIND_COUNT,
 };
 
@@ -182,7 +197,12 @@ static void stage_hsd_raw_fail(StageHsdRawContext* ctx, const char* what,
 {
     OSReport("VITA_STAGE_HSD_RAW_INVALID kind=%s offset=%08x data=%u\n", what,
              offset, ctx != NULL && ctx->dat != NULL ? ctx->dat->data_size : 0);
-    HSD_Panic(__FILE__, __LINE__, "stage HSD descriptor invalid");
+    /* Keep the descriptor class in the panic itself as well as OSReport.
+       Linked-ARM regressions deliberately silence OSReport, and hardware core
+       dumps otherwise collapse every typed raw-schema failure into the same
+       generic assertion. */
+    HSD_Panic(__FILE__, __LINE__, what != NULL ? what
+                                               : "stage HSD descriptor invalid");
 }
 
 static u8* stage_hsd_raw_span(StageHsdRawContext* ctx, u32 offset, size_t size,
@@ -198,6 +218,11 @@ static u8* stage_hsd_raw_span(StageHsdRawContext* ctx, u32 offset, size_t size,
 static int stage_hsd_raw_pointer(StageHsdRawContext* ctx, u32 field,
                                  uint32_t* target, const char* what)
 {
+    if (mv_dat_external(ctx->dat, field)) {
+        /* Preserve the serialized extern-chain word. It is not a local DAT
+           pointer and will be replaced by HSD_ArchiveLocateExtern(). */
+        return 0;
+    }
     int result = mv_dat_pointer(ctx->dat, field, target);
     if (result < 0) {
         stage_hsd_raw_fail(ctx, what, field);
@@ -248,6 +273,7 @@ static void stage_hsd_raw_anim_joint(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_matanim_joint(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_spline(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_shape_joint(StageHsdRawContext* ctx, u32 offset);
+static void stage_hsd_raw_shape_anim(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_robj(StageHsdRawContext* ctx, u32 offset);
 
 static int stage_hsd_jobj_fobj_type_supported(u8 type)
@@ -333,17 +359,135 @@ static void stage_hsd_raw_vtx(StageHsdRawContext* ctx, u32 offset)
     u32 cursor = offset;
     for (unsigned i = 0; i < STAGE_HSD_RAW_MAX_VTXDESC; ++i, cursor += 24) {
         u8* raw = stage_hsd_raw_span(ctx, cursor, 24, "vtxdesc");
-        u32 attr = mv_be32(raw);
-        stage_swap32(raw + 0);
+        u32 attr_be = mv_be32(raw);
+        u32 attr_native;
+        memcpy(&attr_native, raw, sizeof(attr_native));
+        int be_valid = attr_be <= GX_VA_MAX_ATTR || attr_be == GX_VA_NULL;
+        int native_valid =
+            attr_native <= GX_VA_MAX_ATTR || attr_native == GX_VA_NULL;
+        int serialized_be;
+
+        if (be_valid && !native_valid) {
+            serialized_be = 1;
+        } else if (!be_valid && native_valid) {
+            serialized_be = 0;
+        } else if (be_valid && native_valid) {
+            /* attr==0 is byte-order invariant. Use attr_type to classify the
+               entry without mutating it twice when a ShapeSet starts from the
+               middle of an already-nativeized VtxDesc list. */
+            u32 type_be = mv_be32(raw + 4);
+            u32 type_native;
+            memcpy(&type_native, raw + 4, sizeof(type_native));
+            int type_be_valid = type_be <= GX_INDEX16;
+            int type_native_valid = type_native <= GX_INDEX16;
+            if (type_be_valid && !type_native_valid) serialized_be = 1;
+            else if (!type_be_valid && type_native_valid) serialized_be = 0;
+            else if (type_be == type_native) serialized_be = 0;
+            else {
+                stage_hsd_raw_fail(ctx, "vtxdesc-byte-order", cursor);
+                return;
+            }
+        } else {
+            stage_hsd_raw_fail(ctx, "vtxdesc-attr", cursor);
+            return;
+        }
+
+        u32 attr = serialized_be ? attr_be : attr_native;
+        if (serialized_be) stage_swap32(raw + 0);
         if (attr == GX_VA_NULL) {
             return;
         }
-        stage_swap32(raw + 4);
-        stage_swap32(raw + 8);
-        stage_swap32(raw + 12);
-        stage_swap16(raw + 18);
+        if (serialized_be) {
+            stage_swap32(raw + 4);
+            stage_swap32(raw + 8);
+            stage_swap32(raw + 12);
+            stage_swap16(raw + 18);
+        }
     }
     stage_hsd_raw_fail(ctx, "vtxdesc-unterminated", offset);
+}
+
+static void stage_hsd_raw_shape_index_lists(StageHsdRawContext* ctx,
+                                            u32 list_offset, u16 nb_shape,
+                                            s32 index_count, u32 desc_offset,
+                                            const char* what)
+{
+    u8* desc = stage_hsd_raw_span(ctx, desc_offset, 24, what);
+    u32 attr_type_be = mv_be32(desc + 4);
+    u32 attr_type_native;
+    memcpy(&attr_type_native, desc + 4, sizeof(attr_type_native));
+    /* A ShapeSet can point at an entry in the middle of a VtxDesc list that
+       an ordinary PObj has already nativeized.  The visited set is keyed by
+       list root, so classify this scalar by the only two legal retail values
+       instead of guessing its current byte order. */
+    u32 attr_type =
+        (attr_type_be == GX_INDEX8 || attr_type_be == GX_INDEX16)
+            ? attr_type_be
+            : attr_type_native;
+    size_t index_size;
+    if (attr_type == GX_INDEX8) index_size = 1;
+    else if (attr_type == GX_INDEX16) index_size = 2;
+    else {
+        stage_hsd_raw_fail(ctx, "shape-index-type", desc_offset);
+        return;
+    }
+    if (index_count <= 0 || (size_t) index_count > SIZE_MAX / index_size) {
+        stage_hsd_raw_fail(ctx, "shape-index-count", list_offset);
+    }
+    size_t bytes = (size_t) index_count * index_size;
+    for (u16 i = 0; i < nb_shape; ++i) {
+        uint32_t target;
+        if (stage_hsd_raw_pointer(ctx, list_offset + (u32) i * 4u, &target,
+                                  what) != 1)
+        {
+            stage_hsd_raw_fail(ctx, what, list_offset + (u32) i * 4u);
+        }
+        (void) stage_hsd_raw_span(ctx, target, bytes, what);
+    }
+}
+
+static void stage_hsd_raw_shape_set(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_SHAPE_SET, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 28, "shape-set");
+    u16 nb_shape = mv_be16(raw + 2);
+    s32 nb_vertex_index = (s32) mv_be32(raw + 4);
+    s32 nb_normal_index = (s32) mv_be32(raw + 16);
+    if (nb_shape == 0 || nb_shape > 1024 || nb_vertex_index < 0 ||
+        nb_vertex_index > (1 << 20) || nb_normal_index < 0 ||
+        nb_normal_index > (1 << 20))
+    {
+        stage_hsd_raw_fail(ctx, "shape-set-scalars", offset);
+    }
+    uint32_t desc, lists;
+    if (nb_vertex_index != 0) {
+        if (stage_hsd_raw_pointer(ctx, offset + 8, &desc,
+                                  "shape-set.vertex-desc") != 1 ||
+            stage_hsd_raw_pointer(ctx, offset + 12, &lists,
+                                  "shape-set.vertex-lists") != 1)
+        {
+            stage_hsd_raw_fail(ctx, "shape-set-vertex", offset);
+        }
+        stage_hsd_raw_shape_index_lists(ctx, lists, nb_shape, nb_vertex_index,
+                                        desc, "shape-set.vertex-index");
+        stage_hsd_raw_vtx(ctx, desc);
+    }
+    if (nb_normal_index != 0) {
+        if (stage_hsd_raw_pointer(ctx, offset + 20, &desc,
+                                  "shape-set.normal-desc") != 1 ||
+            stage_hsd_raw_pointer(ctx, offset + 24, &lists,
+                                  "shape-set.normal-lists") != 1)
+        {
+            stage_hsd_raw_fail(ctx, "shape-set-normal", offset);
+        }
+        stage_hsd_raw_shape_index_lists(ctx, lists, nb_shape, nb_normal_index,
+                                        desc, "shape-set.normal-index");
+        stage_hsd_raw_vtx(ctx, desc);
+    }
+    stage_swap16(raw + 0);
+    stage_swap16(raw + 2);
+    stage_swap32(raw + 4);
+    stage_swap32(raw + 16);
 }
 
 static void stage_hsd_raw_envelope(StageHsdRawContext* ctx, u32 offset)
@@ -444,13 +588,26 @@ static void stage_hsd_raw_pobj(StageHsdRawContext* ctx, u32 offset)
     u16 flags = mv_be16(raw + 12);
     u16 type = flags & 0x3000;
     uint32_t target;
+    uint32_t union_target = UINT32_MAX;
 
-    if (type == POBJ_SHAPEANIM || type == 0x3000) {
+    if (type == 0x3000) {
         stage_hsd_raw_fail(ctx, "pobj-unsupported-type", offset);
     }
 
     if (stage_hsd_raw_pointer(ctx, offset + 4, &target, "pobj.next")) {
         stage_hsd_raw_pobj(ctx, target);
+    }
+
+    /* ShapeSet may reuse the PObj's VtxDesc list. Validate its index-stream
+     * interpretation while those descriptors are still serialized BE, then
+     * let the shared visited set make the subsequent PObj conversion a no-op. */
+    int union_result = stage_hsd_raw_pointer(ctx, offset + 20, &union_target,
+                                             "pobj.union");
+    if (type == POBJ_SHAPEANIM) {
+        if (!union_result) {
+            stage_hsd_raw_fail(ctx, "pobj.shape-set-null", offset);
+        }
+        stage_hsd_raw_shape_set(ctx, union_target);
     }
     if (stage_hsd_raw_pointer(ctx, offset + 8, &target, "pobj.verts")) {
         stage_hsd_raw_vtx(ctx, target);
@@ -461,18 +618,17 @@ static void stage_hsd_raw_pobj(StageHsdRawContext* ctx, u32 offset)
     stage_swap16(raw + 12);
     stage_swap16(raw + 14);
 
-    int union_result = stage_hsd_raw_pointer(ctx, offset + 20, &target,
-                                             "pobj.union");
     if (type == POBJ_ENVELOPE) {
         if (!union_result) {
             stage_hsd_raw_fail(ctx, "pobj.envelope-null", offset);
         }
-        stage_hsd_raw_envelope(ctx, target);
-    } else if (union_result) {
+        stage_hsd_raw_envelope(ctx, union_target);
+    } else if (type != POBJ_SHAPEANIM && union_result) {
         /* POBJ_SKIN stores a descriptor reference to another JObj in the same
-         * structural tree. Convert that target's scalar graph as well; the
-         * runtime HSD ID table resolves the relocated descriptor identity. */
-        stage_hsd_raw_joint(ctx, target);
+         * structural tree. Keep the union target separate from the VtxDesc
+         * target below: GrOp shares vertex descriptors, and reusing target
+         * here made the raw walker interpret a VtxDesc as an HSD_Joint. */
+        stage_hsd_raw_joint(ctx, union_target);
     }
 }
 
@@ -590,7 +746,7 @@ static void stage_hsd_raw_joint(StageHsdRawContext* ctx, u32 offset)
     u32 flags = mv_be32(raw + 4);
     uint32_t target;
 
-    if (flags & (JOBJ_PTCL | JOBJ_INSTANCE)) {
+    if (flags & JOBJ_PTCL) {
         OSReport("VITA_STAGE_HSD_RAW_UNSUPPORTED kind=joint-flags offset=%08x flags=%08x\n",
                  offset, flags);
         HSD_Panic(__FILE__, __LINE__, "stage HSD joint requires adapter");
@@ -686,14 +842,16 @@ static void stage_hsd_raw_spline(StageHsdRawContext* ctx, u32 offset)
                                    target, (size_t)numcv,
                                    "spline.segLength");
 
-    if (stage_hsd_raw_pointer(ctx, offset + 0x14, &target,
-                              "spline.segPoly") != 1)
-    {
+    int poly_result = stage_hsd_raw_pointer(ctx, offset + 0x14, &target,
+                                            "spline.segPoly");
+    if (poly_result < 0 || (type != 0 && poly_result != 1)) {
         stage_hsd_raw_fail(ctx, "spline.segPoly", offset);
     }
-    stage_hsd_raw_swap_float_array(ctx, STAGE_HSD_RAW_SPLINE_SEG_POLY,
-                                   target, ((size_t)numcv - 1u) * 5u,
-                                   "spline.segPoly");
+    if (poly_result == 1) {
+        stage_hsd_raw_swap_float_array(ctx, STAGE_HSD_RAW_SPLINE_SEG_POLY,
+                                       target, ((size_t)numcv - 1u) * 5u,
+                                       "spline.segPoly");
+    }
 
     stage_swap16(raw + 2);
     stage_swap32(raw + 4);
@@ -746,9 +904,10 @@ static void stage_hsd_raw_aobj(StageHsdRawContext* ctx, u32 offset,
         stage_hsd_raw_fobj(ctx, target, max_fobj_type);
     }
     if (stage_hsd_raw_pointer(ctx, offset + 12, &target, "aobj.obj_id")) {
-        if (max_fobj_type != 12) {
-            stage_hsd_raw_fail(ctx, "aobj.obj_id-nonjobj", offset);
-        }
+        /* HSD_AObjLoadDesc applies obj_id uniformly to every AObj kind: it
+         * first probes the ID table and otherwise falls back to
+         * HSD_JObjLoadJoint(). A relocated retail obj_id is therefore a typed
+         * HSD_Joint edge even for WObj/light/material animation AObjs. */
         stage_hsd_raw_joint(ctx, target);
     }
     stage_swap32(raw + 0);
@@ -878,6 +1037,26 @@ static void stage_hsd_raw_matanim_joint(StageHsdRawContext* ctx, u32 offset)
     }
 }
 
+static void stage_hsd_raw_shape_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_SHAPE_ANIM, offset)) {
+        return;
+    }
+    (void) stage_hsd_raw_span(ctx, offset, 8, "shape-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target, "shape-anim.next")) {
+        stage_hsd_raw_shape_anim(ctx, target);
+    }
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "shape-anim.aobj"))
+    {
+        /* Shape weights use HSD_A_S_W0 and following scalar channels. They do
+           not carry JObj object-id references, so accept the full serialized
+           u8 channel range while retaining the AObj/FObj structural checks. */
+        stage_hsd_raw_aobj(ctx, target, 0xFF);
+    }
+}
+
 static void stage_hsd_raw_shape_dobj(StageHsdRawContext* ctx, u32 offset)
 {
     for (unsigned guard = 0; offset != UINT32_MAX && guard < 4096; ++guard) {
@@ -889,10 +1068,7 @@ static void stage_hsd_raw_shape_dobj(StageHsdRawContext* ctx, u32 offset)
         int shape_result = stage_hsd_raw_pointer(ctx, offset + 4, &target,
                                                  "shape-dobj.anim");
         if (shape_result != 0) {
-            /* EfCoData's retail shape trees are structural placeholders only.
-               Keep a real morph-animation payload fail-closed until the
-               ShapeSet/AObj adapter is implemented and hardware-tested. */
-            stage_hsd_raw_fail(ctx, "shape-dobj.payload", offset);
+            stage_hsd_raw_shape_anim(ctx, target);
         }
         int next_result = stage_hsd_raw_pointer(ctx, offset, &target,
                                                 "shape-dobj.next");
@@ -1275,6 +1451,348 @@ static void stage_hsd_raw_scene_anim_table(StageHsdRawContext* ctx,
     stage_hsd_raw_fail(ctx, "scene animation table unterminated", table_offset);
 }
 
+/* A retail SceneDesc is one serialized HSD graph: models, cameras, lights and
+ * fog all share the same DAT relocation domain.  HSD_ArchiveParse relocates
+ * pointers but does not convert PowerPC big-endian descriptor scalars.  Keep
+ * conversion here, before relocation, so the runtime sees one host-native
+ * representation and never has to guess byte order from legal-looking flags. */
+static void stage_hsd_raw_vec3(StageHsdRawContext* ctx, u32 offset,
+                               const char* what)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_VEC3, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 12, what);
+    for (unsigned i = 0; i < 3; ++i) {
+        float value = stage_be_float(raw + i * 4);
+        if (!isfinite(value)) stage_hsd_raw_fail(ctx, what, offset + i * 4);
+        stage_swap32(raw + i * 4);
+    }
+}
+
+static void stage_hsd_raw_wobj_desc(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_WOBJ_DESC, offset)) return;
+    (void) stage_hsd_raw_span(ctx, offset, 20, "scene.wobj");
+    uint32_t target;
+    (void) stage_hsd_raw_pointer(ctx, offset, &target, "scene.wobj.class");
+    stage_hsd_raw_vec3(ctx, offset + 4, "scene.wobj.pos");
+    if (stage_hsd_raw_pointer(ctx, offset + 16, &target,
+                              "scene.wobj.robj"))
+        stage_hsd_raw_robj(ctx, target);
+}
+
+static void stage_hsd_raw_robj_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_ROBJ_ANIM, offset)) return;
+    (void) stage_hsd_raw_span(ctx, offset, 8, "scene.robj-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target,
+                              "scene.robj-anim.next"))
+        stage_hsd_raw_robj_anim(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "scene.robj-anim.aobj"))
+        stage_hsd_raw_aobj(ctx, target, TYPE_ROBJ);
+}
+
+static void stage_hsd_raw_wobj_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_WOBJ_ANIM, offset)) return;
+    (void) stage_hsd_raw_span(ctx, offset, 8, "scene.wobj-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target,
+                              "scene.wobj-anim.aobj"))
+        stage_hsd_raw_aobj(ctx, target, 7);
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "scene.wobj-anim.robj"))
+        stage_hsd_raw_robj_anim(ctx, target);
+}
+
+static void stage_hsd_raw_camera_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_CAMERA_ANIM, offset)) return;
+    (void) stage_hsd_raw_span(ctx, offset, 12, "scene.camera-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target,
+                              "scene.camera-anim.aobj"))
+        stage_hsd_raw_aobj(ctx, target, 12);
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "scene.camera-anim.eye"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 8, &target,
+                              "scene.camera-anim.interest"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+}
+
+static void stage_hsd_raw_camera_desc(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_CAMERA_DESC, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 0x40, "scene.camera");
+    u16 projection = mv_be16(raw + 6);
+    if (projection < PROJ_PERSPECTIVE || projection > PROJ_ORTHO)
+        stage_hsd_raw_fail(ctx, "scene.camera.projection", offset);
+
+    uint32_t target;
+    (void) stage_hsd_raw_pointer(ctx, offset, &target, "scene.camera.class");
+    if (stage_hsd_raw_pointer(ctx, offset + 0x18, &target,
+                              "scene.camera.eye"))
+        stage_hsd_raw_wobj_desc(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 0x1C, &target,
+                              "scene.camera.interest"))
+        stage_hsd_raw_wobj_desc(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 0x24, &target,
+                              "scene.camera.up"))
+        stage_hsd_raw_vec3(ctx, target, "scene.camera.up");
+
+    stage_swap16(raw + 0x04);
+    stage_swap16(raw + 0x06);
+    for (unsigned field = 0x08; field <= 0x16; field += 2)
+        stage_swap16(raw + field);
+    static const u8 scalar_fields[] = { 0x20, 0x28, 0x2C };
+    for (unsigned i = 0; i < sizeof(scalar_fields); ++i) {
+        u32 field = scalar_fields[i];
+        float value = stage_be_float(raw + field);
+        if (!isfinite(value))
+            stage_hsd_raw_fail(ctx, "scene.camera.scalar", offset + field);
+        stage_swap32(raw + field);
+    }
+    unsigned projection_words = projection == PROJ_PERSPECTIVE ? 2 : 4;
+    for (unsigned i = 0; i < projection_words; ++i) {
+        u32 field = 0x30 + i * 4;
+        float value = stage_be_float(raw + field);
+        if (!isfinite(value))
+            stage_hsd_raw_fail(ctx, "scene.camera.projection-param",
+                               offset + field);
+        stage_swap32(raw + field);
+    }
+}
+
+static void stage_hsd_raw_light_param(StageHsdRawContext* ctx, u32 offset,
+                                      u16 type, u16 attnflags)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_LIGHT_PARAM, offset)) return;
+    if (attnflags == LOBJ_LIGHT_ATTN) {
+        u8* raw = stage_hsd_raw_span(ctx, offset, 24, "scene.light.attn");
+        for (unsigned i = 0; i < 6; ++i) {
+            if (!isfinite(stage_be_float(raw + i * 4)))
+                stage_hsd_raw_fail(ctx, "scene.light.attn", offset + i * 4);
+            stage_swap32(raw + i * 4);
+        }
+        return;
+    }
+    if (attnflags != LOBJ_LIGHT_ATTN_NONE)
+        stage_hsd_raw_fail(ctx, "scene.light.attnflags", offset);
+
+    if (type == LOBJ_POINT) {
+        u8* raw = stage_hsd_raw_span(ctx, offset, 12, "scene.light.point");
+        if (!isfinite(stage_be_float(raw)) ||
+            !isfinite(stage_be_float(raw + 4)))
+            stage_hsd_raw_fail(ctx, "scene.light.point", offset);
+        stage_swap32(raw + 0);
+        stage_swap32(raw + 4);
+        stage_swap32(raw + 8);
+    } else if (type == LOBJ_SPOT) {
+        u8* raw = stage_hsd_raw_span(ctx, offset, 20, "scene.light.spot");
+        if (!isfinite(stage_be_float(raw + 0)) ||
+            !isfinite(stage_be_float(raw + 8)) ||
+            !isfinite(stage_be_float(raw + 12)))
+            stage_hsd_raw_fail(ctx, "scene.light.spot", offset);
+        for (unsigned i = 0; i < 5; ++i) stage_swap32(raw + i * 4);
+    }
+}
+
+static void stage_hsd_raw_light_desc(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_LIGHT_DESC, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 28, "scene.light");
+    u16 flags = mv_be16(raw + 8);
+    u16 attnflags = mv_be16(raw + 10);
+    u16 type = flags & LOBJ_TYPE_MASK;
+
+    uint32_t target;
+    (void) stage_hsd_raw_pointer(ctx, offset, &target, "scene.light.class");
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target, "scene.light.next"))
+        stage_hsd_raw_light_desc(ctx, target);
+    int position = stage_hsd_raw_pointer(ctx, offset + 16, &target,
+                                         "scene.light.position");
+    if (position) stage_hsd_raw_wobj_desc(ctx, target);
+    int interest = stage_hsd_raw_pointer(ctx, offset + 20, &target,
+                                         "scene.light.interest");
+    if (interest) stage_hsd_raw_wobj_desc(ctx, target);
+    int param = stage_hsd_raw_pointer(ctx, offset + 24, &target,
+                                      "scene.light.param");
+
+    if (type == LOBJ_AMBIENT) {
+        if (position || interest || param)
+            stage_hsd_raw_fail(ctx, "scene.light.ambient-layout", offset);
+    } else if (type == LOBJ_INFINITE) {
+        if (!position)
+            stage_hsd_raw_fail(ctx, "scene.light.infinite-position", offset);
+        /* Infinite lights ignore the union payload in HSD_LObjLoadDesc. */
+    } else if (type == LOBJ_POINT) {
+        if (!position || interest || !param)
+            stage_hsd_raw_fail(ctx, "scene.light.point-layout", offset);
+        stage_hsd_raw_light_param(ctx, target, type, attnflags);
+    } else if (type == LOBJ_SPOT) {
+        if (!position || !interest || !param)
+            stage_hsd_raw_fail(ctx, "scene.light.spot-layout", offset);
+        stage_hsd_raw_light_param(ctx, target, type, attnflags);
+    } else {
+        stage_hsd_raw_fail(ctx, "scene.light.type", offset);
+    }
+
+    stage_swap16(raw + 8);
+    stage_swap16(raw + 10);
+    /* GXColor at +0x0C is four serialized bytes: never byte-swap it. */
+}
+
+static void stage_hsd_raw_light_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_LIGHT_ANIM, offset)) return;
+    (void) stage_hsd_raw_span(ctx, offset, 16, "scene.light-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target,
+                              "scene.light-anim.next"))
+        stage_hsd_raw_light_anim(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target,
+                              "scene.light-anim.aobj"))
+        stage_hsd_raw_aobj(ctx, target, 22);
+    if (stage_hsd_raw_pointer(ctx, offset + 8, &target,
+                              "scene.light-anim.position"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 12, &target,
+                              "scene.light-anim.interest"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+}
+
+static void stage_hsd_raw_light_table(StageHsdRawContext* ctx,
+                                      u32 light_table,
+                                      const char* what)
+{
+    for (u32 light_index = 0; light_index < 64; ++light_index) {
+        uint32_t list;
+        int list_result = stage_hsd_raw_pointer(
+            ctx, light_table + light_index * 4, &list, what);
+        if (list_result == 0) {
+            return;
+        }
+
+        uint32_t desc;
+        if (stage_hsd_raw_pointer(ctx, list, &desc,
+                                  "stage.light-list.desc") == 1)
+        {
+            stage_hsd_raw_light_desc(ctx, desc);
+        }
+
+        uint32_t anims;
+        if (stage_hsd_raw_pointer(ctx, list + 4, &anims,
+                                  "stage.light-list.anims") == 1)
+        {
+            stage_hsd_raw_scene_anim_table(
+                ctx, anims, "stage.light-anim", stage_hsd_raw_light_anim);
+        }
+    }
+
+    stage_hsd_raw_fail(ctx, "stage.light-table-unterminated", light_table);
+}
+
+static void stage_hsd_raw_fog_adj(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_FOG_ADJ, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 0x44, "scene.fog-adj");
+    stage_swap16(raw + 0);
+    stage_swap16(raw + 2);
+    for (unsigned i = 0; i < 16; ++i) {
+        if (!isfinite(stage_be_float(raw + 4 + i * 4)))
+            stage_hsd_raw_fail(ctx, "scene.fog-adj.matrix",
+                               offset + 4 + i * 4);
+        stage_swap32(raw + 4 + i * 4);
+    }
+}
+
+static void stage_hsd_raw_fog_desc(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_FOG_DESC, offset)) return;
+    u8* raw = stage_hsd_raw_span(ctx, offset, 20, "scene.fog");
+    uint32_t type = mv_be32(raw);
+    float start = stage_be_float(raw + 8);
+    float end = stage_be_float(raw + 12);
+    if (type > 0xFF || !isfinite(start) || !isfinite(end))
+        stage_hsd_raw_fail(ctx, "scene.fog.scalar", offset);
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target, "scene.fog.adj"))
+        stage_hsd_raw_fog_adj(ctx, target);
+    stage_swap32(raw + 0);
+    stage_swap32(raw + 8);
+    stage_swap32(raw + 12);
+    /* GXColor at +0x10 is four serialized bytes. */
+}
+
+static void stage_hsd_raw_fog_anim(StageHsdRawContext* ctx, u32 offset)
+{
+    if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_FOG_ANIM, offset)) return;
+    /* SceneFogDesc declares HSD_CameraAnim**, and retail sidecars use that
+       exact 12-byte layout. Fog consumers use aobjdesc; nativeize the WObj
+       animation fields too so the serialized graph is internally complete. */
+    (void) stage_hsd_raw_span(ctx, offset, 12, "scene.fog-anim");
+    uint32_t target;
+    if (stage_hsd_raw_pointer(ctx, offset, &target, "scene.fog-anim.aobj"))
+        stage_hsd_raw_aobj(ctx, target, 20);
+    if (stage_hsd_raw_pointer(ctx, offset + 4, &target, "scene.fog-anim.eye"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+    if (stage_hsd_raw_pointer(ctx, offset + 8, &target,
+                              "scene.fog-anim.interest"))
+        stage_hsd_raw_wobj_anim(ctx, target);
+}
+
+static void stage_hsd_raw_scene_desc_nonmodels(StageHsdRawContext* ctx,
+                                               u32 scene)
+{
+    (void) stage_hsd_raw_span(ctx, scene, 16, "scene.root");
+    uint32_t target;
+
+    /* Registry users consume cameras[0]. Camera arrays are not uniformly
+       NULL-pair terminated, so do not infer entries beyond the source use. */
+    if (stage_hsd_raw_pointer(ctx, scene + 4, &target, "scene.cameras")) {
+        uint32_t cameras = target, desc, anims;
+        if (stage_hsd_raw_pointer(ctx, cameras, &desc,
+                                  "scene.camera[0].desc"))
+            stage_hsd_raw_camera_desc(ctx, desc);
+        if (stage_hsd_raw_pointer(ctx, cameras + 4, &anims,
+                                  "scene.camera[0].anims"))
+            stage_hsd_raw_scene_anim_table(ctx, anims, "scene.camera.anim",
+                                           stage_hsd_raw_camera_anim);
+    }
+
+    if (stage_hsd_raw_pointer(ctx, scene + 8, &target, "scene.lights")) {
+        uint32_t lights = target;
+        for (u32 i = 0; i < 64; ++i) {
+            uint32_t list;
+            int result = stage_hsd_raw_pointer(ctx, lights + i * 4, &list,
+                                               "scene.light-list");
+            if (result == 0) break;
+            uint32_t desc, anims;
+            if (stage_hsd_raw_pointer(ctx, list, &desc,
+                                      "scene.light-list.desc"))
+                stage_hsd_raw_light_desc(ctx, desc);
+            if (stage_hsd_raw_pointer(ctx, list + 4, &anims,
+                                      "scene.light-list.anims"))
+                stage_hsd_raw_scene_anim_table(ctx, anims, "scene.light.anim",
+                                               stage_hsd_raw_light_anim);
+            if (i == 63)
+                stage_hsd_raw_fail(ctx, "scene.lights-unterminated", lights);
+        }
+    }
+
+    /* SceneFogDesc is a descriptor pointer, not a LightList-style table. */
+    if (stage_hsd_raw_pointer(ctx, scene + 12, &target, "scene.fog")) {
+        uint32_t fog = target, desc, anims;
+        if (stage_hsd_raw_pointer(ctx, fog, &desc, "scene.fog.desc"))
+            stage_hsd_raw_fog_desc(ctx, desc);
+        if (stage_hsd_raw_pointer(ctx, fog + 4, &anims, "scene.fog.anims"))
+            stage_hsd_raw_scene_anim_table(ctx, anims, "scene.fog.anim",
+                                           stage_hsd_raw_fog_anim);
+    }
+}
+
 /* GmPause is loaded through the ordinary SceneDesc/DynamicModelDesc path rather
  * than one of the stage/fighter/effect roots handled above.  Its relocation
  * pointers are valid after HSD_ArchiveParse, but its HSD scalar fields still
@@ -1289,13 +1807,21 @@ void mv_pause_scene_archive_prepare_raw(void* bytes, size_t size,
     uint32_t models_offset;
     unsigned model_count = 0;
 
-    if (filename == NULL || strcmp(filename, "GmPause.dat") != 0 ||
-        bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
+    /* Retail callers pass the logical archive name ("GmPause") through
+     * lbArchive_80016DBC(), while offline tools commonly use the on-disc
+     * filename ("GmPause.dat").  Do not key endian/nativeization off either
+     * spelling: the public SceneDesc symbol is the stable schema identifier. */
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
     {
         return;
     }
-    if (stage_hsd_find_public(&dat, "ScGamPause_scene_data", &scene_offset) <= 0 ||
-        mv_dat_pointer(&dat, scene_offset, &models_offset) != 1)
+    int scene_result =
+        stage_hsd_find_public(&dat, "ScGamPause_scene_data", &scene_offset);
+    if (scene_result <= 0) {
+        mv_dat_close(&dat);
+        return;
+    }
+    if (mv_dat_pointer(&dat, scene_offset, &models_offset) != 1)
     {
         mv_dat_close(&dat);
         HSD_Panic(__FILE__, __LINE__, "GmPause SceneDesc missing models");
@@ -1358,8 +1884,10 @@ void mv_pause_scene_archive_prepare_raw(void* bytes, size_t size,
         ++model_count;
     }
 
-    OSReport("VITA_PAUSE_HSD_RAW_NATIVE_PASS file=%s models=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u animjoints=%u matjoints=%u shapejoints=%u\n",
-             filename, model_count,
+    stage_hsd_raw_scene_desc_nonmodels(&ctx, scene_offset);
+
+    OSReport("VITA_PAUSE_HSD_RAW_NATIVE_PASS file=%s models=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u animjoints=%u matjoints=%u shapejoints=%u cameras=%u lights=%u wobjs=%u fogs=%u\n",
+             filename != NULL ? filename : "?", model_count,
              ctx.converted[STAGE_HSD_RAW_JOINT],
              ctx.converted[STAGE_HSD_RAW_DOBJ],
              ctx.converted[STAGE_HSD_RAW_MOBJ],
@@ -1367,7 +1895,343 @@ void mv_pause_scene_archive_prepare_raw(void* bytes, size_t size,
              ctx.converted[STAGE_HSD_RAW_TOBJ],
              ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
              ctx.converted[STAGE_HSD_RAW_MATANIM_JOINT],
-             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT]);
+             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT],
+             ctx.converted[STAGE_HSD_RAW_CAMERA_DESC],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_DESC],
+             ctx.converted[STAGE_HSD_RAW_WOBJ_DESC],
+             ctx.converted[STAGE_HSD_RAW_FOG_DESC]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
+typedef struct MvIfAllRoots {
+    uint32_t joints[512];
+    uint32_t anims[512];
+    uint32_t matanims[512];
+    uint32_t shapes[512];
+    size_t joint_count;
+    size_t anim_count;
+    size_t matanim_count;
+    size_t shape_count;
+    unsigned model_count;
+    unsigned table_count;
+} MvIfAllRoots;
+
+static void ifall_add_root(uint32_t* roots, size_t* count, uint32_t root,
+                           const char* kind)
+{
+    if (root == 0) return;
+    for (size_t i = 0; i < *count; ++i) {
+        if (roots[i] == root) return;
+    }
+    if (*count >= 512) {
+        OSReport("VITA_IFALL_ROOT_OVERFLOW kind=%s root=%08x\n", kind, root);
+        HSD_Panic(__FILE__, __LINE__, "IfAll root census overflow");
+    }
+    roots[(*count)++] = root;
+}
+
+static void ifall_collect_anim_table(MvDat* dat, uint32_t table,
+                                     uint32_t* roots, size_t* count,
+                                     const char* kind)
+{
+    for (u32 i = 0; i < 256; ++i) {
+        uint32_t root;
+        int result = mv_dat_pointer(dat, table + i * 4, &root);
+        if (result == 0) return;
+        if (result < 0) {
+            OSReport("VITA_IFALL_TABLE_INVALID kind=%s table=%08x index=%u\n",
+                     kind, table, i);
+            HSD_Panic(__FILE__, __LINE__, "IfAll animation table invalid");
+        }
+        ifall_add_root(roots, count, root, kind);
+    }
+    HSD_Panic(__FILE__, __LINE__, "IfAll animation table unterminated");
+}
+
+static void ifall_collect_model(MvDat* dat, uint32_t model,
+                                MvIfAllRoots* roots)
+{
+    if (mv_dat_span(dat, model, 16) == NULL) {
+        HSD_Panic(__FILE__, __LINE__, "IfAll DynamicModelDesc invalid");
+    }
+    uint32_t target;
+    int result = mv_dat_pointer(dat, model, &target);
+    if (result == 1) {
+        ifall_add_root(roots->joints, &roots->joint_count, target, "joint");
+    } else if (result < 0) {
+        HSD_Panic(__FILE__, __LINE__, "IfAll model joint invalid");
+    }
+
+    result = mv_dat_pointer(dat, model + 4, &target);
+    if (result == 1)
+        ifall_collect_anim_table(dat, target, roots->anims,
+                                 &roots->anim_count, "anim");
+    else if (result < 0)
+        HSD_Panic(__FILE__, __LINE__, "IfAll model anim table invalid");
+
+    result = mv_dat_pointer(dat, model + 8, &target);
+    if (result == 1)
+        ifall_collect_anim_table(dat, target, roots->matanims,
+                                 &roots->matanim_count, "matanim");
+    else if (result < 0)
+        HSD_Panic(__FILE__, __LINE__, "IfAll model matanim table invalid");
+
+    result = mv_dat_pointer(dat, model + 12, &target);
+    if (result == 1)
+        ifall_collect_anim_table(dat, target, roots->shapes,
+                                 &roots->shape_count, "shapeanim");
+    else if (result < 0)
+        HSD_Panic(__FILE__, __LINE__, "IfAll model shape table invalid");
+    roots->model_count++;
+}
+
+static void ifall_collect_model_table(MvDat* dat, uint32_t table,
+                                      MvIfAllRoots* roots)
+{
+    for (u32 i = 0; i < 128; ++i) {
+        uint32_t model;
+        int result = mv_dat_pointer(dat, table + i * 4, &model);
+        if (result == 0) {
+            roots->table_count++;
+            return;
+        }
+        if (result < 0) {
+            OSReport("VITA_IFALL_MODEL_TABLE_INVALID table=%08x index=%u\n",
+                     table, i);
+            HSD_Panic(__FILE__, __LINE__, "IfAll model table invalid");
+        }
+        ifall_collect_model(dat, model, roots);
+    }
+    HSD_Panic(__FILE__, __LINE__, "IfAll model table unterminated");
+}
+
+void mv_ifall_archive_prepare_raw(void* bytes, size_t size, const char* filename)
+{
+    static const char* const model_tables[] = {
+        "DmgMrk_scene_models", "DmgNum_scene_models",
+        "ScInfCnt_scene_models", "ScInfPnm_scene_models",
+        "ScInfStc_scene_models", "ScInfTim_scene_models",
+        "Stc_rarwmdls", "Stc_scemdls", "lupe", "tdsce",
+    };
+    MvDat dat;
+    uint32_t scene;
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
+        return;
+
+    /* Identify IfAll by its retail public schema, not by logical filename:
+       preload type 2 reaches this hook with filename == NULL. */
+    if (stage_hsd_find_public(&dat, "ScInfDmg_scene_data", &scene) <= 0) {
+        mv_dat_close(&dat);
+        return;
+    }
+    uint32_t lupe;
+    if (stage_hsd_find_public(&dat, "lupe", &lupe) <= 0) {
+        mv_dat_close(&dat);
+        return;
+    }
+
+    MvIfAllRoots roots = { 0 };
+    for (size_t i = 0; i < sizeof(model_tables) / sizeof(model_tables[0]); ++i) {
+        uint32_t table;
+        if (stage_hsd_find_public(&dat, model_tables[i], &table) <= 0) {
+            OSReport("VITA_IFALL_PUBLIC_MISSING symbol=%s\n", model_tables[i]);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "IfAll model public missing");
+        }
+        ifall_collect_model_table(&dat, table, &roots);
+    }
+
+    uint32_t scene_models;
+    if (mv_dat_pointer(&dat, scene, &scene_models) != 1) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "IfAll SceneDesc models missing");
+    }
+    ifall_collect_model_table(&dat, scene_models, &roots);
+
+    /* IfAll's HUD models and its SceneDesc camera/light live in the same DAT
+       graph. Convert them with one visited set, exactly like the generalized
+       sidecar path, so shared HSD descriptors can never be swapped twice. */
+    if (roots.joint_count != 0) {
+        MvNativeHsd probe = { 0 };
+        int validation = mv_hsd_native_validate_raw_set(
+            &dat, roots.joints, roots.joint_count, &probe);
+        if (validation != 0) {
+            OSReport("VITA_IFALL_VALIDATE_FAIL file=%s code=%d unsupported=%s off=%08x val=%08x\n",
+                     filename != NULL ? filename : "IfAll", validation,
+                     mv_hsd_native_unsupported_name(probe.unsupported_kind),
+                     probe.unsupported_offset, probe.unsupported_value);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "IfAll HSD graph unsupported");
+        }
+    }
+    for (size_t i = 0; i < roots.anim_count; ++i) {
+        if (roots.anims[i] >= dat.data_size ||
+            mv_native_anim_validate_at(&dat, roots.anims[i]) != 0)
+        {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "IfAll AnimJoint unsupported");
+        }
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "IfAll raw visited allocation failed");
+    }
+    for (size_t i = 0; i < roots.joint_count; ++i)
+        stage_hsd_raw_joint(&ctx, roots.joints[i]);
+    for (size_t i = 0; i < roots.anim_count; ++i)
+        stage_hsd_raw_anim_joint(&ctx, roots.anims[i]);
+    for (size_t i = 0; i < roots.matanim_count; ++i)
+        stage_hsd_raw_matanim_joint(&ctx, roots.matanims[i]);
+    for (size_t i = 0; i < roots.shape_count; ++i)
+        stage_hsd_raw_shape_joint(&ctx, roots.shapes[i]);
+    stage_hsd_raw_scene_desc_nonmodels(&ctx, scene);
+
+    OSReport("VITA_IFALL_HSD_RAW_NATIVE_PASS file=%s tables=%u models=%u joints=%u anims=%u matanims=%u shapes=%u cameras=%u lights=%u wobjs=%u fogs=%u\n",
+             filename != NULL ? filename : "IfAll", roots.table_count,
+             roots.model_count, (unsigned)roots.joint_count,
+             (unsigned)roots.anim_count, (unsigned)roots.matanim_count,
+             (unsigned)roots.shape_count,
+             ctx.converted[STAGE_HSD_RAW_CAMERA_DESC],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_DESC],
+             ctx.converted[STAGE_HSD_RAW_WOBJ_DESC],
+             ctx.converted[STAGE_HSD_RAW_FOG_DESC]);
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
+void mv_scene_sidecar_archive_prepare_raw(void* bytes, size_t size,
+                                          const char* filename)
+{
+    /* Source-derived registry of SceneDesc roots loaded synchronously outside
+       the specialized stage/fighter/IfAll/GmPause paths. Keeping the public
+       names here makes filename aliases (.dat/.usd/logical names) irrelevant. */
+    static const char* const scene_roots[] = {
+        "ScInfCgt_scene_data",
+        "ScInfPrize_scene_data",
+        "ScNtcCommon_scene_data",
+        "ScGamTour_scene_data",
+        "ScGamRegGover_scene_data",
+        "ScComSoon_scene_data",
+        "ScGamRegStaffroll_scene_data",
+        "ScNtcApproach_scene_data",
+        "ScNtcProgressive_scene_data",
+        "ScGamRegClear_scene_data",
+        "ScItrNormal_scene_data",
+    };
+    MvDat dat;
+    MvIfAllRoots roots = { 0 };
+    uint32_t scenes[32] = { 0 };
+    unsigned scene_count = 0;
+
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
+        return;
+
+    for (size_t i = 0; i < sizeof(scene_roots) / sizeof(scene_roots[0]); ++i) {
+        uint32_t scene;
+        if (stage_hsd_find_public(&dat, scene_roots[i], &scene) <= 0)
+            continue;
+        if (mv_dat_span(&dat, scene, 16) == NULL) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar root invalid");
+        }
+        if (scene_count >= sizeof(scenes) / sizeof(scenes[0])) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar scene overflow");
+        }
+        scenes[scene_count] = scene;
+
+        uint32_t models;
+        int result = mv_dat_pointer(&dat, scene, &models);
+        if (result == 1) {
+            ifall_collect_model_table(&dat, models, &roots);
+        } else if (result < 0) {
+            OSReport("VITA_SCENE_SIDECAR_MODELS_INVALID root=%s off=%08x\n",
+                     scene_roots[i], scene);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar models invalid");
+        }
+        ++scene_count;
+    }
+
+    if (scene_count == 0) {
+        mv_dat_close(&dat);
+        return;
+    }
+
+    /* Validate all model-side HSD roots before changing any byte. Then walk
+       model + camera + light + fog branches with one visited set. Sharing is
+       legal in HSD DATs, so one conversion domain is essential to prevent a
+       descriptor referenced by two branches from being byte-swapped twice. */
+    if (roots.joint_count != 0) {
+        MvNativeHsd probe = { 0 };
+        int validation = mv_hsd_native_validate_raw_set(
+            &dat, roots.joints, roots.joint_count, &probe);
+        if (validation != 0) {
+            OSReport("VITA_SCENE_SIDECAR_VALIDATE_FAIL file=%s kind=joint code=%d unsupported=%s off=%08x val=%08x\n",
+                     filename != NULL ? filename : "?", validation,
+                     mv_hsd_native_unsupported_name(probe.unsupported_kind),
+                     probe.unsupported_offset, probe.unsupported_value);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar JObj unsupported");
+        }
+    }
+    for (size_t i = 0; i < roots.anim_count; ++i) {
+        if (roots.anims[i] >= dat.data_size ||
+            mv_native_anim_validate_at(&dat, roots.anims[i]) != 0)
+        {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar AnimJoint unsupported");
+        }
+    }
+    for (size_t i = 0; i < roots.matanim_count; ++i) {
+        if (roots.matanims[i] >= dat.data_size) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar MatAnim outside DAT");
+        }
+    }
+    for (size_t i = 0; i < roots.shape_count; ++i) {
+        if (roots.shapes[i] >= dat.data_size) {
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar ShapeAnim outside DAT");
+        }
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "SceneDesc sidecar visited allocation failed");
+    }
+    for (size_t i = 0; i < roots.joint_count; ++i)
+        stage_hsd_raw_joint(&ctx, roots.joints[i]);
+    for (size_t i = 0; i < roots.anim_count; ++i)
+        stage_hsd_raw_anim_joint(&ctx, roots.anims[i]);
+    for (size_t i = 0; i < roots.matanim_count; ++i)
+        stage_hsd_raw_matanim_joint(&ctx, roots.matanims[i]);
+    for (size_t i = 0; i < roots.shape_count; ++i)
+        stage_hsd_raw_shape_joint(&ctx, roots.shapes[i]);
+    for (unsigned i = 0; i < scene_count; ++i)
+        stage_hsd_raw_scene_desc_nonmodels(&ctx, scenes[i]);
+
+    OSReport("VITA_SCENE_SIDECAR_RAW_NATIVE_PASS file=%s scenes=%u tables=%u models=%u joints=%u anims=%u matanims=%u shapes=%u cameras=%u lights=%u wobjs=%u cameraanims=%u lightanims=%u fogs=%u foganims=%u\n",
+             filename != NULL ? filename : "?", scene_count,
+             roots.table_count, roots.model_count,
+             (unsigned) roots.joint_count, (unsigned) roots.anim_count,
+             (unsigned) roots.matanim_count, (unsigned) roots.shape_count,
+             ctx.converted[STAGE_HSD_RAW_CAMERA_DESC],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_DESC],
+             ctx.converted[STAGE_HSD_RAW_WOBJ_DESC],
+             ctx.converted[STAGE_HSD_RAW_CAMERA_ANIM],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_ANIM],
+             ctx.converted[STAGE_HSD_RAW_FOG_DESC],
+             ctx.converted[STAGE_HSD_RAW_FOG_ANIM]);
 
     free(ctx.seen);
     mv_dat_close(&dat);
@@ -1627,12 +2491,19 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
     }
 
     u32 root_count = 0;
+    u32 external_root_count = 0;
     size_t validated_joints = 0;
     size_t validated_dobjs = 0;
     size_t validated_pobjs = 0;
     for (u32 i = 0; i < map_count; ++i) {
         uint32_t root;
-        int result = mv_dat_pointer(&dat, map_entries + i * 0x34, &root);
+        uint32_t root_field = map_entries + i * 0x34;
+        if (mv_dat_external(&dat, root_field)) {
+            roots[i] = UINT32_MAX;
+            ++external_root_count;
+            continue;
+        }
+        int result = mv_dat_pointer(&dat, root_field, &root);
         if (result < 0) {
             free(roots);
             mv_dat_close(&dat);
@@ -1679,8 +2550,79 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
         }
     }
 
-    OSReport("VITA_STAGE_HSD_RAW_NATIVE_PASS file=%s maps=%u roots=%u validate_joints=%u validate_dobjs=%u validate_pobjs=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u vtx=%u images=%u tluts=%u matrices=%u envelopes=%u splines=%u\n",
+    /* UnkStageDat_x8_t is not only a model descriptor. The same serialized
+     * map entry also owns animation tables plus camera/light/fog descriptors.
+     * HSD_ArchiveParse relocates these pointers but does not byte-swap their
+     * PowerPC scalars. Leaving x18 untouched is especially destructive:
+     * retail light flags 0x0004/0x000e become 0x0400/0x0e00 on ARM. The
+     * fighter-common light copy on GX link 4 then mistakes the ambient light
+     * for the shadow light (0x400) even though it has no position, which is
+     * the exact lbshadow.c:386 hardware failure seen on GrZe map 6.
+     *
+     * Convert the complete typed HSD portion of every map entry at the same
+     * pre-relocation boundary as its JObj. ctx.seen is intentionally shared
+     * across all entries because retail stages frequently reuse camera/light
+     * descriptors between maps. */
+    for (u32 i = 0; i < map_count; ++i) {
+        uint32_t entry = map_entries + i * 0x34;
+        uint32_t target;
+
+        int result = stage_hsd_raw_pointer(&ctx, entry + 0x04, &target,
+                                           "stage.map.anim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "stage.map.anim",
+                                           stage_hsd_raw_anim_joint);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, entry + 0x08, &target,
+                                       "stage.map.matanim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "stage.map.matanim",
+                                           stage_hsd_raw_matanim_joint);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, entry + 0x0C, &target,
+                                       "stage.map.shapeanim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "stage.map.shapeanim",
+                                           stage_hsd_raw_shape_joint);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, entry + 0x10, &target,
+                                       "stage.map.camera");
+        if (result == 1) {
+            stage_hsd_raw_camera_desc(&ctx, target);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, entry + 0x18, &target,
+                                       "stage.map.light-table");
+        if (result == 1) {
+            stage_hsd_raw_light_table(&ctx, target,
+                                      "stage.map.light-list");
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, entry + 0x1C, &target,
+                                       "stage.map.fog");
+        if (result == 1) {
+            stage_hsd_raw_fog_desc(&ctx, target);
+        }
+    }
+
+    /* Fighter_Common uses Ground_801C49B4(), which gives the stage-wide
+     * public map_plit root precedence over the callback-selected map x18.
+     * Retail archives such as GrIm.dat keep this as an independent LightList
+     * root. It must cross the same endian boundary as the per-map lists. */
+    uint32_t map_plit_offset;
+    int map_plit_result =
+        stage_hsd_find_public(&dat, "map_plit", &map_plit_offset);
+    if (map_plit_result > 0) {
+        stage_hsd_raw_light_table(&ctx, map_plit_offset,
+                                  "stage.map_plit.light-list");
+    }
+
+    OSReport("VITA_STAGE_HSD_RAW_NATIVE_PASS file=%s maps=%u roots=%u extern_roots=%u map_plit=%u validate_joints=%u validate_dobjs=%u validate_pobjs=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u vtx=%u images=%u tluts=%u matrices=%u envelopes=%u splines=%u animjoints=%u matjoints=%u shapejoints=%u cameras=%u lights=%u lightanims=%u wobjs=%u fogs=%u\n",
              filename != NULL ? filename : "?", map_count, root_count,
+             external_root_count, map_plit_result > 0 ? 1u : 0u,
              (unsigned) validated_joints, (unsigned) validated_dobjs,
              (unsigned) validated_pobjs,
              ctx.converted[STAGE_HSD_RAW_JOINT],
@@ -1693,7 +2635,15 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
              ctx.converted[STAGE_HSD_RAW_TLUT],
              ctx.converted[STAGE_HSD_RAW_MTX],
              ctx.converted[STAGE_HSD_RAW_ENVELOPE],
-             ctx.converted[STAGE_HSD_RAW_SPLINE]);
+             ctx.converted[STAGE_HSD_RAW_SPLINE],
+             ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_MATANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT],
+             ctx.converted[STAGE_HSD_RAW_CAMERA_DESC],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_DESC],
+             ctx.converted[STAGE_HSD_RAW_LIGHT_ANIM],
+             ctx.converted[STAGE_HSD_RAW_WOBJ_DESC],
+             ctx.converted[STAGE_HSD_RAW_FOG_DESC]);
 
     free(ctx.seen);
     free(roots);

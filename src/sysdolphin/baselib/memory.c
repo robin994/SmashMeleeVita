@@ -20,6 +20,13 @@ void* HSD_MemAlloc(ssize_t size)
     }
 
     adr = OSAllocFromHeap(HSD_GetHeap(), size);
+#ifdef MELEE_VITA_PLATFORM
+    if (adr == NULL) {
+        OSHeapHandle heap = HSD_GetHeap();
+        OSReport("VITA_HSD_ALLOC_FAIL size=%ld heap=%d free=%ld\n",
+                 (long) size, heap, OSCheckHeap(heap));
+    }
+#endif
     HSD_ASSERT(52, adr);
 
     return adr;

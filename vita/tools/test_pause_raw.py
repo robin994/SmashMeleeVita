@@ -88,9 +88,12 @@ boot_component(arm)
 
 src = arm.alloc(len(raw))
 arm.uc.mem_write(src, raw)
-name = arm.alloc(len(b"GmPause.dat\0"))
-arm.uc.mem_write(name, b"GmPause.dat\0")
-arm.call("mv_pause_scene_archive_prepare_raw", src, len(raw), name)
+# Match the production lbArchive_80016DBC("GmPause", ...) call exactly.  The
+# nativeizer must recognize the archive from its public SceneDesc symbol rather
+# than depending on the host/on-disc ".dat" suffix.
+name = arm.alloc(len(b"GmPause\0"))
+arm.uc.mem_write(name, b"GmPause\0")
+arm.call("mv_boot_archive_prepare_raw", src, len(raw), name)
 
 for off, flags, _ in false_union_flags:
     native = struct.unpack("<I", arm.uc.mem_read(src + 32 + off + 4, 4))[0]

@@ -21,6 +21,7 @@ const uint8_t *mv_dat_span(const MvDat *v, uint32_t offset, size_t size)
 void mv_dat_close(MvDat *v)
 {
     free(v->pointer_bits);
+    free(v->external_bits);
     memset(v, 0, sizeof(*v));
 }
 static int valid_symbol(const MvDat *v, const uint8_t *entry)
@@ -46,8 +47,10 @@ int mv_dat_open(MvDat *v, const void *bytes, size_t size)
     v->externs = v->publics + (size_t)np * 8;
     v->strings = b + (size_t)end; v->strings_size = size - (size_t)end;
     /* Some original archives contain unaligned pointer fields: one bit per byte. */
-    v->pointer_bits = calloc(((size_t)ds + 7) / 8 + 1, 1);
-    if (!v->pointer_bits) { mv_dat_close(v); return -1; }
+    size_t bit_bytes = ((size_t)ds + 7) / 8 + 1;
+    v->pointer_bits = calloc(bit_bytes, 1);
+    v->external_bits = calloc(bit_bytes, 1);
+    if (!v->pointer_bits || !v->external_bits) { mv_dat_close(v); return -1; }
     for (uint32_t i = 0; i < nr; ++i) {
         uint32_t field = mv_be32(v->relocations + i * 4);
         const uint8_t *p = mv_dat_span(v, field, 4);
@@ -56,8 +59,25 @@ int mv_dat_open(MvDat *v, const void *bytes, size_t size)
     }
     for (uint32_t i = 0; i < np; ++i)
         if (!valid_symbol(v, v->publics + i * 8)) goto invalid;
-    for (uint32_t i = 0; i < ne; ++i)
-        if (!valid_symbol(v, v->externs + i * 8)) goto invalid;
+    for (uint32_t i = 0; i < ne; ++i) {
+        const uint8_t *entry = v->externs + i * 8;
+        if (!valid_symbol(v, entry)) goto invalid;
+
+        /* Extern references are serialized as linked lists embedded in the
+           data section. Each word contains the offset of the next field and
+           0xFFFFFFFF terminates the chain. HSD_ArchiveLocateExtern() overwrites
+           these words with the resolved cross-archive address later. */
+        uint32_t field = mv_be32(entry);
+        uint32_t max_steps = ds / 4u + 2u;
+        for (uint32_t step = 0; field != UINT32_MAX; ++step) {
+            if (step >= max_steps || field > ds || ds - field < 4) goto invalid;
+            uint8_t mask = (uint8_t)(1u << (field % 8));
+            uint8_t *slot = &v->external_bits[field / 8];
+            if (*slot & mask) goto invalid; /* cycle or duplicate ownership */
+            *slot |= mask;
+            field = mv_be32(v->data + field);
+        }
+    }
     return 0;
 invalid:
     mv_dat_close(v);
@@ -73,6 +93,11 @@ int mv_dat_pointer(const MvDat *v, uint32_t field, uint32_t *target)
     if (value > v->data_size) return -1;
     *target = value;
     return 1;
+}
+int mv_dat_external(const MvDat *v, uint32_t field)
+{
+    if (!v || !v->external_bits || field >= v->data_size) return 0;
+    return (v->external_bits[field / 8] & (1u << (field % 8))) != 0;
 }
 int mv_dat_public(const MvDat *v, uint32_t index, const char **name, uint32_t *target)
 {
