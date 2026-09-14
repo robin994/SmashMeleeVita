@@ -3339,6 +3339,7 @@ void hsd_8039D048(void* particle)
 
 void hsd_8039D0A0(HSD_Generator* gen)
 {
+#ifndef MELEE_VITA_PLATFORM
     typedef struct {
         HSD_JObj* jobj[8];
         HSD_Particle* particle[146];
@@ -3346,6 +3347,7 @@ void hsd_8039D0A0(HSD_Generator* gen)
         HSD_ObjAllocData alloc_data;
     } ParticleData;
     ParticleData* data = (ParticleData*) hsd_804D08E8;
+#endif
     HSD_Particle* prev;
     HSD_Particle* prt;
     HSD_Particle* next;
@@ -3354,7 +3356,16 @@ void hsd_8039D0A0(HSD_Generator* gen)
 
     prev = NULL;
     idnum = gen->idnum;
+#ifdef MELEE_VITA_PLATFORM
+    /* The retail binary relied on the original DOL linker placing the particle
+     * globals contiguously from hsd_804D08E8 through hsd_804D0F60. GCC/ELF
+     * is free to reorder BSS symbols, so recreating that historical block with
+     * a struct cast addresses unrelated globals on Vita. Use the actual
+     * symbols instead of address arithmetic. */
+    head = &hsd_804D0908[gen->linkNo];
+#else
     head = &data->particle[gen->linkNo];
+#endif
     prt = *head;
 
     while (prt != NULL) {
@@ -3382,13 +3393,24 @@ void hsd_8039D0A0(HSD_Generator* gen)
 
             if (prt->kind & 0x8000) {
                 s32 jidx = (prt->kind >> 12) & 7;
+#ifdef MELEE_VITA_PLATFORM
+                if (hsd_804D08E8[jidx] != NULL) {
+                    HSD_JObjUnref(hsd_804D08E8[jidx]);
+                    hsd_804D08E8[jidx] = NULL;
+                }
+#else
                 if (data->jobj[jidx] != NULL) {
                     HSD_JObjUnref(data->jobj[jidx]);
                     data->jobj[jidx] = NULL;
                 }
+#endif
             }
 
+#ifdef MELEE_VITA_PLATFORM
+            HSD_ObjFree(&hsd_804D0F60.alloc_data, prt);
+#else
             HSD_ObjFree(&data->alloc_data, prt);
+#endif
             hsd_804D78E2--;
         } else {
             prev = prt;

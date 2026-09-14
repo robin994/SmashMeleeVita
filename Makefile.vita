@@ -104,6 +104,9 @@ stage-quake-check: test-env
 stage-device-hit-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_zebes_device_hit_arm.py --elf $(BUILD_DIR)/melee_vita --asset $(DISC_FILES)/GrZe.dat
 
+particle-pool-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_particle_pool_arm.py --elf $(BUILD_DIR)/melee_vita
+
 stage-multitex-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_multitex_arm.py
 
