@@ -21,7 +21,7 @@ set(MELEE_VITA_DISC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01" CACHE PATH
   "Path to the extracted GALE01 disc root used for generated retail assets")
 set(MELEE_VITA_VITAGL_LIBRARY "" CACHE FILEPATH
   "Optional explicit libvitaGL.a; use this to lock the known-good Vita renderer build")
-option(MELEE_VITA_GXM_DEBUG "Enable vitaGL/Razor GXM diagnostics for the test build" OFF)
+option(MELEE_VITA_GXM_DEBUG "Enable retail-safe vitaGL/GXM diagnostics for the test build" OFF)
 add_custom_command(
   OUTPUT "${MELEE_SIS_FONT_SOURCE}"
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
@@ -297,14 +297,11 @@ endif()
 target_link_libraries(melee_vita ${MELEE_VITA_VITAGL_LINK} vitashark SceShaccCgExt SceShaccCg_stub
   SceKernelDmacMgr_stub ScePower_stub mathneon taihen_stub stdc++
   SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceSysmodule_stub SceAppMgr_stub)
-if(MELEE_VITA_GXM_DEBUG)
-  target_link_libraries(melee_vita SceRazorCapture_stub ScePerf_stub)
-endif()
 vita_create_self(eboot.bin melee_vita UNSAFE)
 # Request Vita extended user-memory mode (ATTRIBUTE2 is a DWORD SFO field).
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 01.20 NAME "Melee Vita Runtime"
+  VERSION 01.21 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

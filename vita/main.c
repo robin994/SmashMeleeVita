@@ -29,9 +29,9 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.10-gxm-debug\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.11-gxm-retail-debug\n"); fflush(log); }
 #ifdef MELEE_VITA_GXM_DEBUG
-    if (log) { fprintf(log, "VITAGL_DIAGNOSTICS log_errors=1 profiling=1 debugger=1 razor=1 cpu_tracer=1\n"); fflush(log); }
+    if (log) { fprintf(log, "VITAGL_DIAGNOSTICS log_errors=1 profiling=1 debugger=1 razor=0 cpu_tracer=0\n"); fflush(log); }
 #endif
     if (log) { fprintf(log, "GC_ASYNC_INIT pending=%u mode=deferred_completion\n", mv_gc_async_pending()); fflush(log); }
     if (log) { fprintf(log, "MELEE_VITA_UPSTREAM_BASE b5a78406a\n"); fflush(log); }
