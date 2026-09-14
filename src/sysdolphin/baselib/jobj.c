@@ -6,6 +6,7 @@
 #include "aobj.h"
 #include "class.h"
 #include "cobj.h"
+#include "debug.h"
 #include "displayfunc.h"
 #include "dobj.h"
 #include "fobj.h"
@@ -26,6 +27,70 @@ static void (*dptcl_callback)(int, int lo, int hi, HSD_JObj* jobj);
 static void (*jsound_callback)(s32);
 static void (*ptcltgt_callback)(HSD_JObj*, s32);
 static HSD_JObj* current_jobj;
+
+#ifdef MELEE_VITA_PLATFORM
+static bool HSD_VitaVec3Finite(const Vec3* v)
+{
+    return isfinite(v->x) && isfinite(v->y) && isfinite(v->z);
+}
+
+static void HSD_VitaSanitizeJObjSRT(HSD_JObj* jobj)
+{
+    bool changed = false;
+    Vec3 old_scale = jobj->scale;
+    Quaternion old_rotate = jobj->rotate;
+    Vec3 old_translate = jobj->translate;
+
+    if (!HSD_VitaVec3Finite(&jobj->scale)) {
+        if (!isfinite(jobj->scale.x)) jobj->scale.x = 1.0F;
+        if (!isfinite(jobj->scale.y)) jobj->scale.y = 1.0F;
+        if (!isfinite(jobj->scale.z)) jobj->scale.z = 1.0F;
+        changed = true;
+    }
+    if (!HSD_VitaVec3Finite(&jobj->translate)) {
+        if (!isfinite(jobj->translate.x)) jobj->translate.x = 0.0F;
+        if (!isfinite(jobj->translate.y)) jobj->translate.y = 0.0F;
+        if (!isfinite(jobj->translate.z)) jobj->translate.z = 0.0F;
+        changed = true;
+    }
+
+    if (jobj->flags & JOBJ_USE_QUATERNION) {
+        f32 norm2 = jobj->rotate.x * jobj->rotate.x +
+                    jobj->rotate.y * jobj->rotate.y +
+                    jobj->rotate.z * jobj->rotate.z +
+                    jobj->rotate.w * jobj->rotate.w;
+        if (!isfinite(jobj->rotate.x) || !isfinite(jobj->rotate.y) ||
+            !isfinite(jobj->rotate.z) || !isfinite(jobj->rotate.w) ||
+            !isfinite(norm2) || norm2 <= 1.0e-20F)
+        {
+            jobj->rotate.x = 0.0F;
+            jobj->rotate.y = 0.0F;
+            jobj->rotate.z = 0.0F;
+            jobj->rotate.w = 1.0F;
+            changed = true;
+        }
+    } else if (!isfinite(jobj->rotate.x) || !isfinite(jobj->rotate.y) ||
+               !isfinite(jobj->rotate.z))
+    {
+        if (!isfinite(jobj->rotate.x)) jobj->rotate.x = 0.0F;
+        if (!isfinite(jobj->rotate.y)) jobj->rotate.y = 0.0F;
+        if (!isfinite(jobj->rotate.z)) jobj->rotate.z = 0.0F;
+        changed = true;
+    }
+
+    if (changed) {
+        static unsigned report_count;
+        if (report_count < 32) {
+            ++report_count;
+            OSReport("VITA_ARM32_JOBJ_SRT_SANITIZE jobj=%p flags=%08x scale=%f,%f,%f rot=%f,%f,%f,%f trans=%f,%f,%f\n",
+                     (void*) jobj, (unsigned) jobj->flags,
+                     old_scale.x, old_scale.y, old_scale.z,
+                     old_rotate.x, old_rotate.y, old_rotate.z, old_rotate.w,
+                     old_translate.x, old_translate.y, old_translate.z);
+        }
+    }
+}
+#endif
 
 void HSD_JObjCheckDepend(HSD_JObj* jobj)
 {
@@ -140,6 +205,12 @@ void HSD_JObjMakeMatrix(HSD_JObj* jobj)
     Vec3* scl;
 
     HSD_JObjSetupMatrix(jobj->parent);
+#ifdef MELEE_VITA_PLATFORM
+    /* Descriptor conversion and animation callbacks are the ARM32 trust
+     * boundary. Never allow one malformed scalar to contaminate the complete
+     * parent/child matrix tree with NaNs. */
+    HSD_VitaSanitizeJObjSRT(jobj);
+#endif
     if (jobj->flags & 8) {
         if (jobj->parent != NULL && jobj->parent->scl != NULL) {
             if (jobj->scl == NULL) {

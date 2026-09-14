@@ -7,14 +7,25 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 set(CMAKE_C_STANDARD 11)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# The decomp was authored around the PowerPC/GameCube ABI and contains a fair
+# amount of low-level code that can become undefined or alignment-sensitive
+# after an optimizing ARM32 compile. Keep the Vita build conservative at those
+# boundaries rather than relying on x86-like unaligned/aliasing behavior.
+set(MELEE_VITA_ARM32_SAFE_FLAGS
+  -fno-strict-aliasing
+  -fwrapv
+  -mno-unaligned-access)
+
 set(MELEE_SIS_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/sis_font_atlas.c")
+set(MELEE_VITA_DISC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01" CACHE PATH
+  "Path to the extracted GALE01 disc root used for generated retail assets")
 add_custom_command(
   OUTPUT "${MELEE_SIS_FONT_SOURCE}"
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
-          --dol "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01/sys/main.dol"
+          --dol "${MELEE_VITA_DISC_ROOT}/sys/main.dol"
           --output "${MELEE_SIS_FONT_SOURCE}"
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
-          "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01/sys/main.dol"
+          "${MELEE_VITA_DISC_ROOT}/sys/main.dol"
   COMMENT "Extracting original Melee SIS glyph atlas"
   VERBATIM)
 set_source_files_properties("${MELEE_SIS_FONT_SOURCE}" PROPERTIES GENERATED TRUE)
@@ -25,10 +36,10 @@ option(MELEE_VITA_SKIP_CLASSIC_INTRO
 add_library(melee_portable OBJECT ../src/sysdolphin/baselib/random.c
   ../extern/dolphin/src/dolphin/pad/PadClamp.c)
 target_include_directories(melee_portable PRIVATE ../src ../extern/dolphin/include)
-target_compile_options(melee_portable PRIVATE -O2 -fno-short-enums)
+target_compile_options(melee_portable PRIVATE -O2 -fno-short-enums ${MELEE_VITA_ARM32_SAFE_FLAGS})
 add_library(melee_assets STATIC hsd_data.c hsd_anim.c hsd_scene.c hsd_matanim.c hsd_native.c gx_texture.c asset_file.c)
 target_include_directories(melee_assets PRIVATE ../src ../extern/dolphin/include)
-target_compile_options(melee_assets PRIVATE -Wall -Wextra -Werror -O2 -fno-short-enums)
+target_compile_options(melee_assets PRIVATE -Wall -Wextra -Werror -O2 -fno-short-enums ${MELEE_VITA_ARM32_SAFE_FLAGS})
 add_library(melee_hsd_runtime STATIC
   hsd_runtime_platform.c hsd_runtime_probe.c hsd_anim_native.c hsd_matanim_native.c hsd_shapeanim_native.c gx_capture_vita.c gx_state_vita.c mtx_vita.c
   ../extern/dolphin/src/dolphin/mtx/mtx44.c
@@ -76,7 +87,7 @@ target_compile_definitions(melee_hsd_runtime PRIVATE MELEE_VITA_PLATFORM=1 MELEE
 # default variable-size enum layout corrupts those structures, so only the
 # upstream HSD runtime island is compiled with the original 32-bit enum ABI.
 # Its boundary to the Vita/viewer code is pointers plus fixed-width counters.
-target_compile_options(melee_hsd_runtime PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
+target_compile_options(melee_hsd_runtime PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums ${MELEE_VITA_ARM32_SAFE_FLAGS})
 
 add_library(melee_game_boot STATIC
   ${MELEE_SIS_FONT_SOURCE}
@@ -254,7 +265,7 @@ endif()
 if(MELEE_VITA_FULL_GAMEPLAY_SCENE AND MELEE_VITA_SKIP_CLASSIC_INTRO)
   target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_SKIP_CLASSIC_INTRO=1)
 endif()
-target_compile_options(melee_game_boot PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
+target_compile_options(melee_game_boot PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums ${MELEE_VITA_ARM32_SAFE_FLAGS})
 
 set(MELEE_RENDER_SOURCES gx_replay_vitagl.c render_vitagl.c)
 add_executable(melee_vita main.c mode_route_vita.c pad_vita.c mth_player_vita.c thp_jpeg.c title_boot_vita.c menu_boot_vita.c css_assets_vita.c sss_assets_vita.c onep_boot_vita.c frame_telemetry_vita.c retail_runtime_vita.c ${MELEE_RENDER_SOURCES} $<TARGET_OBJECTS:melee_portable>)
@@ -263,7 +274,7 @@ target_compile_definitions(melee_vita PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_I
 if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
   target_compile_definitions(melee_vita PRIVATE MELEE_VITA_FULL_GAMEPLAY_SCENE=1)
 endif()
-target_compile_options(melee_vita PRIVATE -Wall -Wextra -Werror -Wno-array-parameter -O2 -fno-short-enums)
+target_compile_options(melee_vita PRIVATE -Wall -Wextra -Werror -Wno-array-parameter -O2 -fno-short-enums ${MELEE_VITA_ARM32_SAFE_FLAGS})
 target_link_options(melee_vita PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/melee_vita.map" -Wl,--gc-sections -Wl,--wrap=__assert -Wl,--undefined=mv_hsd_shared_skin_lazy_probe -Wl,--undefined=mv_devcom_reentrant_probe_begin -Wl,--undefined=mv_devcom_reentrant_probe_state -Wl,--undefined=mn_VitaOptionScratchCapacity)
 target_link_libraries(melee_vita melee_assets melee_game_boot melee_hsd_runtime turbojpeg SceGxm_stub SceDisplay_stub SceCtrl_stub
   SceSysmodule_stub ScePgf_stub SceCommonDialog_stub SceAppMgr_stub SceTouch_stub
@@ -275,7 +286,7 @@ vita_create_self(eboot.bin melee_vita UNSAFE)
 # Request Vita extended user-memory mode (ATTRIBUTE2 is a DWORD SFO field).
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 01.08 NAME "Melee Vita Runtime"
+  VERSION 01.09 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

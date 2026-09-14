@@ -39,6 +39,100 @@ static Fighter_GObj* mpColl_804D64A4;
 static Event mpColl_804D64A8;
 int mpColl_804D64AC;
 
+bool mpColl_8004ACE4(CollData* coll, int flags);
+
+static bool mpColl_8004ACE4_Callback(CollData* coll, u32 flags)
+{
+    return mpColl_8004ACE4(coll, (int) flags);
+}
+
+#ifdef MELEE_VITA_PLATFORM
+static bool mpColl_VitaECBFinite(const ftECB* ecb)
+{
+    return isfinite(ecb->top.x) && isfinite(ecb->top.y) &&
+           isfinite(ecb->bottom.x) && isfinite(ecb->bottom.y) &&
+           isfinite(ecb->left.x) && isfinite(ecb->left.y) &&
+           isfinite(ecb->right.x) && isfinite(ecb->right.y);
+}
+
+static void mpColl_VitaDefaultECB(ftECB* ecb)
+{
+    ecb->top.x = 0.0F;
+    ecb->top.y = 8.0F;
+    ecb->bottom.x = 0.0F;
+    ecb->bottom.y = 0.0F;
+    ecb->right.x = 4.0F;
+    ecb->right.y = 4.0F;
+    ecb->left.x = -4.0F;
+    ecb->left.y = 4.0F;
+}
+
+static void mpColl_VitaRepairECB(CollData* coll, const char* reason,
+                                 int joint_index)
+{
+    ftECB fallback;
+
+    if (mpColl_VitaECBFinite(&coll->ecb)) {
+        fallback = coll->ecb;
+    } else if (mpColl_VitaECBFinite(&coll->prev_ecb)) {
+        fallback = coll->prev_ecb;
+    } else if (mpColl_VitaECBFinite(&coll->xE4_ecb)) {
+        fallback = coll->xE4_ecb;
+    } else {
+        mpColl_VitaDefaultECB(&fallback);
+    }
+
+    coll->ecb = fallback;
+    coll->prev_ecb = fallback;
+    coll->desired_ecb = fallback;
+    if (!mpColl_VitaECBFinite(&coll->x64_ecb)) {
+        coll->x64_ecb = fallback;
+    }
+    if (!mpColl_VitaECBFinite(&coll->xE4_ecb)) {
+        coll->xE4_ecb = fallback;
+    }
+
+    {
+        static unsigned report_count;
+        if (report_count < 64) {
+            ++report_count;
+            OSReport("VITA_ARM32_ECB_REPAIR reason=%s joint=%d gobj=%p cur=%f,%f,%f source_kind=%d x124=%f x128=%f x12c=%f\n",
+                     reason != NULL ? reason : "?", joint_index,
+                     (void*) coll->x0_gobj, coll->cur_pos.x, coll->cur_pos.y,
+                     coll->cur_pos.z, (int) coll->ecb_source.kind,
+                     coll->ecb_source.x124, coll->ecb_source.x128,
+                     coll->ecb_source.x12C);
+        }
+    }
+}
+
+static bool mpColl_VitaLoadECBJoint(CollData* coll, int index, Vec3* out)
+{
+    HSD_JObj* joint = coll->ecb_source.x10C_joint[index];
+    if (joint == NULL) {
+        return false;
+    }
+
+    lb_8000B1CC(joint, NULL, out);
+    if (!isfinite(out->x) || !isfinite(out->y) || !isfinite(out->z)) {
+        static unsigned report_count;
+        if (report_count < 32) {
+            ++report_count;
+            OSReport("VITA_ARM32_ECB_JOINT_INVALID index=%d joint=%p flags=%08x pos=%f,%f,%f scale=%f,%f,%f rot=%f,%f,%f,%f trans=%f,%f,%f mtx_t=%f,%f,%f\n",
+                     index, (void*) joint, (unsigned) joint->flags,
+                     out->x, out->y, out->z,
+                     joint->scale.x, joint->scale.y, joint->scale.z,
+                     joint->rotate.x, joint->rotate.y, joint->rotate.z,
+                     joint->rotate.w, joint->translate.x, joint->translate.y,
+                     joint->translate.z, joint->mtx[0][3], joint->mtx[1][3],
+                     joint->mtx[2][3]);
+        }
+        return false;
+    }
+    return true;
+}
+#endif
+
 #ifdef MUST_MATCH
 static void sdata2_order(void)
 {
@@ -366,15 +460,52 @@ void mpColl_LoadECB_JObj(CollData* coll, u32 flags)
     }
     coll->xE4_ecb = coll->ecb;
 
+#ifdef MELEE_VITA_PLATFORM
+    if (!isfinite(coll->cur_pos.x) || !isfinite(coll->cur_pos.y) ||
+        !isfinite(coll->cur_pos.z) || !isfinite(coll->ecb_source.x124) ||
+        !isfinite(coll->ecb_source.x128) || !isfinite(coll->ecb_source.x12C))
+    {
+        mpColl_VitaRepairECB(coll, "source-scalars", -1);
+        return;
+    }
+#endif
+
     // Loop through all collision data joints,
     // expanding the ECB to contain them all
     {
         float temp_x = coll->cur_pos.x;
         float temp_y = coll->cur_pos.y;
+#ifdef MELEE_VITA_PLATFORM
+        if (!mpColl_VitaLoadECBJoint(coll, 0, &vec)) {
+            mpColl_VitaRepairECB(coll, "joint-transform", 0);
+            return;
+        }
+#else
         lb_8000B1CC(coll->ecb_source.x10C_joint[0], NULL, &vec);
+#endif
         left_x = right_x = vec.x - temp_x;
         bottom_y = top_y = vec.y - temp_y;
 
+#ifdef MELEE_VITA_PLATFORM
+#define EXPAND_ECB_FOR_INDEX(index)                                           \
+    do {                                                                      \
+        if (!mpColl_VitaLoadECBJoint(coll, (index), &vec)) {                 \
+            mpColl_VitaRepairECB(coll, "joint-transform", (index));         \
+            return;                                                           \
+        }                                                                     \
+        dx = vec.x - temp_x;                                                  \
+        dy = vec.y - temp_y;                                                  \
+        update_min_max(&left_x, &right_x, dx);                                \
+        update_min_max(&bottom_y, &top_y, dy);                                \
+    } while (0)
+
+        EXPAND_ECB_FOR_INDEX(1);
+        EXPAND_ECB_FOR_INDEX(2);
+        EXPAND_ECB_FOR_INDEX(3);
+        EXPAND_ECB_FOR_INDEX(4);
+        EXPAND_ECB_FOR_INDEX(5);
+#undef EXPAND_ECB_FOR_INDEX
+#else
 #define EXPAND_ECB_FOR(joint)                                                 \
     lb_8000B1CC(joint, NULL, &vec);                                           \
     dx = vec.x - temp_x;                                                      \
@@ -387,6 +518,8 @@ void mpColl_LoadECB_JObj(CollData* coll, u32 flags)
         EXPAND_ECB_FOR(coll->ecb_source.x10C_joint[3]);
         EXPAND_ECB_FOR(coll->ecb_source.x10C_joint[4]);
         EXPAND_ECB_FOR(coll->ecb_source.x10C_joint[5]);
+#undef EXPAND_ECB_FOR
+#endif
     }
 
     if (!(flags & CollisionFlagAir_CanGrabLedge)) {
@@ -452,6 +585,12 @@ void mpColl_LoadECB_JObj(CollData* coll, u32 flags)
     coll->desired_ecb.left.x = left_x;
     coll->desired_ecb.left.y =
         coll->ecb_source.x124 + 0.5F * (bottom_y + top_y);
+#ifdef MELEE_VITA_PLATFORM
+    if (!mpColl_VitaECBFinite(&coll->desired_ecb)) {
+        mpColl_VitaRepairECB(coll, "desired-ecb", -1);
+        return;
+    }
+#endif
     coll->x34_flags.b0 = 0;
 }
 
@@ -680,6 +819,16 @@ static inline void Vec2_Interpolate(float time, Vec2* dest, Vec2* src)
 
 void mpCollInterpolateECB(CollData* coll, float time)
 {
+#ifdef MELEE_VITA_PLATFORM
+    if (!isfinite(time) || !mpColl_VitaECBFinite(&coll->ecb) ||
+        !mpColl_VitaECBFinite(&coll->desired_ecb))
+    {
+        mpColl_VitaRepairECB(coll, "interpolate-input", -1);
+        if (!isfinite(time)) {
+            time = 1.0F;
+        }
+    }
+#endif
     coll->prev_ecb = coll->ecb;
     if (coll->x34_flags.b6) {
         coll->ecb = coll->x64_ecb;
@@ -689,6 +838,11 @@ void mpCollInterpolateECB(CollData* coll, float time)
     Vec2_Interpolate(time, &coll->ecb.bottom, &coll->desired_ecb.bottom);
     Vec2_Interpolate(time, &coll->ecb.left, &coll->desired_ecb.left);
     Vec2_Interpolate(time, &coll->ecb.right, &coll->desired_ecb.right);
+#ifdef MELEE_VITA_PLATFORM
+    if (!mpColl_VitaECBFinite(&coll->ecb)) {
+        mpColl_VitaRepairECB(coll, "interpolate-output", -1);
+    }
+#else
     if (fpclassify(coll->ecb.top.x) == FP_NAN ||
         fpclassify(coll->ecb.top.y) == FP_NAN ||
         fpclassify(coll->ecb.bottom.x) == FP_NAN ||
@@ -700,6 +854,7 @@ void mpCollInterpolateECB(CollData* coll, float time)
     {
         HSD_ASSERTREPORT(1193, 0, "error\n");
     }
+#endif
 }
 
 static void mpColl_RightWall_inline(int line_id)
@@ -2692,7 +2847,7 @@ static inline bool inline2(CollData* coll, int i)
     } else {
         mpColl_IsEcbTiny = false;
     }
-    result = mpColl_80043754((void*) mpColl_8004ACE4, coll, i);
+    result = mpColl_80043754(mpColl_8004ACE4_Callback, coll, i);
     mpCollEnd(coll, result, false);
     return result;
 }

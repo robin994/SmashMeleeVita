@@ -4,6 +4,7 @@
 
 #include <sysdolphin/baselib/forward.h>
 
+#include <math.h>
 #include <placeholder.h>
 #include <stdbool.h>
 
@@ -37,6 +38,9 @@ void ft_80081B38(Fighter_GObj* gobj)
     CollData* coll;
     FighterBone* bones;
     ftData_x44_t* temp_r29;
+#ifdef MELEE_VITA_PLATFORM
+    ftData_x44_t vita_fallback_x44 = { 0 };
+#endif
     f32 temp_f0;
     f32 temp_f3;
     u8 _[8];
@@ -50,17 +54,97 @@ void ft_80081B38(Fighter_GObj* gobj)
     coll->x34_flags.b1234 = 1;
     bones = fp->parts;
     temp_r29 = fp->ft_data->x44;
+#ifdef MELEE_VITA_PLATFORM
+    temp_f3 = isfinite(fp->x34_scale.y) ? fp->x34_scale.y : 1.0F;
+    if (!isfinite(fp->x34_scale.y)) {
+        OSReport("VITA_ARM32_ECB_SOURCE_REPAIR kind=%d reason=scale-y value=%f\n",
+                 (int) fp->kind, fp->x34_scale.y);
+    }
+    {
+        HSD_JObj* root = bones != NULL ? bones[0].joint : NULL;
+        HSD_JObj* ecb_joint[6];
+        s16 index[6];
+        u32 part_count = 0;
+        bool repaired = false;
+
+        if (fp->kind >= 0 && fp->kind < Ft_Kind_Max &&
+            ftPartsTable[fp->kind] != NULL)
+        {
+            part_count = ftPartsTable[fp->kind]->parts_num;
+        } else {
+            repaired = true;
+        }
+
+        if (temp_r29 == NULL) {
+            OSReport("VITA_ARM32_ECB_SOURCE_REPAIR kind=%d reason=null-x44\n",
+                     (int) fp->kind);
+            temp_r29 = &vita_fallback_x44;
+            repaired = true;
+        }
+
+        index[0] = temp_r29->unk0;
+        index[1] = temp_r29->unk2;
+        index[2] = temp_r29->unk4;
+        index[3] = temp_r29->unk6;
+        index[4] = temp_r29->unk8;
+        index[5] = temp_r29->unkA;
+
+        for (unsigned i = 0; i < 6; ++i) {
+            if (bones == NULL || index[i] < 0 || (u32) index[i] >= part_count ||
+                bones[index[i]].joint == NULL)
+            {
+                ecb_joint[i] = root;
+                repaired = true;
+            } else {
+                ecb_joint[i] = bones[index[i]].joint;
+            }
+        }
+
+        if (!isfinite(temp_r29->unkC)) {
+            temp_r29->unkC = 0.0F;
+            repaired = true;
+        }
+        if (!isfinite(temp_r29->ledge_snap_x)) {
+            temp_r29->ledge_snap_x = 0.0F;
+            repaired = true;
+        }
+        if (!isfinite(temp_r29->ledge_snap_y)) {
+            temp_r29->ledge_snap_y = 0.0F;
+            repaired = true;
+        }
+        if (!isfinite(temp_r29->ledge_snap_height)) {
+            temp_r29->ledge_snap_height = 0.0F;
+            repaired = true;
+        }
+
+        if (repaired) {
+            OSReport("VITA_ARM32_ECB_SOURCE_REPAIR kind=%d parts=%u idx=%d,%d,%d,%d,%d,%d offset=%f ledge=%f,%f,%f root=%p\n",
+                     (int) fp->kind, (unsigned) part_count,
+                     (int) index[0], (int) index[1], (int) index[2],
+                     (int) index[3], (int) index[4], (int) index[5],
+                     temp_r29->unkC, temp_r29->ledge_snap_x,
+                     temp_r29->ledge_snap_y, temp_r29->ledge_snap_height,
+                     (void*) root);
+        }
+
+        mpColl_SetECBSource_JObj(
+            coll, gobj, root, ecb_joint[0], ecb_joint[1], ecb_joint[2],
+            ecb_joint[3], ecb_joint[4], ecb_joint[5],
+            temp_r29->unkC * temp_f3);
+    }
+#else
     mpColl_SetECBSource_JObj(
         coll, gobj, bones->joint, bones[temp_r29->unk0].joint,
         bones[temp_r29->unk2].joint, bones[temp_r29->unk4].joint,
         bones[temp_r29->unk6].joint, bones[temp_r29->unk8].joint,
         bones[temp_r29->unkA].joint, temp_r29->unkC * fp->x34_scale.y);
     temp_f3 = fp->x34_scale.y;
+#endif
     mpColl_SetLedgeSnap(coll, temp_r29->ledge_snap_x * temp_f3,
                         temp_r29->ledge_snap_y * temp_f3,
                         temp_r29->ledge_snap_height * temp_f3);
     coll->x50 = fp->co_attrs.weight;
-    temp_f0 = 10.0F * fp->x34_scale.y;
+    temp_f0 = 10.0F * temp_f3;
     if (coll->ecb_source.kind == ECBSource_JObj) {
         coll->ecb_source.x128 = temp_f0;
         coll->ecb_source.x12C = temp_f0;
@@ -73,19 +157,49 @@ void ft_80081C88(Fighter_GObj* dst_gobj, f32 scl_y)
 
     Fighter* fp = GET_FIGHTER(dst_gobj);
     ftData_x44_t* temp_r3 = fp->ft_data->x44;
+#ifdef MELEE_VITA_PLATFORM
+    if (temp_r3 == NULL) {
+        OSReport("VITA_ARM32_ECB_SOURCE_REPAIR kind=%d reason=rescale-null-x44\n",
+                 (int) fp->kind);
+        return;
+    }
+    if (!isfinite(scl_y)) {
+        f32 fallback = isfinite(fp->x34_scale.y) ? fp->x34_scale.y : 1.0F;
+        OSReport("VITA_ARM32_ECB_SOURCE_REPAIR kind=%d reason=rescale value=%f fallback=%f\n",
+                 (int) fp->kind, scl_y, fallback);
+        scl_y = fallback;
+    }
+#endif
     {
         CollData* temp_r5 = &fp->coll_data;
 
+#ifdef MELEE_VITA_PLATFORM
+        float tmp = (isfinite(temp_r3->unkC) ? temp_r3->unkC : 0.0F) * scl_y;
+#else
         float tmp = temp_r3->unkC * scl_y;
+#endif
         ;
         if (fp->coll_data.ecb_source.kind == ECBSource_JObj) {
             temp_r5->ecb_source.x124 = tmp;
         }
 
         {
+#ifdef MELEE_VITA_PLATFORM
+            float ledge_snap_height =
+                (isfinite(temp_r3->ledge_snap_height)
+                     ? temp_r3->ledge_snap_height
+                     : 0.0F) * scl_y;
+            float ledge_snap_y =
+                (isfinite(temp_r3->ledge_snap_y) ? temp_r3->ledge_snap_y
+                                                  : 0.0F) * scl_y;
+            float ledge_snap_x =
+                (isfinite(temp_r3->ledge_snap_x) ? temp_r3->ledge_snap_x
+                                                  : 0.0F) * scl_y;
+#else
             float ledge_snap_height = temp_r3->ledge_snap_height * scl_y;
             float ledge_snap_y = temp_r3->ledge_snap_y * scl_y;
             float ledge_snap_x = temp_r3->ledge_snap_x * scl_y;
+#endif
 
             if (temp_r5->ecb_source.kind == ECBSource_JObj) {
                 temp_r5->ledge_snap_x = ledge_snap_x;
@@ -94,7 +208,12 @@ void ft_80081C88(Fighter_GObj* dst_gobj, f32 scl_y)
             }
         }
         temp_r5->x50 = fp->co_attrs.weight;
+#ifdef MELEE_VITA_PLATFORM
+        temp_f0 = 10.0F *
+                  (isfinite(fp->x34_scale.y) ? fp->x34_scale.y : scl_y);
+#else
         temp_f0 = 10.0F * fp->x34_scale.y;
+#endif
         if (temp_r5->ecb_source.kind == ECBSource_JObj) {
             temp_r5->ecb_source.x128 = temp_f0;
             temp_r5->ecb_source.x12C = temp_f0;

@@ -7,6 +7,20 @@
 #define EPSILON 0.0000000001f
 #define FLOAT_MIN 1.1754943E-38f
 
+#ifdef MELEE_VITA_PLATFORM
+static inline f32 HSD_VitaSafeReciprocalScale(f32 value)
+{
+    /* ARM/VFP propagates the 0 * Inf produced by the scale-compensation
+     * expressions below as NaN. A zero parent scale is a valid way for HSD
+     * animation data to hide a branch, so keep the compensated axis collapsed
+     * instead of poisoning every descendant matrix. */
+    if (!isfinite(value) || fabsf(value) <= FLOAT_MIN) {
+        return 0.0F;
+    }
+    return 1.0F / value;
+}
+#endif
+
 HSD_ObjAllocData HSD_Mtx_804C2310;
 HSD_ObjAllocData HSD_Mtx_804C233C;
 
@@ -383,9 +397,15 @@ void HSD_MtxSRT(Mtx m, Vec3* vec1, Vec3* vec2, Vec3* vec3, Vec3* vec4)
     vec1z_2 = vec1z_1 = vec1z = vec1->z;
 
     if (vec4 != NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        f32 temp1 = HSD_VitaSafeReciprocalScale(vec4->x);
+        f32 temp2 = HSD_VitaSafeReciprocalScale(vec4->y);
+        f32 temp3 = HSD_VitaSafeReciprocalScale(vec4->z);
+#else
         f32 temp1 = 1.0 / vec4->x;
         f32 temp2 = 1.0 / vec4->y;
         f32 temp3 = 1.0 / vec4->z;
+#endif
 
         vec1y_2 *= vec4->y * temp1;
         vec1z_2 *= vec4->z * temp1;
@@ -425,7 +445,13 @@ void HSD_MtxSRTQuat(Mtx arg0, Vec3* arg1, Quaternion* arg2, Vec3* arg3,
     MTXConcat(temp, arg0, arg0);
 
     if (arg4 != NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        MTXScale(temp, HSD_VitaSafeReciprocalScale(arg4->x),
+                 HSD_VitaSafeReciprocalScale(arg4->y),
+                 HSD_VitaSafeReciprocalScale(arg4->z));
+#else
         MTXScale(temp, 1.0 / arg4->x, 1.0 / arg4->y, 1.0 / arg4->z);
+#endif
         MTXConcat(temp, arg0, arg0);
     }
 
