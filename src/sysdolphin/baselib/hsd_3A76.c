@@ -36,6 +36,17 @@ static inline s16 sis_stream_s16(const void *ptr)
     return (s16)sis_stream_u16(ptr);
 }
 
+#ifdef MELEE_VITA_PLATFORM
+/* SIS state-stack entries are encoded in GameCube byte order by
+ * HSD_SisLib_803A7684().  Reading them through native ARM scalar pointers is
+ * both endian-wrong and potentially unaligned. */
+static inline u32 sis_stack_u32(const void *ptr)
+{
+    const u8 *p = ptr;
+    return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
+}
+#endif
+
 static inline f32 HSD_SisLib_GlyphWidth(HSD_Text* text, f32 scale_x)
 {
     return 32.0F * text->x80.x * scale_x;
@@ -50,6 +61,8 @@ void HSD_SisLib_803A7684(HSD_Text* text, const u8* cursor, u8 flags)
         int idx;
         int new_x6E;
         int old_x6E;
+        s32 fixed_x;
+        s32 fixed_y;
 
         old_x6E = text->x6E;
         if (old_x6E < (s32) (text->x6C + 5)) {
@@ -67,12 +80,12 @@ void HSD_SisLib_803A7684(HSD_Text* text, const u8* cursor, u8 flags)
             }
             HSD_SisLib_Free(old_buf);
         }
-        text->string_buffer[text->x6C++] =
-            (u8) ((s32) (256.0F * text->x78.x) >> 8);
-        text->string_buffer[text->x6C++] = (u8) (256.0F * text->x78.x);
-        text->string_buffer[text->x6C++] =
-            (u8) ((s32) (256.0F * text->x78.y) >> 8);
-        text->string_buffer[text->x6C++] = (u8) (256.0F * text->x78.y);
+        fixed_x = (s32) (256.0F * text->x78.x);
+        fixed_y = (s32) (256.0F * text->x78.y);
+        text->string_buffer[text->x6C++] = (u8) (fixed_x >> 8);
+        text->string_buffer[text->x6C++] = (u8) fixed_x;
+        text->string_buffer[text->x6C++] = (u8) (fixed_y >> 8);
+        text->string_buffer[text->x6C++] = (u8) fixed_y;
         text->string_buffer[text->x6C++] = flags;
         return;
     }
@@ -111,6 +124,8 @@ void HSD_SisLib_803A7684(HSD_Text* text, const u8* cursor, u8 flags)
         int idx;
         u8* old_buf;
         int new_x6E;
+        s32 fixed_x;
+        s32 fixed_y;
 
         old_x6E = text->x6E;
         if (old_x6E < (s32) (text->x6C + 5)) {
@@ -128,12 +143,12 @@ void HSD_SisLib_803A7684(HSD_Text* text, const u8* cursor, u8 flags)
             }
             HSD_SisLib_Free(old_buf);
         }
-        text->string_buffer[text->x6C++] =
-            (u8) ((s32) (256.0F * text->x80.x) >> 8);
-        text->string_buffer[text->x6C++] = (u8) (256.0F * text->x80.x);
-        text->string_buffer[text->x6C++] =
-            (u8) ((s32) (256.0F * text->x80.y) >> 8);
-        text->string_buffer[text->x6C++] = (u8) (256.0F * text->x80.y);
+        fixed_x = (s32) (256.0F * text->x80.x);
+        fixed_y = (s32) (256.0F * text->x80.y);
+        text->string_buffer[text->x6C++] = (u8) (fixed_x >> 8);
+        text->string_buffer[text->x6C++] = (u8) fixed_x;
+        text->string_buffer[text->x6C++] = (u8) (fixed_y >> 8);
+        text->string_buffer[text->x6C++] = (u8) fixed_y;
         text->string_buffer[text->x6C++] = flags;
         return;
     }
@@ -220,9 +235,10 @@ s32 HSD_SisLib_803A7F0C(HSD_Text* text, s32 flags)
             pos -= 4;
             if (target_type == 1) {
                 text->x78.x =
-                    (f32) * (s16*) (text->string_buffer + pos) / 256.0F;
+                    (f32) sis_stream_s16(text->string_buffer + pos) / 256.0F;
                 text->x78.y =
-                    (f32) * (s16*) (text->string_buffer + pos + 2) / 256.0F;
+                    (f32) sis_stream_s16(text->string_buffer + pos + 2) /
+                    256.0F;
                 if (flag_hi == entry_flags) {
                     remove_size = 5;
                 }
@@ -245,9 +261,10 @@ s32 HSD_SisLib_803A7F0C(HSD_Text* text, s32 flags)
             pos -= 4;
             if (target_type == 3) {
                 text->x80.x =
-                    (f32) * (u16*) (text->string_buffer + pos) / 256.0F;
+                    (f32) sis_stream_u16(text->string_buffer + pos) / 256.0F;
                 text->x80.y =
-                    (f32) * (u16*) (text->string_buffer + pos + 2) / 256.0F;
+                    (f32) sis_stream_u16(text->string_buffer + pos + 2) /
+                    256.0F;
                 if (flag_hi == entry_flags) {
                     remove_size = 5;
                 }
@@ -267,7 +284,11 @@ s32 HSD_SisLib_803A7F0C(HSD_Text* text, s32 flags)
         case 5:
             pos -= 4;
             if (target_type == 5) {
+#ifdef MELEE_VITA_PLATFORM
+                result = (s32) sis_stack_u32(text->string_buffer + pos);
+#else
                 result = *(s32*) (text->string_buffer + pos);
+#endif
                 if (flag_hi == entry_flags) {
                     remove_size = 5;
                 }

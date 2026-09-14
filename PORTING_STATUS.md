@@ -1,4 +1,8 @@
-# Porting status - 2026-09-14, v4.04 visible raster baseline after upstream sync
+# Porting status - 2026-09-14, v4.05 SIS ARM32 stack safety
+
+## 2026-09-14 — v4.05: make the SIS state stack endian/alignment safe on ARM32
+
+The CSS text investigation found a remaining architecture violation inside the original SIS renderer rather than in the font atlas. `HSD_SisLib_803A7684()` serializes spacing, scale and call/return cursors byte-by-byte in GameCube order, but `HSD_SisLib_803A7F0C()` restored those entries with native `s16/u16/s32` pointer casts. On little-endian ARM this byte-swaps fixed-point values and return pointers, and the casts can also be unaligned. Vita now decodes the encoded stack explicitly as big-endian while leaving archive-relocated SIS pointers as a separate native representation. A compiled ARM regression round-trips signed 8.8 spacing, unsigned 8.8 scale and a 32-bit return cursor through the real HSD functions. Runtime marker is `MELEE_VITA_GAME_BOOT v4.05-sis-arm32-stack`; APP_VER is 01.15.
 
 ## 2026-09-14 — v4.03: remove synchronous gameplay framebuffer readback from the frame boundary
 
