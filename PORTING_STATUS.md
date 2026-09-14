@@ -1,4 +1,149 @@
-# Porting status - 2026-09-14, v4.05 SIS ARM32 stack safety
+# Porting status - 2026-09-14, v4.14 Corneria endian + GX raster lighting
+
+## 2026-09-14 — v4.14: nativeize Corneria dynamics and restore post-XF COLOR0/COLOR1 lighting
+
+The v4.13 hardware run reached gameplay but later terminated in the original
+`grCorneriaGetPosMapKind2()` assertion. The failure is stage-specific rather than a vitaGL crash:
+Corneria's public `yakumono_param` block was still stored in GameCube byte order after archive
+relocation. On little-endian ARM its retail acceleration `0.002` became roughly `4.5e28`, `0.1`
+became roughly `-4.29e8`, and the `20/20` Great Fox offset limits became denormal near-zero values.
+Those values feed `grCorneria_801E1970()` directly, so Great Fox velocity/offset leaves the valid map
+domain and eventually makes the three range tests in `grCorneriaGetPosMapKind2()` all fail. Vita now
+nativeizes the typed Corneria block after relocation while deliberately leaving the relocated pointer
+at `+0x84` untouched. The pass is idempotent and range-checks the resulting retail values. The ARM
+regression verifies timer `30..180`, acceleration `0.002`, max velocity `0.1`, limits `20/20`, scale
+`0.5`, step `2.0`, and that a second nativeization call is byte-identical.
+
+The same run also proved that missing lighting was a bridge issue, not missing files: stage lights and
+textures were present, but the GX capture evaluated COLOR0 lighting only for telemetry and then threw
+that result away. It had no post-XF COLOR1/A1 raster at all. Corneria's dominant two-texture material
+graph requires both channels: diffuse is `TEX0 * RASC0` and specular is added as `TEX1 * RASC1`.
+`MvGxCaptureVertex` now preserves raw CLR0/CLR1 plus evaluated RASC0/RASC1. The channel evaluator now
+supports both GX channels and the GX specular attenuation mode; when a lit vertex lacks a valid normal,
+capture deliberately retains its raw color rather than recreating the old all-black failure.
+
+`GrCn.dat` contains 275 runtime materials and only 16 distinct generated TEV signatures. Fourteen of
+its 22 dual-texture materials share the exact three-stage diffuse+specular graph above. vitaGL has no
+secondary per-vertex color in the fixed-function path, so that graph is replayed exactly as two passes:
+the normal depth-tested diffuse pass, followed by a depth-equal `ONE/ONE` specular pass with alpha
+writes disabled. The ARM regression finds all 14 materials, proves stage 2 selects `GX_COLOR1A1` and
+consumes `RASC`, and accepts all 14 through the exact vitaGL classifier. A separate linked ARM test
+drives the COLOR1/A1 specular evaluator with a synthetic light and obtains white for a front-facing
+normal and opaque black for side/back normals. Five Corneria materials use three textures/five TEV
+stages and remain a known exact-rendering gap because the current capture ABI snapshots only TEX0/TEX1.
+
+The v4.13 log also contained non-finite fighter JObj rotations. Real Mario/Fox FigaTracks, the filtered
+track path, the full Mario 61-node model including IK, and a `Fall -> Wait1` interpolation all remain
+finite in the ARM harness, so v4.14 does not paper over the symptom. Instead the fighter blend now emits
+bounded `VITA_FIGHTER_BLEND_NONFINITE` diagnostics containing both input rotations, output rotation,
+flags and blend weights whenever a non-finite value first reaches or leaves the slerp. The next hardware
+run can therefore distinguish an upstream runtime constraint/physics source from the blend itself.
+
+Regression set: `stage-corneria-param-check`, `stage-corneria-multitex-check`,
+`gx-channel1-specular-check`, `stage-icemt-multitex-check`, Castle `stage-multitex-check`,
+`ef-param-layout-check`, `particle-pool-check`, `tev-konst-check`, `gx-projection-check`, the vitaGL
+multitexture source check, and `git diff --check`. Runtime marker is
+`MELEE_VITA_GAME_BOOT v4.14-corneria-xf`; APP_VER is 01.24.
+
+Hardware artifact: `build/vita-v414/SmashMeleeVita-v4.14-corneria-xf.vpk`, SHA-256
+`502b8d7cdfa5b350a1fde5a0898641cc2a99aae7bd315ba514439449d21ec1ac`. The first physical run should
+repeat the route that selected stage kind 98/Corneria and continue long enough to cross the former
+`grCorneriaGetPosMapKind2()` stop. In `runtime.log`, confirm
+`VITA_STAGE_CORNERIA_PARAM_NATIVE_PASS` and look for non-zero `hsd_specular_add`; if any JObj still
+becomes non-finite, preserve the first `VITA_FIGHTER_BLEND_NONFINITE` records so the remaining source
+can be placed before or after fighter pose interpolation without another speculative renderer change.
+
+## 2026-09-14 — v4.13: reproduce Icicle Mountain's dominant alpha-composited two-texture graph in vitaGL
+
+## 2026-09-14 — v4.13: reproduce Icicle Mountain's dominant alpha-composited two-texture graph in vitaGL
+
+The physical v4.11 screenshot is no longer a missing-draw failure: the runtime reaches about frame 925,
+capture remains healthy, and vitaGL reports no GL error, but the image is dominated by flat blocks and
+bright vertical texture bands. The first gameplay material summary explains why this stage differs from
+the previously proven Castle path: 485 submitted draws carry two or more textures while the old exact
+HSD multitexture selector reports zero. The relaxed gameplay replay therefore accepted those commands
+but approximated most of them with TEX0 and a generic fixed-function combine.
+
+A linked ARM audit now constructs every static HSD material in the real `GrIm.dat`. Its 756 materials
+collapse to only seven generated TEV graphs. Exactly 207 materials use two TObjs with TEX0/TEX1; 205
+share one graph: stage 0 computes `RASC * TEX0`, then stage 1 computes
+`CPREV * (1 - TEX1.a) + TEX1.rgb * TEX1.a`, with final alpha from RASA. The remaining two use the
+same RGB graph while preserving `RASA * TEX0.a` as alpha. None matched the Castle
+`RASC * TEX0 * TEX1` graph, which is why `hsd_multitex=0` was correct for v4.11.
+
+Vita now recognizes both Icicle variants exactly. The replay keeps both texture images raw, routes
+their independent TEX0/TEX1 coordinates and UV matrices to separate vitaGL units, implements stage 1
+with `GL_INTERPOLATE` using TEX1 alpha as the interpolation operand, and preserves the two observed
+alpha forms. Raw and baked texture-cache entries are kept distinct so an exact HSD path cannot reuse a
+previously material-baked sample. The submit marker additionally reports `hsd_alpha_blend` and
+`hsd_alpha_blend_selected` for direct hardware confirmation.
+
+The new `stage-icemt-multitex-check` proves all 207/207 two-texture GrIm materials enter the supported
+path (205 RASA, 2 RASA*TEX0.a). `ef-param-layout-check`, `particle-pool-check`, `tev-konst-check`,
+`gx-projection-check`, `vitagl-multitex-check`, and `git diff --check` also pass, and the complete
+ARM32 ELF/VELF/SELF/VPK build succeeds. v4.13 includes the v4.12 effect-parameter/particle-allocator
+fix unchanged. Runtime marker is `MELEE_VITA_GAME_BOOT v4.13-icicle-alpha-tev`; APP_VER is 01.23.
+
+Hardware artifact: `build/vita-v412/SmashMeleeVita-v4.13-icicle-alpha-tev.vpk`, SHA-256
+`00d5f95b859e48f941eed72fb0d75f4f7f84c6003ae610db5174802653600c67`. Repeat the same Ice Climbers /
+Icicle Mountain route. The former `0x00ff0417` particle allocator crash should not recur, and the first
+`VITAGL_REPLAY_CAPTURED_SUBMIT` should now show non-zero `hsd_alpha_blend`. A remaining geometric
+stretch after this exact material fix should be investigated as transform/vertex state rather than
+masked with another texture approximation.
+
+## 2026-09-14 — v4.12: stop efLib's DOL-adjacency trick from overwriting the particle allocator on ARM ELF
+
+The physical v4.11 run proves the retail-safe vitaGL/GXM path is healthy enough to render sustained
+gameplay: the diagnostic overlay reaches roughly frame 925 and the runtime continues to capture and
+submit thousands of vertices with no GL error. The supplied core identifies the later stop as a
+separate CPU Data Abort in `HSD_ObjAlloc()` while `psGenerateParticle0()` requests another stage
+particle. The particle allocator's `freehead` is the impossible pointer `0x00ff0417`.
+
+That value is not random corruption. The original DOL places `efLib_AnimQueue` at `0x458EE0` and
+`efLib_ParamTable` immediately after it at `0x458F60`, so two matching functions intentionally access
+the latter as `efLib_AnimQueue + 0x10` entries. The Vita ELF does not preserve that linker ordering:
+the v4.11/v4.12 link places `efLib_ParamTable` first, then `efLib_AnimQueue`, then
+`hsd_804D0F60`. Consequently the old out-of-array expression lands exactly on the particle allocator.
+`efLib_SetParamGfxId(..., 0x417)` writes `0x0417` into the low half of `freehead`, and
+`efLib_SetParamAlpha(..., 0xff)` writes `0x00ff` into the high half, reproducing the core value
+`0x00ff0417` byte-for-byte.
+
+Vita now uses the real `efLib_ParamTable` symbol in those two functions while retaining the matching
+DOL adjacency expression on non-Vita builds. A linked ARM regression asserts the actual adverse ELF
+layout (`efLib_AnimQueue + sizeof(efLib_AnimQueue) == hsd_804D0F60`), performs the exact
+gfx-id/alpha writes, verifies `ParamTable` contains `0x417/0xff`, and verifies all 0x30 bytes of the
+particle allocator are unchanged. `ef-param-layout-check`, `particle-pool-check`, `tev-konst-check`,
+`gx-projection-check`, `vitagl-multitex-check`, and `git diff --check` pass. Runtime marker is
+`MELEE_VITA_GAME_BOOT v4.12-ef-param-layout`; APP_VER is 01.22.
+
+Hardware artifact: `build/vita-v412/SmashMeleeVita-v4.12-ef-param-layout.vpk`, SHA-256
+`ff60f8a9d0fa2bc485f741c6031e74aa5a0938d939b6d1544ed8ed4a72c17185`. The next physical run should
+repeat the same Ice Climbers / Icicle Mountain route long enough to pass the former frame-925 stop.
+The distorted raster visible in v4.11 is a separate renderer/transform-fidelity issue; keep the same
+route and return the new screenshot plus `runtime.log` once the allocator crash is proven gone.
+
+## 2026-09-14 — v4.11: remove the retail-crashing Razor path from the GXM diagnostic build
+
+The physical v4.10 diagnostic build crashes before vitaGL finishes initialization. Its runtime log
+ends at `VITAGL_INIT_BEGIN` with `razor=1 cpu_tracer=1`; the matching Vita core dump reports a
+prefetch abort with `PC=0x00000000`. The saved LR `0x812e8ab5` maps, after the Vita module's runtime
+RX relocation, to the instruction immediately after vitaGL's call to
+`sceRazorGpuCaptureEnableSalvage()` in `init_gxm()`. The import stub itself is present at runtime as
+`0x81344510`, but dispatches to NULL on the retail system. This proves the v4.10 startup failure is
+the Razor diagnostic path, not shader compilation, Melee initialization or gameplay rendering.
+
+v4.11 uses a separate vitaGL diagnostic library built without Razor/CPU-tracer support and no longer
+links `SceRazorCapture_stub` or `ScePerf_stub`. The final ELF contains no `sceRazor*`/`scePerf*`
+symbols; `init_gxm()` proceeds directly from its initialized guard to `shark_set_allocators()` and
+`shark_init()`. The app-side diagnostic markers remain enabled so GXM/vitaGL errors and replay marker
+groups can still be collected on retail hardware. Runtime marker is
+`MELEE_VITA_GAME_BOOT v4.11-gxm-retail-debug`; APP_VER is 01.21. Hardware-test artifact:
+`build/vita-gxm-retail-debug/SmashMeleeVita-v4.11-gxm-retail-debug.vpk`, SHA-256
+`7d8e5cfa7c1c5ed12ccaf96805bb66cdbf37fe51851b91df503b0be9b721db37`.
+
+The first v4.11 hardware check should therefore only establish that `VITAGL_INIT_PASS` is reached and
+then continue through the existing title/menu/gameplay route. If it stops later, preserve the new
+`runtime.log` and core dump; that failure is beyond the now-closed Razor startup crash.
 
 ## 2026-09-14 — v4.05: make the SIS state stack endian/alignment safe on ARM32
 

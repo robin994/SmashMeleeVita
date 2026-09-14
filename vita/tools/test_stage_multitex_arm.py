@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """ARM regression for Castle TEX0/TEX1 + generated TEV routing."""
+import argparse
 from pathlib import Path
 import struct
 
@@ -8,9 +9,13 @@ from arm_component import boot_component
 from unicorn import UC_HOOK_CODE
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R2
 
-ROOT = Path(__file__).resolve().parents[2]
-ASSET = ROOT / "orig/GALE01/files/GrCs.dat"
-ELF = ROOT / "build/vita-full/melee_vita"
+p = argparse.ArgumentParser()
+p.add_argument("--elf", required=True)
+p.add_argument("--asset", required=True)
+args = p.parse_args()
+
+ASSET = Path(args.asset)
+ELF = Path(args.elf)
 
 def cstring(arm, text):
     raw = text.encode("ascii") + b"\0"
@@ -28,7 +33,7 @@ def call_long(arm, name, *args):
         if str(exc) != f"{name}: did not return":
             raise
     for _ in range(12):
-        pc = arm.uc.reg_read(UD_ARM_REG_PC)
+        pc = arm.uc.reg_read(UC_ARM_REG_PC)
         thumb = bool(arm.uc.reg_read(UC_ARM_REG_CPSR) & 32)
         arm.uc.emu_start(pc | thumb, arm.stop, timeout=30000000, count=100000000)
         if arm.uc.reg_read(UC_ARM_REG_PC) == arm.stop:
@@ -188,7 +193,7 @@ print("CASTLE_TEV",
 
 # Locate this material in a real HSD draw capture and prove CLR0 is visible too.
 # These sizes/offsets are the Vita ARM ABI of gx_capture_vita.h.
-CMD_SIZE=496; CMD_MATERIAL_OFF=172; VERTEX_SIZE=76; VERTEX_COLOR_OFF=64
+CMD_SIZE=496; CMD_MATERIAL_OFF=172; VERTEX_SIZE=88; VERTEX_COLOR_OFF=64
 found_color=False
 for capture_root in roots:
     capture_stats=arm.alloc(64)

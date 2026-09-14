@@ -4,7 +4,7 @@ BUILD_DIR ?= build/vita
 DISC_FILES ?= orig/GALE01/files
 FULL_GAMEPLAY ?= ON
 CMAKE_ARGS ?= -DMELEE_VITA_FULL_GAMEPLAY_SCENE=$(FULL_GAMEPLAY)
-.PHONY: all configure audit asset-check test-env arm-boot-check arm-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sis-stack-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check lbbf-color-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check camera-quake-check stage-raw-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check endian-preflight assets full-assets
+.PHONY: all configure audit asset-check test-env arm-boot-check arm-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sis-stack-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check lbbf-color-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check stage-corneria-param-check stage-corneria-multitex-check gx-channel1-specular-check camera-quake-check stage-raw-check stage-icemt-multitex-check particle-pool-check ef-param-layout-check tev-konst-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check endian-preflight assets full-assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
@@ -104,14 +104,29 @@ stage-quake-check: test-env
 stage-device-hit-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_zebes_device_hit_arm.py --elf $(BUILD_DIR)/melee_vita --asset $(DISC_FILES)/GrZe.dat
 
+stage-corneria-param-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_corneria_params_arm.py --elf $(BUILD_DIR)/melee_vita --asset $(DISC_FILES)/GrCn.dat
+
+stage-corneria-multitex-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_corneria_multitex_arm.py --elf $(BUILD_DIR)/melee_vita --asset $(DISC_FILES)/GrCn.dat
+
+gx-channel1-specular-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_gx_channel1_specular_arm.py --elf $(BUILD_DIR)/melee_vita
+
 particle-pool-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_particle_pool_arm.py --elf $(BUILD_DIR)/melee_vita
+
+ef-param-layout-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_ef_param_layout_arm.py --elf $(BUILD_DIR)/melee_vita
 
 tev-konst-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_tev_konst_arm.py --elf $(BUILD_DIR)/melee_vita
 
 stage-multitex-check: test-env
-	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_multitex_arm.py
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_multitex_arm.py --elf $(BUILD_DIR)/melee_vita --asset $(DISC_FILES)/GrCs.dat
+
+stage-icemt-multitex-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_icemt_multitex_arm.py --elf $(BUILD_DIR)/melee_vita --disc-root $(DISC_FILES)
 
 camera-quake-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_camera_quake_layout.py
@@ -131,7 +146,7 @@ gx-nbt3-check:
 gx-nbt-arm-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_gx_nbt_arm.py
 
-endian-preflight: arm-boot-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sis-stack-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check camera-quake-check stage-raw-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check
+endian-preflight: arm-boot-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sis-stack-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check camera-quake-check stage-raw-check particle-pool-check ef-param-layout-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check
 	node vita/tools/audit_gameplay_dat.js orig/GALE01/files
 	node vita/tools/audit_figatree_dat.js
 

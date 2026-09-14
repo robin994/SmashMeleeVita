@@ -124,7 +124,12 @@ typedef struct {
     float normal[9];
     float tex0[2];
     float tex1[2];
+    /* Raw GX vertex colors followed by the post-XF raster colors consumed by
+     * TEV as RASC/RASA. HSD uses COLOR1/A1 for the specular channel. */
     uint32_t color0;
+    uint32_t color1;
+    uint32_t raster0;
+    uint32_t raster1;
     uint32_t present;
     uint8_t pos_mtx_idx;
     uint8_t reserved[3];
@@ -245,10 +250,17 @@ int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *material);
 /* Exact generated GX graph used by common HSD dual-texture materials:
  * primary raster color * TEX0 * TEX1, with primary alpha preserved. */
 int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *material);
+/* Exact two-stage Icicle Mountain graph. Return 1 when final alpha is RASA,
+ * 2 when TEX0 alpha also modulates RASA, and 0 for any other graph. */
+int mv_gx_material_multitex_hsd_alpha_blend(const MvGxMaterialState *material);
+/* Exact Corneria diffuse+specular graph: stage 1 is RASC0*TEX0, stage 2 adds
+ * RASC1*TEX1, and alpha preserves the COLOR0/A0 material/raster product. */
+int mv_gx_material_multitex_hsd_specular_add(const MvGxMaterialState *material);
 /* True only when the captured TEV program actually consumes COLOR0/A0 as
  * RASC/RASA. GXSetNumChans(1) alone does not mean every draw should be
  * modulated by the generated raster channel. */
 int mv_gx_material_uses_raster0(const MvGxMaterialState *material);
+int mv_gx_material_uses_raster1(const MvGxMaterialState *material);
 int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *material);
 uint32_t mv_gx_material_kcolor_rgba(const MvGxMaterialState *material, unsigned stage);
 /* Resolve a texture/post-texture matrix previously loaded through

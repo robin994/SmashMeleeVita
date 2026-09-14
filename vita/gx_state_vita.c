@@ -102,14 +102,23 @@ static int normalized3(const float in[3], float out[3])
 
 static float light_attenuation(const MvGxLoadedLight *light,
                                const float light_dir[3], float distance,
+                               const float normal[3], int normal_valid,
                                GXAttnFn fn)
 {
     if (fn == GX_AF_NONE) return 1.0f;
     if (fn == GX_AF_SPEC) {
-        /* Specular is normally routed through COLOR1 by HSD.  Keep the
-         * COLOR0 fallback finite and bounded rather than inventing a second
-         * half-vector pipeline here. */
-        return 1.0f;
+        /* GX specular attenuation uses the precomputed half-vector in the
+         * light direction and evaluates both attenuation polynomials against
+         * that cosine rather than distance. GX also suppresses the lobe when
+         * the surface faces away from the light. */
+        if (!normal_valid || dot3(normal, light_dir) < 0.0f) return 0.0f;
+        float x = dot3(normal, light->direction);
+        if (!isfinite(x)) return 0.0f;
+        if (x < 0.0f) x = 0.0f;
+        float num = light->a[0] + light->a[1] * x + light->a[2] * x * x;
+        float den = light->k[0] + light->k[1] * x + light->k[2] * x * x;
+        if (!isfinite(num) || !isfinite(den) || den <= 1.0e-20f) return 0.0f;
+        return clamp01(num / den);
     }
 
     float spot = dot3(light->direction, light_dir);
@@ -154,7 +163,8 @@ static void eval_channel_rgb(const MvGXChannelCtrl *ctrl,
                 if (ctrl->diff_fn == GX_DF_CLAMP && diffuse < 0.0f) diffuse = 0.0f;
             }
         }
-        float attn = light_attenuation(&light, ldir, distance, (GXAttnFn)ctrl->attn_fn);
+        float attn = light_attenuation(&light, ldir, distance, normal,
+                                       normal_valid, (GXAttnFn)ctrl->attn_fn);
         float scale = diffuse * attn;
         accum[0] += ((light.color >> 24) & 0xffu) / 255.0f * scale;
         accum[1] += ((light.color >> 16) & 0xffu) / 255.0f * scale;
@@ -192,19 +202,20 @@ static uint8_t eval_channel_alpha(const MvGXChannelCtrl *ctrl,
             diffuse = normal_valid ? dot3(normal, ldir) : 0.0f;
             if (ctrl->diff_fn == GX_DF_CLAMP && diffuse < 0.0f) diffuse = 0.0f;
         }
-        float attn = light_attenuation(&light, ldir, distance, (GXAttnFn)ctrl->attn_fn);
+        float attn = light_attenuation(&light, ldir, distance, normal,
+                                       normal_valid, (GXAttnFn)ctrl->attn_fn);
         accum += (light.color & 0xffu) / 255.0f * diffuse * attn;
     }
     return (uint8_t)(clamp01(accum) * mat + 0.5f);
 }
 
-uint32_t mv_gx_channel0_eval(uint32_t vertex_rgba,
-                             const float position[3],
-                             const float normal_in[3],
-                             uint32_t *flags)
+uint32_t mv_gx_channel_eval(unsigned channel, uint32_t vertex_rgba,
+                            const float position[3],
+                            const float normal_in[3],
+                            uint32_t *flags)
 {
     uint32_t f = 0;
-    if (!num_channels) {
+    if (channel >= 2u || num_channels <= channel) {
         if (flags) *flags = 0;
         return vertex_rgba;
     }
@@ -216,15 +227,34 @@ uint32_t mv_gx_channel0_eval(uint32_t vertex_rgba,
     float normal[3];
     int normal_valid = normalized3(normal_in, normal);
     if (normal_valid) f |= MV_GX_CHANNEL_EVAL_NORMAL;
-    if (chan_color[0].enable || chan_alpha[0].enable) f |= MV_GX_CHANNEL_EVAL_LIT;
+    if (chan_color[channel].enable || chan_alpha[channel].enable)
+        f |= MV_GX_CHANNEL_EVAL_LIT;
     uint8_t rgb[3];
-    eval_channel_rgb(&chan_color[0], &chan_amb[0], &chan_mat[0], vertex,
+    eval_channel_rgb(&chan_color[channel], &chan_amb[channel],
+                     &chan_mat[channel], vertex,
                      position, normal, normal_valid, rgb);
-    uint8_t alpha = eval_channel_alpha(&chan_alpha[0], &chan_amb[0], &chan_mat[0],
-                                       vertex, position, normal, normal_valid);
+    uint8_t alpha = eval_channel_alpha(&chan_alpha[channel], &chan_amb[channel],
+                                       &chan_mat[channel], vertex, position,
+                                       normal, normal_valid);
     if (flags) *flags = f;
     return (uint32_t)rgb[0] << 24 | (uint32_t)rgb[1] << 16 |
            (uint32_t)rgb[2] << 8 | alpha;
+}
+
+uint32_t mv_gx_channel0_eval(uint32_t vertex_rgba,
+                             const float position[3],
+                             const float normal_in[3],
+                             uint32_t *flags)
+{
+    return mv_gx_channel_eval(0, vertex_rgba, position, normal_in, flags);
+}
+
+uint32_t mv_gx_channel1_eval(uint32_t vertex_rgba,
+                             const float position[3],
+                             const float normal_in[3],
+                             uint32_t *flags)
+{
+    return mv_gx_channel_eval(1, vertex_rgba, position, normal_in, flags);
 }
 
 static u8 clamp_s10(s16 v)
@@ -416,6 +446,9 @@ void GXSetChanMatColor(GXChannelID c, GXColor v)
 void GXSetChanCtrl(GXChannelID c,GXBool e,GXColorSrc a,GXColorSrc m,u32 lm,GXDiffuseFn d,GXAttnFn at)
 {
     unsigned i = channel_index(c);
+    /* Real GX ignores the diffuse function for specular attenuation. HSD's
+     * COLOR1/A1 setup relies on that behavior for its separate specular lobe. */
+    if (at == GX_AF_SPEC) d = GX_DF_NONE;
     MvGXChannelCtrl ctrl = {(uint8_t)(e != GX_DISABLE), (uint8_t)a, (uint8_t)m,
                             (uint8_t)d, (uint8_t)at, {0}, lm};
     if (c == GX_COLOR0 || c == GX_COLOR1) chan_color[i] = ctrl;

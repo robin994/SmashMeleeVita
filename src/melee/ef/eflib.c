@@ -1412,8 +1412,17 @@ void efLib_SetParamAlpha(HSD_GObj* gobj, u8 alpha)
 {
     s32 idx;
 
+#ifdef MELEE_VITA_PLATFORM
+    /* The original DOL places efLib_ParamTable immediately after
+     * efLib_AnimQueue, so the matching code below intentionally indexes past
+     * the declared AnimQueue array. ELF does not preserve that data layout;
+     * use the real symbol on Vita or the write can land in an unrelated BSS
+     * object (the particle allocator in the current link). */
+    EF_ParamEntry* base = efLib_ParamTable;
+#else
     // WHY
     EF_ParamEntry* base = efLib_AnimQueue + 0x10;
+#endif
 
     for (idx = 0; idx < 8; idx++) {
         if (base[idx].gobj == gobj) {
@@ -1428,17 +1437,26 @@ void efLib_SetParamAlpha(HSD_GObj* gobj, u8 alpha)
     return;
 
 found:
+#ifdef MELEE_VITA_PLATFORM
+    efLib_ParamTable[idx].gobj = gobj;
+    efLib_ParamTable[idx].alpha = alpha;
+#else
     // WHY
     efLib_AnimQueue[idx + 0x10].gobj = gobj;
     efLib_AnimQueue[idx + 0x10].alpha = alpha;
+#endif
 }
 
 void efLib_SetParamGfxId(HSD_GObj* gobj, s32 gfx_id)
 {
     s32 idx;
 
+#ifdef MELEE_VITA_PLATFORM
+    EF_ParamEntry* base = efLib_ParamTable;
+#else
     // WHY
     EF_ParamEntry* base = efLib_AnimQueue + 0x10;
+#endif
 
     for (idx = 0; idx < 8; idx++) {
         if (base[idx].gobj == gobj) {
@@ -1453,9 +1471,14 @@ void efLib_SetParamGfxId(HSD_GObj* gobj, s32 gfx_id)
     return;
 
 found:
+#ifdef MELEE_VITA_PLATFORM
+    efLib_ParamTable[idx].gobj = gobj;
+    efLib_ParamTable[idx].gfx_id = gfx_id;
+#else
     // WHY
     efLib_AnimQueue[idx + 0x10].gobj = gobj;
     efLib_AnimQueue[idx + 0x10].gfx_id = gfx_id;
+#endif
 }
 
 void efLib_Cb_ApplyStoredAlpha(EF_Effect* effect)

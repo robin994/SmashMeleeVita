@@ -3569,12 +3569,95 @@ static void stage_normalize_shadows(HSD_Archive* archive, UnkStageDat* map_head)
              map_head->unk24, enabled, converted);
 }
 
+static float stage_read_f32(const void* ptr)
+{
+    float value;
+    memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+static int stage_corneria_yakumono_sane(const u8* bytes)
+{
+    const float x0 = stage_read_f32(bytes + 0x00);
+    const float x4 = stage_read_f32(bytes + 0x04);
+    const float x8 = stage_read_f32(bytes + 0x08);
+    const float xC = stage_read_f32(bytes + 0x0C);
+    const float x10 = stage_read_f32(bytes + 0x10);
+    const float x14 = stage_read_f32(bytes + 0x14);
+    const float x68 = stage_read_f32(bytes + 0x68);
+    const float x70 = stage_read_f32(bytes + 0x70);
+    const float x88 = stage_read_f32(bytes + 0x88);
+    s32 x74, x78, x7C, x80;
+    memcpy(&x74, bytes + 0x74, sizeof(x74));
+    memcpy(&x78, bytes + 0x78, sizeof(x78));
+    memcpy(&x7C, bytes + 0x7C, sizeof(x7C));
+    memcpy(&x80, bytes + 0x80, sizeof(x80));
+
+    return isfinite(x0) && isfinite(x4) && isfinite(x8) && isfinite(xC) &&
+           isfinite(x10) && isfinite(x14) && isfinite(x68) &&
+           isfinite(x70) && isfinite(x88) && x0 >= 0.0F && x0 <= 10000.0F &&
+           x4 >= x0 && x4 <= 10000.0F && x8 >= 0.0F && x8 <= 100.0F &&
+           xC > 0.0F && xC <= 1000.0F && x10 >= 0.0F && x10 <= 100000.0F &&
+           x14 >= 0.0F && x14 <= 100000.0F && x68 >= 0.0F &&
+           x68 <= 100000.0F && x70 > 0.0F && x70 <= 100.0F &&
+           x74 > 0 && x74 <= 1000000 && x78 > 0 && x78 <= 1000000 &&
+           x7C > 0 && x7C <= 1000000 && x80 > 0 && x80 <= 1000000 &&
+           fabsf(x88) <= 100000.0F;
+}
+
+static void stage_corneria_yakumono_prepare(HSD_Archive* archive,
+                                             void* yakumono_param)
+{
+    u8* bytes = yakumono_param;
+    static const u8 float_offsets[] = {
+        0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24,
+        0x28, 0x2C, 0x30, 0x34, 0x38, 0x3C, 0x40, 0x44, 0x48, 0x4C,
+        0x68, 0x70, 0x88,
+    };
+    static const u8 int_offsets[] = { 0x74, 0x78, 0x7C, 0x80 };
+
+    stage_require_range(archive, yakumono_param, 0x8C);
+    if (stage_corneria_yakumono_sane(bytes)) {
+        return;
+    }
+
+    for (unsigned i = 0; i < sizeof(float_offsets); ++i) {
+        stage_swap32(bytes + float_offsets[i]);
+    }
+    for (unsigned i = 0; i < sizeof(int_offsets); ++i) {
+        stage_swap32(bytes + int_offsets[i]);
+    }
+
+    if (!stage_corneria_yakumono_sane(bytes)) {
+        OSReport("VITA_STAGE_CORNERIA_PARAM_INVALID x0=%g x4=%g accel=%g vmax=%g xlim=%g ylim=%g\n",
+                 stage_read_f32(bytes + 0x00), stage_read_f32(bytes + 0x04),
+                 stage_read_f32(bytes + 0x08), stage_read_f32(bytes + 0x0C),
+                 stage_read_f32(bytes + 0x10), stage_read_f32(bytes + 0x14));
+        HSD_Panic(__FILE__, __LINE__, "Corneria yakumono_param invalid");
+    }
+
+    OSReport("VITA_STAGE_CORNERIA_PARAM_NATIVE_PASS timer=%g..%g accel=%g vmax=%g limits=%g,%g scale=%g step=%g\n",
+             stage_read_f32(bytes + 0x00), stage_read_f32(bytes + 0x04),
+             stage_read_f32(bytes + 0x08), stage_read_f32(bytes + 0x0C),
+             stage_read_f32(bytes + 0x10), stage_read_f32(bytes + 0x14),
+             stage_read_f32(bytes + 0x70), stage_read_f32(bytes + 0x88));
+}
+
 void mv_stage_yakumono_prepare(HSD_Archive* archive, GrKind grkind,
-                                  void* yakumono_param)
+                               void* yakumono_param)
 {
     enum { DEVICE_HIT_WORDS = 9 };
     u8* hit_bytes;
     u32 raw[DEVICE_HIT_WORDS];
+
+    if (archive == NULL || yakumono_param == NULL) {
+        return;
+    }
+
+    if (grkind == Gr_Kind_Corneria) {
+        stage_corneria_yakumono_prepare(archive, yakumono_param);
+        return;
+    }
 
     /* Zebes stores the acid collision descriptor behind the word that aliases
      * HSD_GObj::user_data at yakumono_param+0x2C. HSD relocation fixes that
@@ -3582,7 +3665,7 @@ void mv_stage_yakumono_prepare(HSD_Archive* archive, GrKind grkind,
      * big-endian unless we nativeize it explicitly. The game later views the
      * same target both as DynamicsDesc (count == damage) and as
      * lbColl_80008D30_arg1. */
-    if (archive == NULL || yakumono_param == NULL || grkind != Gr_Kind_Zebes) {
+    if (grkind != Gr_Kind_Zebes) {
         return;
     }
 

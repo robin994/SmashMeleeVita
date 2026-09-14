@@ -14,6 +14,7 @@ typedef struct {
     GLuint id;
     unsigned bytes;
     uint32_t last_use;
+    uint8_t raw_sample;
 } MvGlTexture;
 typedef struct {
     MvGlTexture *textures;

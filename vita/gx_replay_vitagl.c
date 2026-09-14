@@ -1,5 +1,6 @@
 #define MV_GX_VA_PNMTXIDX 0u
 #define MV_GX_VA_POS 9u
+#define MV_GX_VA_NRM 10u
 #define MV_GX_VA_CLR0 11u
 #define MV_GX_VA_TEX0 13u
 #define MV_GX_QUADS 0x80u
@@ -220,6 +221,8 @@ static int material_needs_bake(const MvGxMaterialState *m)
      * MObj material color into TEX0 here would apply a color term that is not
      * present in the retail TEV program. */
     if (mv_gx_material_multitex_hsd_modulate(m) ||
+        mv_gx_material_multitex_hsd_alpha_blend(m) ||
+        mv_gx_material_multitex_hsd_specular_add(m) ||
         mv_gx_material_single_tev_rasc_tex_konst(m)) return 0;
     const unsigned colormap = (m->tobj_flags >> 16) & 0xfu;
     const unsigned alphamap = (m->tobj_flags >> 20) & 0xfu;
@@ -268,11 +271,12 @@ static uint32_t material_draw_color(const MvGxMaterialState *m)
     return color;
 }
 
-static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
+static GLuint prepare_mode(MvGxReplay *r,const MvGxMaterialState *m,int force_raw)
 {
     const uint32_t use=++r->use_serial;
     for(unsigned i=0;i<r->texture_count;i++)
-        if(texture_key_equal(&r->textures[i].key,m)) {
+        if(r->textures[i].raw_sample==(uint8_t)!!force_raw &&
+           texture_key_equal(&r->textures[i].key,m)) {
             r->textures[i].last_use=use;
             return r->textures[i].id;
         }
@@ -283,12 +287,12 @@ static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
     if(!pixels) return 0;
     if(mv_gx_decode(pixels,bytes,m->width*4,m->image,size,m->width,m->height,m->format,
                     m->palette,(size_t)m->palette_entries*2,m->palette_format)) {free(pixels);return 0;}
-    if (material_simple_c0_texa_a0(m)) {
+    if (!force_raw && material_simple_c0_texa_a0(m)) {
         /* GX SIS: RGB is TEVREG0 (C0), alpha is texture alpha * A0.
          * Make the sampled texture an alpha mask and let GL_MODULATE apply C0. */
         for(size_t i=0;i<bytes;i+=4)
             pixels[i+0]=pixels[i+1]=pixels[i+2]=255;
-    } else if(material_needs_bake(m)) {
+    } else if(!force_raw && material_needs_bake(m)) {
         for(size_t i=0;i<bytes;i+=4) bake_material_pixel(m,pixels+i);
     }
     GLuint id;glGenTextures(1,&id);glBindTexture(GL_TEXTURE_2D,id);
@@ -309,9 +313,14 @@ static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
         glDeleteTextures(1,&r->textures[slot].id);
         r->texture_bytes-=r->textures[slot].bytes;
     }
-    r->textures[slot]=(MvGlTexture){.key=*m,.id=id,.bytes=(unsigned)bytes,.last_use=use};
+    r->textures[slot]=(MvGlTexture){.key=*m,.id=id,.bytes=(unsigned)bytes,
+                                   .last_use=use,.raw_sample=(uint8_t)!!force_raw};
     r->texture_bytes+=(unsigned)bytes;
     return id;
+}
+static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
+{
+    return prepare_mode(r,m,0);
 }
 static int alpha_compare_supported(const MvGxMaterialState *m)
 {
@@ -339,7 +348,8 @@ static const float *vertex_texcoord(const MvGxCaptureVertex *v,
     return v->tex0;
 }
 
-static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two)
+static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two,
+                               int hsd_alpha_blend)
 {
     if (mv_gx_material_single_tev_rasc_tex_konst(m)) {
         /* GX TEV: D + A*(1-C) + B*C with
@@ -357,28 +367,50 @@ static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two)
         glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
         glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PRIMARY_COLOR);
         glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_CONSTANT);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_COLOR);
         glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, k);
         glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
         glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
         return;
     }
-    if (!hsd_two) {
+    if (!hsd_two && !hsd_alpha_blend) {
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
         return;
     }
-    /* Exact HSD stage 0 for Castle: RGB = RASC * TEX0, alpha = RASA. */
+    /* Exact HSD stage 0 shared by Castle and Icicle Mountain:
+     * RGB = RASC * TEX0. */
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
     glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
     glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PRIMARY_COLOR);
     glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+    if (hsd_alpha_blend == 2) {
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_TEXTURE);
+    } else {
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+    }
     (void)m;
 }
 
-static void setup_texture1_env(const MvGxMaterialState *m, int hsd_two)
+static void setup_texture1_env(const MvGxMaterialState *m, int hsd_two,
+                               int hsd_alpha_blend)
 {
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    if (hsd_alpha_blend) {
+        /* GX stage 1: CPREV*(1-TEXA) + TEXC*TEXA. OpenGL INTERPOLATE
+         * is Arg0*Arg2 + Arg1*(1-Arg2), with TEXA as Arg2. */
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PREVIOUS);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_TEXTURE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA,
+                  hsd_alpha_blend == 1 ? GL_PRIMARY_COLOR : GL_PREVIOUS);
+        return;
+    }
     glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
     glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PREVIOUS);
     glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
@@ -396,17 +428,70 @@ static void setup_texture1_env(const MvGxMaterialState *m, int hsd_two)
     }
 }
 
+static void setup_single_raster_texture_env(void)
+{
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+}
+
+static void draw_raster_texture_pass(const MvGxCaptureCommand *c,
+                                     const MvGxMaterialState *m,
+                                     const MvGxCaptureVertex *verts,
+                                     int texture_unit, int raster_channel,
+                                     int apply_material_alpha)
+{
+    const float (*uv_mtx)[3] = texture_unit ? m->uv_mtx1 : m->uv_mtx;
+    const int uv_valid = texture_unit ? m->uv_mtx1_valid : m->uv_mtx_valid;
+    const uint8_t material_alpha = (uint8_t)m->material_rgba;
+
+    glBegin(GL_TRIANGLES);
+    for (unsigned t = 0; t < c->triangle_count; ++t) {
+        uint32_t ids[3];
+        if (triangle_indices(c, t, ids)) continue;
+        for (int k = 0; k < 3; ++k) {
+            const MvGxCaptureVertex *v = verts + c->first_vertex + ids[k];
+            uint32_t color = raster_channel ? v->raster1 : v->raster0;
+            uint8_t alpha = (uint8_t)color;
+            if (apply_material_alpha)
+                alpha = (uint8_t)(((unsigned)alpha * material_alpha + 127u) / 255u);
+            glColor4ub(color >> 24, color >> 16, color >> 8, alpha);
+            const float *tc = vertex_texcoord(v, m, texture_unit);
+            float u = tc[0], vv = tc[1];
+            glMultiTexCoord2f(GL_TEXTURE0,
+                uv_valid ? uv_mtx[0][0] * u + uv_mtx[0][1] * vv + uv_mtx[0][2] : u,
+                uv_valid ? uv_mtx[1][0] * u + uv_mtx[1][1] * vv + uv_mtx[1][2] : vv);
+            glVertex3fv(v->position);
+        }
+    }
+    glEnd();
+}
+
 static int supported(const MvGxCaptureCommand *c,int relaxed)
 {
     unsigned bad=c->material.unsupported;
     bad &= ~(MV_GX_MATERIAL_UNSUPPORTED_COLORMAP|MV_GX_MATERIAL_UNSUPPORTED_ALPHAMAP);
     if(mv_gx_material_multitex_vitagl_supported(&c->material)) {
         bad &= ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
-        if (mv_gx_material_multitex_hsd_modulate(&c->material)) {
+        if (mv_gx_material_multitex_hsd_modulate(&c->material) ||
+            mv_gx_material_multitex_hsd_alpha_blend(&c->material)) {
             const uint32_t required = (1u << MV_GX_VA_CLR0) |
                                       (1u << MV_GX_VA_TEX0) |
                                       (1u << (MV_GX_VA_TEX0 + 1u));
             if ((c->attr_mask & required) != required) return 0;
+        }
+        if (mv_gx_material_multitex_hsd_specular_add(&c->material)) {
+            const uint32_t required = (1u << MV_GX_VA_NRM) |
+                                      (1u << MV_GX_VA_TEX0) |
+                                      (1u << (MV_GX_VA_TEX0 + 1u));
+            if ((c->attr_mask & required) != required ||
+                c->material.pe_blend_type != 0 ||
+                c->material.pe_alpha_comp0 != GX_ALWAYS ||
+                c->material.pe_alpha_comp1 != GX_ALWAYS)
+                return 0;
         }
     }
     if(mv_gx_material_custom_tev_cpu_bakeable(&c->material)) bad &= ~MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV;
@@ -520,13 +605,15 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
         if(c->cull_mode) {glEnable(GL_CULL_FACE);glCullFace(c->cull_mode==1?GL_FRONT:GL_BACK);} else glDisable(GL_CULL_FACE);
         int two=m->texture_count==2 && mv_gx_material_multitex_vitagl_supported(m);
         int hsd_two=two && mv_gx_material_multitex_hsd_modulate(m);
+        int hsd_alpha_blend=two?mv_gx_material_multitex_hsd_alpha_blend(m):0;
+        int hsd_exact_two=hsd_two||hsd_alpha_blend;
         glActiveTexture(GL_TEXTURE0);
-        if(m->texture_count) {GLuint id=prepare(r,m);if(!id)continue;glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);setup_texture0_env(m,hsd_two);} else glDisable(GL_TEXTURE_2D);
+        if(m->texture_count) {GLuint id=prepare_mode(r,m,hsd_exact_two);if(!id)continue;glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);setup_texture0_env(m,hsd_two,hsd_alpha_blend);} else glDisable(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE1);
         if(two) {
-            MvGxMaterialState second;second_layer_material(m,&second);GLuint id=prepare(r,&second);if(!id)continue;
+            MvGxMaterialState second;second_layer_material(m,&second);GLuint id=prepare_mode(r,&second,hsd_exact_two);if(!id)continue;
             glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);
-            setup_texture1_env(m,hsd_two);
+            setup_texture1_env(m,hsd_two,hsd_alpha_blend);
         } else glDisable(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE0);
         glPushMatrix();float model[16]={0};model[15]=1;
@@ -595,6 +682,10 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     unsigned submitted = 0;
     unsigned hsd_multitex_selected = 0;
     unsigned hsd_multitex_submitted = 0;
+    unsigned hsd_alpha_blend_selected = 0;
+    unsigned hsd_alpha_blend_submitted = 0;
+    unsigned hsd_specular_add_selected = 0;
+    unsigned hsd_specular_add_submitted = 0;
     unsigned texture_prepare_failures = 0;
     const int material_probe = !r->submit_logged && r->log != NULL;
     unsigned probe_tex0 = 0, probe_tex1 = 0, probe_tex2 = 0;
@@ -634,7 +725,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
                 for (uint32_t vi = 0; vi < c->vertex_count; ++vi) {
                     const MvGxCaptureVertex *pv = verts + c->first_vertex + vi;
                     if (!(pv->present & (1u << MV_GX_VA_CLR0))) continue;
-                    uint32_t vc = pv->color0;
+                    uint32_t vc = pv->raster0;
                     unsigned vr = (vc >> 24) & 0xffu;
                     unsigned vg = (vc >> 16) & 0xffu;
                     unsigned vb = (vc >> 8) & 0xffu;
@@ -675,14 +766,75 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
 
         int two = m->texture_count == 2 && mv_gx_material_multitex_vitagl_supported(m);
         int hsd_two = two && mv_gx_material_multitex_hsd_modulate(m);
-        if (hsd_two) ++hsd_multitex_selected;
+        int hsd_alpha_blend = two ? mv_gx_material_multitex_hsd_alpha_blend(m) : 0;
+        int hsd_specular_add = two && mv_gx_material_multitex_hsd_specular_add(m);
+        int hsd_exact_two = hsd_two || hsd_alpha_blend || hsd_specular_add;
+        if (hsd_exact_two) ++hsd_multitex_selected;
+        if (hsd_alpha_blend) ++hsd_alpha_blend_selected;
+        if (hsd_specular_add) ++hsd_specular_add_selected;
+
+        if (hsd_specular_add) {
+            MvGxMaterialState second;
+            second_layer_material(m, &second);
+            glActiveTexture(GL_TEXTURE1);
+            glDisable(GL_TEXTURE_2D);
+            glActiveTexture(GL_TEXTURE0);
+            GLuint diffuse_tex = prepare_mode(r, m, 1);
+            GLuint specular_tex = prepare_mode(r, &second, 1);
+            if (!diffuse_tex || !specular_tex) {
+                ++texture_prepare_failures;
+                continue;
+            }
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, diffuse_tex);
+            setup_single_raster_texture_env();
+
+            glPushMatrix();
+            float model[16] = {0};
+            model[15] = 1.0f;
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 4; ++col)
+                    model[col * 4 + row] = c->pos_mtx[row][col];
+            glMultMatrixf(model);
+
+            /* TEV stages 0/1: final alpha = A0 * RASA0, RGB = TEX0*RASC0. */
+            draw_raster_texture_pass(c, m, verts, 0, 0, 1);
+
+            /* TEV stage 2 adds TEX1*RASC1 while preserving alpha. Drawing the
+             * same fragments with ONE/ONE is equivalent on the UNORM target;
+             * when pass 0 wrote depth, EQUAL guarantees only those fragments
+             * receive the specular contribution. */
+            glBindTexture(GL_TEXTURE_2D, specular_tex);
+            setup_single_raster_texture_env();
+            glDisable(GL_ALPHA_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE);
+            if (m->pe_z_enable && m->pe_z_update) glDepthFunc(GL_EQUAL);
+            glDepthMask(0);
+            glColorMask(m->pe_color_update, m->pe_color_update,
+                        m->pe_color_update, 0);
+            draw_raster_texture_pass(c, m, verts, 1, 1, 0);
+            glPopMatrix();
+
+            glDepthFunc(compares[m->pe_z_func]);
+            glDepthMask(m->pe_z_update);
+            glColorMask(m->pe_color_update, m->pe_color_update,
+                        m->pe_color_update, m->pe_alpha_update);
+            glDisable(GL_BLEND);
+            apply_alpha_compare(m);
+            ++submitted;
+            ++hsd_multitex_submitted;
+            ++hsd_specular_add_submitted;
+            continue;
+        }
+
         glActiveTexture(GL_TEXTURE0);
         if (m->texture_count) {
-            GLuint id = prepare(r, m);
+            GLuint id = prepare_mode(r, m, hsd_exact_two);
             if (!id) { ++texture_prepare_failures; continue; }
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
-            setup_texture0_env(m, hsd_two);
+            setup_texture0_env(m, hsd_two, hsd_alpha_blend);
         } else {
             glDisable(GL_TEXTURE_2D);
         }
@@ -690,11 +842,11 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         if (two) {
             MvGxMaterialState second;
             second_layer_material(m, &second);
-            GLuint id = prepare(r, &second);
+            GLuint id = prepare_mode(r, &second, hsd_exact_two);
             if (!id) { ++texture_prepare_failures; continue; }
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
-            setup_texture1_env(m, hsd_two);
+            setup_texture1_env(m, hsd_two, hsd_alpha_blend);
         } else {
             glDisable(GL_TEXTURE_2D);
         }
@@ -716,9 +868,8 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
                 unsigned color = m->texture_count ? material_draw_color(m) : m->material_rgba;
                 /* Keep UI replay behavior unchanged; in the streaming retail
                  * path CLR0 is raster output only when TEV explicitly reads it. */
-                if (mv_gx_material_uses_raster0(m) &&
-                    (v->present & (1u << MV_GX_VA_CLR0)))
-                    color = v->color0;
+                if (mv_gx_material_uses_raster0(m))
+                    color = v->raster0;
                 glColor4ub(color >> 24, color >> 16, color >> 8, color);
                 for (int unit = 0; unit < (two ? 2 : 1); ++unit) {
                     const float (*mat)[3] = unit ? m->uv_mtx1 : m->uv_mtx;
@@ -735,7 +886,8 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         glEnd();
         glPopMatrix();
         ++submitted;
-        if (hsd_two) ++hsd_multitex_submitted;
+        if (hsd_exact_two) ++hsd_multitex_submitted;
+        if (hsd_alpha_blend) ++hsd_alpha_blend_submitted;
     }
 
 #ifdef MELEE_VITA_GXM_DEBUG
@@ -744,8 +896,10 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     r->submitted_commands = submitted;
     if (!r->submit_logged && r->log) {
         fprintf(r->log,
-                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
+                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u hsd_alpha_blend=%u hsd_alpha_blend_selected=%u hsd_specular_add=%u hsd_specular_add_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
                 submitted, count, hsd_multitex_submitted, hsd_multitex_selected,
+                hsd_alpha_blend_submitted, hsd_alpha_blend_selected,
+                hsd_specular_add_submitted, hsd_specular_add_selected,
                 texture_prepare_failures, glGetError());
         fprintf(r->log,
                 "VITAGL_MATERIAL_SUMMARY submitted=%u tex0=%u tex1=%u tex2plus=%u raster_commands=%u raster_vertices=%u raster_black=%u raster_red=%u raster_other=%u draw_black=%u draw_red=%u draw_other=%u tev0=%u tev1=%u tev2=%u tev3plus=%u\n",

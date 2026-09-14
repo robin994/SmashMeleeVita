@@ -10,6 +10,11 @@
 #include <sysdolphin/baselib/quatlib.h>
 #include <sysdolphin/baselib/robj.h>
 
+#ifdef MELEE_VITA_PLATFORM
+#include <dolphin/os.h>
+#include <math.h>
+#endif
+
 /* 00B9D8 */ static void lb_8000B9D8(HSD_JObj*, float**, s32);
 /* 00BC04 */ static HSD_JObj* lbFindJObjWithAObj(HSD_JObj*);
 /* 00BECC */ static HSD_AnimJoint* lb_8000BECC(HSD_AnimJoint* animjoint);
@@ -24,6 +29,44 @@ static s32 lb_803B9FF0[] = { 7, 4, 5, 6 };
 static s32 lb_803BA000[] = { 6, 6, 6, 6, 1, 2, 3, 0 };
 static s32 lb_803BA020[] = { 28, 29, 30, 31 };
 static s32 lb_803BA030[] = { 7, 4, 5, 6 };
+
+#ifdef MELEE_VITA_PLATFORM
+static unsigned vita_blend_nonfinite_logs;
+
+static int vita_jobj_srt_finite(HSD_JObj* jobj)
+{
+    return jobj != NULL && isfinite(jobj->rotate.x) &&
+           isfinite(jobj->rotate.y) && isfinite(jobj->rotate.z) &&
+           (!(HSD_JObjGetFlags(jobj) & JOBJ_USE_QUATERNION) ||
+            isfinite(jobj->rotate.w)) && isfinite(jobj->scale.x) &&
+           isfinite(jobj->scale.y) && isfinite(jobj->scale.z) &&
+           isfinite(jobj->translate.x) && isfinite(jobj->translate.y) &&
+           isfinite(jobj->translate.z);
+}
+
+static void vita_blend_probe(const char* phase, HSD_JObj* a,
+                             HSD_JObj* b, HSD_JObj* out,
+                             float t, float t_inv)
+{
+    if (vita_blend_nonfinite_logs >= 24 ||
+        (vita_jobj_srt_finite(a) && vita_jobj_srt_finite(b) &&
+         vita_jobj_srt_finite(out) && isfinite(t) && isfinite(t_inv)))
+        return;
+    ++vita_blend_nonfinite_logs;
+    OSReport("VITA_FIGHTER_BLEND_NONFINITE phase=%s a=%p af=%08x ar=%g,%g,%g,%g b=%p bf=%08x br=%g,%g,%g,%g out=%p of=%08x or=%g,%g,%g,%g t=%g inv=%g\n",
+             phase, a, a != NULL ? HSD_JObjGetFlags(a) : 0,
+             a != NULL ? a->rotate.x : 0.0F, a != NULL ? a->rotate.y : 0.0F,
+             a != NULL ? a->rotate.z : 0.0F, a != NULL ? a->rotate.w : 0.0F,
+             b, b != NULL ? HSD_JObjGetFlags(b) : 0,
+             b != NULL ? b->rotate.x : 0.0F, b != NULL ? b->rotate.y : 0.0F,
+             b != NULL ? b->rotate.z : 0.0F, b != NULL ? b->rotate.w : 0.0F,
+             out, out != NULL ? HSD_JObjGetFlags(out) : 0,
+             out != NULL ? out->rotate.x : 0.0F,
+             out != NULL ? out->rotate.y : 0.0F,
+             out != NULL ? out->rotate.z : 0.0F,
+             out != NULL ? out->rotate.w : 0.0F, t, t_inv);
+}
+#endif
 
 bool lb_8000B074(HSD_JObj* jobj)
 {
@@ -481,6 +524,10 @@ void lb_8000C490(HSD_JObj* jobj1, HSD_JObj* jobj2, HSD_JObj* arg2, float arg8,
     float sum_square_diffs;
     float sum_square_sums;
 
+#ifdef MELEE_VITA_PLATFORM
+    vita_blend_probe("in", jobj1, jobj2, arg2, arg8, arg9);
+#endif
+
     arg2->translate.x =
         (jobj1->translate.x * arg8) + (jobj2->translate.x * arg9);
     arg2->translate.y =
@@ -500,6 +547,9 @@ void lb_8000C490(HSD_JObj* jobj1, HSD_JObj* jobj2, HSD_JObj* arg2, float arg8,
             arg2->rotate = jobj1->rotate;
             HSD_JObjClearFlags(arg2, 0x20000);
             HSD_JObjSetFlags(arg2, 0x40);
+#ifdef MELEE_VITA_PLATFORM
+            vita_blend_probe("copy-out", jobj1, jobj2, arg2, arg8, arg9);
+#endif
             return;
         }
     }
@@ -542,6 +592,9 @@ void lb_8000C490(HSD_JObj* jobj1, HSD_JObj* jobj2, HSD_JObj* arg2, float arg8,
     HSD_QuatLib_8037EF28(&quat1, &quat2, &arg2->rotate, arg9);
     HSD_JObjSetFlags(arg2, 0x20000U);
     HSD_JObjSetFlags(arg2, 0x40U);
+#ifdef MELEE_VITA_PLATFORM
+    vita_blend_probe("slerp-out", jobj1, jobj2, arg2, arg8, arg9);
+#endif
 }
 
 void lbCopyJObjSRT(HSD_JObj* src, HSD_JObj* dst)

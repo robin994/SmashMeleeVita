@@ -6,12 +6,13 @@ replay = (root / "gx_replay_vitagl.c").read_text()
 capture = (root / "gx_capture_vita.c").read_text()
 
 required_replay = [
-    "if (mv_gx_material_multitex_hsd_modulate(m)) return 0;",
+    "mv_gx_material_multitex_hsd_modulate(m) ||",
+    "mv_gx_material_single_tev_rasc_tex_konst(m)) return 0;",
     "src == GX_TG_TEX1) return v->tex1",
     "GL_SRC0_RGB, GL_PRIMARY_COLOR",
     "GL_SRC1_RGB, GL_TEXTURE",
     "GL_SRC0_ALPHA, GL_PRIMARY_COLOR",
-    "setup_texture1_env(m, hsd_two)",
+    "setup_texture1_env(m, hsd_two, hsd_alpha_blend)",
 ]
 for needle in required_replay:
     if needle not in replay:

@@ -238,7 +238,8 @@ static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vt
     decode_error_reason = 0;
     decode_error_type = 0;
     memset(out, 0, sizeof(*out));
-    out->color0 = 0xffffffffu;
+    out->color0 = out->color1 = 0xffffffffu;
+    out->raster0 = out->raster1 = 0xffffffffu;
     out->pos_mtx_idx = (uint8_t)current_mtx;
     for (unsigned attr_index = GX_VA_PNMTXIDX; attr_index <= GX_VA_TEX7; ++attr_index) {
         GXAttr attr = (GXAttr)attr_index;
@@ -305,8 +306,9 @@ static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vt
             for (unsigned component = 0; component < components; ++component)
                 if (read_scalar(source + scalar * component, fmt->type, fmt->frac,
                                 &out->normal[component])) return -1;
-        } else if (attr == GX_VA_CLR0) {
-            if (read_color(source, fmt->type, &out->color0)) return -1;
+        } else if (attr == GX_VA_CLR0 || attr == GX_VA_CLR1) {
+            uint32_t *color = attr == GX_VA_CLR0 ? &out->color0 : &out->color1;
+            if (read_color(source, fmt->type, color)) return -1;
         } else if (attr == GX_VA_TEX0 || attr == GX_VA_TEX1) {
             int scalar = component_size(fmt->type);
             float *tex = attr == GX_VA_TEX0 ? out->tex0 : out->tex1;
@@ -561,17 +563,149 @@ int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *m)
     return 1;
 }
 
-int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
+int mv_gx_material_multitex_hsd_alpha_blend(const MvGxMaterialState *m)
 {
-    if (!m) return 0;
+    if (!m || m->texture_count != 2 || m->tev_stage_count != 2 ||
+        (m->texgen_valid_mask & 3u) != 3u ||
+        m->texgen_src0 != GX_TG_TEX0 || m->texgen_src1 != GX_TG_TEX1)
+        return 0;
+    if (m->tev_order_coord[0] != GX_TEXCOORD0 ||
+        m->tev_order_coord[1] != GX_TEXCOORD1 ||
+        m->tev_order_map[0] != GX_TEXMAP0 ||
+        m->tev_order_map[1] != GX_TEXMAP1 ||
+        m->tev_order_color[0] != GX_COLOR0A0)
+        return 0;
+
+    static const uint8_t color0[4] = {
+        GX_CC_ZERO, GX_CC_RASC, GX_CC_TEXC, GX_CC_ZERO,
+    };
+    static const uint8_t color1[4] = {
+        GX_CC_CPREV, GX_CC_TEXC, GX_CC_TEXA, GX_CC_ZERO,
+    };
+    if (memcmp(m->tev_color_in[0], color0, sizeof(color0)) != 0 ||
+        memcmp(m->tev_color_in[1], color1, sizeof(color1)) != 0)
+        return 0;
+
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const uint8_t *op = m->tev_color_op[stage];
+        if (op[0] != GX_TEV_ADD || op[1] != GX_TB_ZERO ||
+            op[2] != GX_CS_SCALE_1 || op[3] != GX_ENABLE ||
+            op[4] != GX_TEVPREV)
+            return 0;
+    }
+
+    static const uint8_t alpha0_rasa[4] = {
+        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO,
+    };
+    static const uint8_t alpha1_rasa[4] = {
+        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA,
+    };
+    if (m->tev_order_color[1] == GX_COLOR0A0 &&
+        memcmp(m->tev_alpha_in[0], alpha0_rasa, sizeof(alpha0_rasa)) == 0 &&
+        memcmp(m->tev_alpha_in[1], alpha1_rasa, sizeof(alpha1_rasa)) == 0) {
+        const uint8_t *op = m->tev_alpha_op[1];
+        if (op[0] == GX_TEV_ADD && op[1] == GX_TB_ZERO &&
+            op[2] == GX_CS_SCALE_1 && op[3] == GX_ENABLE &&
+            op[4] == GX_TEVPREV)
+            return 1;
+    }
+
+    static const uint8_t alpha0_tex0[4] = {
+        GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO,
+    };
+    static const uint8_t alpha1_tex0[4] = {
+        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV,
+    };
+    if (m->tev_order_color[1] == GX_COLOR_NULL &&
+        memcmp(m->tev_alpha_in[0], alpha0_tex0, sizeof(alpha0_tex0)) == 0 &&
+        memcmp(m->tev_alpha_in[1], alpha1_tex0, sizeof(alpha1_tex0)) == 0) {
+        for (unsigned stage = 0; stage < 2; ++stage) {
+            const uint8_t *op = m->tev_alpha_op[stage];
+            if (op[0] != GX_TEV_ADD || op[1] != GX_TB_ZERO ||
+                op[2] != GX_CS_SCALE_1 || op[3] != GX_ENABLE ||
+                op[4] != GX_TEVPREV)
+                return 0;
+        }
+        return 2;
+    }
+
+    return 0;
+}
+
+int mv_gx_material_multitex_hsd_specular_add(const MvGxMaterialState *m)
+{
+    if (!m || m->texture_count != 2 || m->tev_stage_count != 3 ||
+        (m->texgen_valid_mask & 3u) != 3u ||
+        m->texgen_src0 != GX_TG_TEX0 || m->texgen_src1 != GX_TG_TEX1)
+        return 0;
+    if (m->tev_order_coord[0] != GX_TEXCOORD0 ||
+        m->tev_order_coord[1] != GX_TEXCOORD0 ||
+        m->tev_order_coord[2] != GX_TEXCOORD1 ||
+        m->tev_order_map[0] != GX_TEXMAP0 ||
+        m->tev_order_map[1] != GX_TEXMAP0 ||
+        m->tev_order_map[2] != GX_TEXMAP1 ||
+        m->tev_order_color[0] != GX_COLOR0A0 ||
+        m->tev_order_color[1] != GX_COLOR0A0 ||
+        m->tev_order_color[2] != GX_COLOR1A1)
+        return 0;
+
+    static const uint8_t color0[4] = {
+        GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO,
+    };
+    static const uint8_t color1[4] = {
+        GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_ZERO,
+    };
+    static const uint8_t color2[4] = {
+        GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_CPREV,
+    };
+    static const uint8_t alpha0[4] = {
+        GX_CA_ZERO, GX_CA_A0, GX_CA_RASA, GX_CA_ZERO,
+    };
+    static const uint8_t alpha_prev[4] = {
+        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV,
+    };
+    if (memcmp(m->tev_color_in[0], color0, sizeof(color0)) != 0 ||
+        memcmp(m->tev_color_in[1], color1, sizeof(color1)) != 0 ||
+        memcmp(m->tev_color_in[2], color2, sizeof(color2)) != 0 ||
+        memcmp(m->tev_alpha_in[0], alpha0, sizeof(alpha0)) != 0 ||
+        memcmp(m->tev_alpha_in[1], alpha_prev, sizeof(alpha_prev)) != 0 ||
+        memcmp(m->tev_alpha_in[2], alpha_prev, sizeof(alpha_prev)) != 0)
+        return 0;
+
+    for (unsigned stage = 1; stage < 3; ++stage) {
+        const uint8_t *cop = m->tev_color_op[stage];
+        const uint8_t *aop = m->tev_alpha_op[stage];
+        if (cop[0] != GX_TEV_ADD || cop[1] != GX_TB_ZERO ||
+            cop[2] != GX_CS_SCALE_1 || cop[3] != GX_ENABLE ||
+            cop[4] != GX_TEVPREV || aop[0] != GX_TEV_ADD ||
+            aop[1] != GX_TB_ZERO || aop[2] != GX_CS_SCALE_1 ||
+            aop[4] != GX_TEVPREV)
+            return 0;
+    }
+    const uint8_t *aop0 = m->tev_alpha_op[0];
+    return aop0[0] == GX_TEV_ADD && aop0[1] == GX_TB_ZERO &&
+           aop0[2] == GX_CS_SCALE_1 && aop0[3] == GX_ENABLE &&
+           aop0[4] == GX_TEVPREV;
+}
+
+static int material_uses_raster_channel(const MvGxMaterialState *m,
+                                        unsigned channel)
+{
+    if (!m || channel > 1u) return 0;
 
     unsigned count = m->tev_stage_count;
     if (count > 4u) count = 4u;
     for (unsigned stage = 0; stage < count; ++stage) {
         const uint8_t order = m->tev_order_color[stage];
-        if (order != GX_COLOR0 && order != GX_ALPHA0 &&
-            order != GX_COLOR0A0)
-            continue;
+        if (channel == 0) {
+            if (order != GX_COLOR0 && order != GX_ALPHA0 &&
+                order != GX_COLOR0A0)
+                continue;
+        } else {
+            if (order != GX_COLOR1 && order != GX_ALPHA1 &&
+                order != GX_COLOR1A1)
+                continue;
+        }
 
         for (unsigned arg = 0; arg < 4u; ++arg) {
             const uint8_t color = m->tev_color_in[stage][arg];
@@ -582,6 +716,16 @@ int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
         }
     }
     return 0;
+}
+
+int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
+{
+    return material_uses_raster_channel(m, 0);
+}
+
+int mv_gx_material_uses_raster1(const MvGxMaterialState *m)
+{
+    return material_uses_raster_channel(m, 1);
 }
 
 int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *m)
@@ -638,7 +782,9 @@ int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)
         return 0;
     if ((m->unsupported & ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) != 0)
         return 0;
-    if (mv_gx_material_multitex_hsd_modulate(m)) {
+    if (mv_gx_material_multitex_hsd_modulate(m) ||
+        mv_gx_material_multitex_hsd_alpha_blend(m) ||
+        mv_gx_material_multitex_hsd_specular_add(m)) {
         if (!uv_mtx_finite(m->uv_mtx, m->uv_mtx_valid) ||
             !uv_mtx_finite(m->uv_mtx1, m->uv_mtx1_valid)) return 0;
         if (m->wrap_s > GX_MIRROR || m->wrap_t > GX_MIRROR ||
@@ -1001,23 +1147,39 @@ static void finalize_vertex_xf(MvGxCaptureCommand *command,
         }
     }
 
-    /* Evaluate the XF channel path for telemetry, but do not replace the raw
-     * captured CLR0 yet.  The v4.01-v4.03 bridge proved that our incomplete
-     * lighting model can drive otherwise valid retail materials to black after
-     * the first frame.  Keep the known-visible GX raster/material color path
-     * active until the XF/TEV bridge is complete enough to be authoritative. */
+    uint32_t combined_flags = 0;
     if (mv_gx_material_uses_raster0(&command->material)) {
         uint32_t channel_flags = 0;
         uint32_t source = (vertex->present & (1u << GX_VA_CLR0))
-                              ? vertex->color0
-                              : 0xffffffffu;
+                              ? vertex->color0 : 0xffffffffu;
         uint32_t raster = mv_gx_channel0_eval(source, eye, normal, &channel_flags);
-        (void) raster;
-        if (channel_flags & MV_GX_CHANNEL_EVAL_ACTIVE) {
-            ++stats.channel_eval_vertices;
-            if (channel_flags & MV_GX_CHANNEL_EVAL_LIT) ++stats.channel_lit_vertices;
-            if (channel_flags & MV_GX_CHANNEL_EVAL_NORMAL) ++stats.channel_normal_vertices;
-        }
+        /* A lit channel without a usable normal is not authoritative. Retain
+         * the raw color instead of recreating the old all-black failure. */
+        if (!(channel_flags & MV_GX_CHANNEL_EVAL_LIT) ||
+            (channel_flags & MV_GX_CHANNEL_EVAL_NORMAL))
+            vertex->raster0 = raster;
+        else
+            vertex->raster0 = source;
+        combined_flags |= channel_flags;
+    }
+    if (mv_gx_material_uses_raster1(&command->material)) {
+        uint32_t channel_flags = 0;
+        uint32_t source = (vertex->present & (1u << GX_VA_CLR1))
+                              ? vertex->color1 : 0xffffffffu;
+        uint32_t raster = mv_gx_channel1_eval(source, eye, normal, &channel_flags);
+        if (!(channel_flags & MV_GX_CHANNEL_EVAL_LIT) ||
+            (channel_flags & MV_GX_CHANNEL_EVAL_NORMAL))
+            vertex->raster1 = raster;
+        else
+            vertex->raster1 = source;
+        combined_flags |= channel_flags;
+    }
+    if (combined_flags & MV_GX_CHANNEL_EVAL_ACTIVE) {
+        ++stats.channel_eval_vertices;
+        if (combined_flags & MV_GX_CHANNEL_EVAL_LIT)
+            ++stats.channel_lit_vertices;
+        if (combined_flags & MV_GX_CHANNEL_EVAL_NORMAL)
+            ++stats.channel_normal_vertices;
     }
 }
 
