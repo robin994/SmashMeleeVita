@@ -297,7 +297,7 @@ vita_create_self(eboot.bin melee_vita UNSAFE)
 # Request Vita extended user-memory mode (ATTRIBUTE2 is a DWORD SFO field).
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 01.18 NAME "Melee Vita Runtime"
+  VERSION 01.19 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

@@ -430,7 +430,12 @@ void GXSetTevColor(GXTevRegID id, GXColor c)
 { unsigned i=(unsigned)id & 3u; tev_regs[i]=c; if(id==GX_TEVREG0 || id==GX_TEVPREV) mv_gx_capture_material_state()->material_rgba=pack_rgba(c); }
 void GXSetTevColorS10(GXTevRegID id, GXColorS10 c)
 { GXColor v={clamp_s10(c.r),clamp_s10(c.g),clamp_s10(c.b),clamp_s10(c.a)}; GXSetTevColor(id,v); }
-void GXSetTevKColor(GXTevKColorID id, GXColor c) { konst_regs[(unsigned)id & 3u]=c; }
+void GXSetTevKColor(GXTevKColorID id, GXColor c)
+{
+    unsigned i = (unsigned)id & 3u;
+    konst_regs[i] = c;
+    mv_gx_capture_material_state()->tev_kcolor_regs[i] = pack_rgba(c);
+}
 void GXSetTevOrder(GXTevStageID st,GXTexCoordID coord,GXTexMapID map,GXChannelID color)
 {
     MvGxMaterialState *m=mv_gx_capture_material_state();
@@ -470,8 +475,16 @@ void GXSetTevAlphaIn(GXTevStageID s,GXTevAlphaArg a,GXTevAlphaArg b,GXTevAlphaAr
 
 void GXSetTevColorOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { MvGxMaterialState *m=mv_gx_capture_material_state(); unsigned st=(unsigned)s; if(st<4u){m->tev_color_op[st][0]=(uint8_t)o;m->tev_color_op[st][1]=(uint8_t)b;m->tev_color_op[st][2]=(uint8_t)sc;m->tev_color_op[st][3]=(uint8_t)cl;m->tev_color_op[st][4]=(uint8_t)r;} }
 void GXSetTevAlphaOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { MvGxMaterialState *m=mv_gx_capture_material_state(); unsigned st=(unsigned)s; if(st<4u){m->tev_alpha_op[st][0]=(uint8_t)o;m->tev_alpha_op[st][1]=(uint8_t)b;m->tev_alpha_op[st][2]=(uint8_t)sc;m->tev_alpha_op[st][3]=(uint8_t)cl;m->tev_alpha_op[st][4]=(uint8_t)r;} }
-void GXSetTevKColorSel(GXTevStageID s,GXTevKColorSel v) { (void)s;(void)v; }
-void GXSetTevKAlphaSel(GXTevStageID s,GXTevKAlphaSel v) { (void)s;(void)v; }
+void GXSetTevKColorSel(GXTevStageID s,GXTevKColorSel v)
+{
+    unsigned stage = (unsigned)s;
+    if (stage < 4u) mv_gx_capture_material_state()->tev_kcolor_sel[stage] = (uint8_t)v;
+}
+void GXSetTevKAlphaSel(GXTevStageID s,GXTevKAlphaSel v)
+{
+    unsigned stage = (unsigned)s;
+    if (stage < 4u) mv_gx_capture_material_state()->tev_kalpha_sel[stage] = (uint8_t)v;
+}
 void GXSetTevSwapMode(GXTevStageID s,GXTevSwapSel r,GXTevSwapSel t) { (void)s;(void)r;(void)t; }
 void GXSetTevClampMode(int a,int b) { (void)a;(void)b; }
 

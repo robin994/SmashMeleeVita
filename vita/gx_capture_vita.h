@@ -111,6 +111,12 @@ typedef struct {
     uint8_t tev1_reg0[4];
     uint8_t tev1_reg1[4];
     uint32_t tev1_active;
+    /* Direct GX konst state used by generated TEV stages. HSD frequently
+     * emits RASC/TEXC/KONST blends; preserving only the color inputs without
+     * the K selector loses the interpolation coefficient. */
+    uint8_t tev_kcolor_sel[4];
+    uint8_t tev_kalpha_sel[4];
+    uint32_t tev_kcolor_regs[4];
 } MvGxMaterialState;
 
 typedef struct {
@@ -243,6 +249,8 @@ int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *material);
  * RASC/RASA. GXSetNumChans(1) alone does not mean every draw should be
  * modulated by the generated raster channel. */
 int mv_gx_material_uses_raster0(const MvGxMaterialState *material);
+int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *material);
+uint32_t mv_gx_material_kcolor_rgba(const MvGxMaterialState *material, unsigned stage);
 /* Resolve a texture/post-texture matrix previously loaded through
  * GXLoadTexMtxImm into the 2D affine form used by the replay. */
 int mv_gx_capture_get_tex_mtx(uint32_t id, float out[2][3]);

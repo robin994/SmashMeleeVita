@@ -350,6 +350,10 @@ void mv_gx_capture_reset_material_state(void)
 {
     memset(&material_state, 0, sizeof(material_state));
     material_state.material_rgba = 0xffffffffu;
+    for (unsigned i = 0; i < 4u; ++i) {
+        material_state.tev_kcolor_sel[i] = GX_TEV_KCSEL_1_4;
+        material_state.tev_kalpha_sel[i] = GX_TEV_KASEL_1_4;
+    }
 }
 
 void mv_gx_capture_reset(void)
@@ -420,10 +424,7 @@ int mv_gx_capture_world_bounds(float out[6])
 void mv_gx_capture_set_material(const MvGxMaterialState *material)
 {
     if (material) material_state = *material;
-    else {
-        memset(&material_state, 0, sizeof(material_state));
-        material_state.material_rgba = 0xffffffffu;
-    }
+    else mv_gx_capture_reset_material_state();
 }
 
 MvGxMaterialState *mv_gx_capture_material_state(void)
@@ -581,6 +582,53 @@ int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
         }
     }
     return 0;
+}
+
+int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *m)
+{
+    if (!m || m->texture_count != 1 || m->tev_stage_count != 1)
+        return 0;
+    if (m->tev_order_coord[0] != GX_TEXCOORD0 ||
+        m->tev_order_map[0] != GX_TEXMAP0 ||
+        m->tev_order_color[0] != GX_COLOR0A0)
+        return 0;
+    static const uint8_t color[4] = {GX_CC_RASC, GX_CC_TEXC,
+                                     GX_CC_KONST, GX_CC_ZERO};
+    static const uint8_t alpha[4] = {GX_CA_ZERO, GX_CA_ZERO,
+                                     GX_CA_ZERO, GX_CA_RASA};
+    if (memcmp(m->tev_color_in[0], color, sizeof(color)) != 0 ||
+        memcmp(m->tev_alpha_in[0], alpha, sizeof(alpha)) != 0)
+        return 0;
+    const uint8_t *cop = m->tev_color_op[0];
+    const uint8_t *aop = m->tev_alpha_op[0];
+    return cop[0] == GX_TEV_ADD && cop[1] == GX_TB_ZERO &&
+           cop[2] == GX_CS_SCALE_1 && cop[3] == GX_ENABLE &&
+           cop[4] == GX_TEVPREV &&
+           aop[0] == GX_TEV_ADD && aop[1] == GX_TB_ZERO &&
+           aop[2] == GX_CS_SCALE_1 && aop[3] == GX_ENABLE &&
+           aop[4] == GX_TEVPREV;
+}
+
+uint32_t mv_gx_material_kcolor_rgba(const MvGxMaterialState *m, unsigned stage)
+{
+    if (!m || stage >= 4u) return 0xffffffffu;
+    const unsigned sel = m->tev_kcolor_sel[stage];
+    static const uint8_t fixed[8] = {255, 223, 191, 159, 127, 95, 63, 31};
+    if (sel < 8u) {
+        uint8_t v = fixed[sel];
+        return (uint32_t)v << 24 | (uint32_t)v << 16 | (uint32_t)v << 8 | 0xffu;
+    }
+    if (sel >= GX_TEV_KCSEL_K0 && sel <= GX_TEV_KCSEL_K3)
+        return m->tev_kcolor_regs[sel - GX_TEV_KCSEL_K0];
+    if (sel >= GX_TEV_KCSEL_K0_R && sel <= GX_TEV_KCSEL_K3_A) {
+        unsigned reg = sel & 3u;
+        unsigned component = (sel - GX_TEV_KCSEL_K0_R) >> 2;
+        uint32_t packed = m->tev_kcolor_regs[reg];
+        unsigned shift = 24u - component * 8u;
+        uint8_t v = (uint8_t)(packed >> shift);
+        return (uint32_t)v << 24 | (uint32_t)v << 16 | (uint32_t)v << 8 | 0xffu;
+    }
+    return 0xffffffffu;
 }
 
 int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)

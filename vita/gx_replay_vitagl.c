@@ -219,7 +219,8 @@ static int material_needs_bake(const MvGxMaterialState *m)
      * multiplies them by the raster color in the GL combiner. Baking the
      * MObj material color into TEX0 here would apply a color term that is not
      * present in the retail TEV program. */
-    if (mv_gx_material_multitex_hsd_modulate(m)) return 0;
+    if (mv_gx_material_multitex_hsd_modulate(m) ||
+        mv_gx_material_single_tev_rasc_tex_konst(m)) return 0;
     const unsigned colormap = (m->tobj_flags >> 16) & 0xfu;
     const unsigned alphamap = (m->tobj_flags >> 20) & 0xfu;
     return (m->tev_valid && m->tev_active != 0 &&
@@ -340,6 +341,27 @@ static const float *vertex_texcoord(const MvGxCaptureVertex *v,
 
 static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two)
 {
+    if (mv_gx_material_single_tev_rasc_tex_konst(m)) {
+        /* GX TEV: D + A*(1-C) + B*C with
+         * A=RASC, B=TEXC, C=KONST, D=ZERO. OpenGL INTERPOLATE is
+         * Arg0*Arg2 + Arg1*(1-Arg2), so route TEXC/RASC/KONST directly. */
+        uint32_t packed = mv_gx_material_kcolor_rgba(m, 0);
+        GLfloat k[4] = {
+            ((packed >> 24) & 0xffu) / 255.0f,
+            ((packed >> 16) & 0xffu) / 255.0f,
+            ((packed >> 8) & 0xffu) / 255.0f,
+            (packed & 0xffu) / 255.0f,
+        };
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_TEXTURE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_CONSTANT);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, k);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+        return;
+    }
     if (!hsd_two) {
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
         return;
@@ -744,14 +766,17 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
                 clr0_present = (v->present & (1u << MV_GX_VA_CLR0)) != 0;
             }
             fprintf(r->log,
-                    "VITAGL_MATERIAL cmd=%u tri=%u tex=%u raster=%u material=%08x draw=%08x clr0=%08x clr0_present=%u tev=%u order0=%u cin0=%u,%u,%u,%u ain0=%u,%u,%u,%u unsupported=%08x\n",
+                    "VITAGL_MATERIAL cmd=%u tri=%u tex=%u raster=%u exact_k=%u material=%08x draw=%08x clr0=%08x clr0_present=%u tev=%u order0=%u cin0=%u,%u,%u,%u ain0=%u,%u,%u,%u ksel=%u k=%08x unsupported=%08x\n",
                     i, c->triangle_count, m->texture_count,
-                    mv_gx_material_uses_raster0(m), m->material_rgba, draw_color,
+                    mv_gx_material_uses_raster0(m),
+                    mv_gx_material_single_tev_rasc_tex_konst(m),
+                    m->material_rgba, draw_color,
                     clr0, clr0_present, m->tev_stage_count, m->tev_order_color[0],
                     m->tev_color_in[0][0], m->tev_color_in[0][1],
                     m->tev_color_in[0][2], m->tev_color_in[0][3],
                     m->tev_alpha_in[0][0], m->tev_alpha_in[0][1],
                     m->tev_alpha_in[0][2], m->tev_alpha_in[0][3],
+                    m->tev_kcolor_sel[0], mv_gx_material_kcolor_rgba(m, 0),
                     m->unsupported);
             ++samples;
         }

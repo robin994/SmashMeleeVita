@@ -188,7 +188,7 @@ print("CASTLE_TEV",
 
 # Locate this material in a real HSD draw capture and prove CLR0 is visible too.
 # These sizes/offsets are the Vita ARM ABI of gx_capture_vita.h.
-CMD_SIZE=472; CMD_MATERIAL_OFF=172; VERTEX_SIZE=76; VERTEX_COLOR_OFF=64
+CMD_SIZE=496; CMD_MATERIAL_OFF=172; VERTEX_SIZE=76; VERTEX_COLOR_OFF=64
 found_color=False
 for capture_root in roots:
     capture_stats=arm.alloc(64)
