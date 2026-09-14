@@ -186,6 +186,19 @@ UnkArchiveStruct* grDatFiles_801C6478(void* data, s32 length)
     arc->unk4 = HSD_ArchiveGetPublicAddress(archive, "map_head");
     arc->unk8 = 1;
 
+#ifdef MELEE_VITA_PLATFORM
+    /* Dynamic stage DATs take a different retail load path from the primary
+     * stage archive.  prepare_raw() can only convert descriptors whose scalar
+     * fields are still serialized big-endian; HSD_ArchiveParse then relocates
+     * all pointers, but it deliberately does not byte-swap map_head metadata
+     * such as unkC/unk14/unk1C/unk24/unk2C.  The primary stage path already
+     * runs this post-relocation pass in grDatFiles_801C6038().  Do the same
+     * here before grDatFiles_801C6228() consumes unk2C as an ARM loop bound.
+     * Without it a small PPC count becomes a huge host integer and the
+     * material-table walk runs out of the archive. */
+    mv_stage_archive_prepare(archive, arc->unk4, NULL, NULL, NULL);
+#endif
+
     grDatFiles_801C6228(arc->unk4);
 
     return arc;
