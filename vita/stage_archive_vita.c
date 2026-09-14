@@ -7,6 +7,7 @@
 #include <sysdolphin/baselib/cobj.h>
 #include <sysdolphin/baselib/debug.h>
 #include <sysdolphin/baselib/forward.h>
+#include <sysdolphin/baselib/gobj.h>
 #include <sysdolphin/baselib/jobj.h>
 #include <sysdolphin/baselib/pobj.h>
 #include <sysdolphin/baselib/robj.h>
@@ -3566,6 +3567,63 @@ static void stage_normalize_shadows(HSD_Archive* archive, UnkStageDat* map_head)
 
     OSReport("VITA_STAGE_SHADOW_NATIVE_PASS entries=%d enabled=%u converted=%u\n",
              map_head->unk24, enabled, converted);
+}
+
+void mv_stage_yakumono_prepare(HSD_Archive* archive, GrKind grkind,
+                                  void* yakumono_param)
+{
+    enum { DEVICE_HIT_WORDS = 9 };
+    u8* hit_bytes;
+    u32 raw[DEVICE_HIT_WORDS];
+
+    /* Zebes stores the acid collision descriptor behind the word that aliases
+     * HSD_GObj::user_data at yakumono_param+0x2C. HSD relocation fixes that
+     * pointer, but the target itself is scalar PPC data and therefore remains
+     * big-endian unless we nativeize it explicitly. The game later views the
+     * same target both as DynamicsDesc (count == damage) and as
+     * lbColl_80008D30_arg1. */
+    if (archive == NULL || yakumono_param == NULL || grkind != Gr_Kind_Zebes) {
+        return;
+    }
+
+    stage_require_range(archive, yakumono_param,
+                        offsetof(HSD_GObj, user_data) + sizeof(void*));
+    void* hit_desc = NULL;
+    memcpy(&hit_desc, (u8*) yakumono_param + offsetof(HSD_GObj, user_data),
+           sizeof(hit_desc));
+    if (hit_desc == NULL) {
+        HSD_Panic(__FILE__, __LINE__, "Zebes device hit descriptor is null");
+    }
+    stage_require_range(archive, hit_desc, DEVICE_HIT_WORDS * sizeof(u32));
+    hit_bytes = hit_desc;
+
+    for (u32 i = 0; i < DEVICE_HIT_WORDS; ++i) {
+        raw[i] = stage_be32(hit_bytes + i * 4);
+    }
+
+    /* These are the retail lbColl_80008D30_arg1 domains. Requiring every
+     * field to be sane makes this a typed boundary conversion rather than a
+     * byte-swap heuristic. */
+    if (raw[0] > HitCapsule_Max || raw[1] > 500 || raw[2] > 361 ||
+        raw[3] > 1000 || raw[4] > 1000 || raw[5] > 1000 || raw[6] > 31 ||
+        raw[7] > 7 || raw[8] > 31)
+    {
+        u32 native_damage;
+        memcpy(&native_damage, hit_bytes + 4, sizeof(native_damage));
+        if (native_damage <= 500) {
+            /* Already nativeized by an earlier pass. */
+            return;
+        }
+        OSReport("VITA_STAGE_DEVICE_HIT_INVALID grkind=%d state=%u damage=%u angle=%u element=%u sfx=%u/%u\n",
+                 grkind, raw[0], raw[1], raw[2], raw[6], raw[7], raw[8]);
+        HSD_Panic(__FILE__, __LINE__, "stage device hit descriptor invalid");
+    }
+
+    for (u32 i = 0; i < DEVICE_HIT_WORDS; ++i) {
+        stage_swap32(hit_bytes + i * 4);
+    }
+    OSReport("VITA_STAGE_DEVICE_HIT_NATIVE_PASS grkind=%d damage=%u angle=%u kb=%u/%u/%u element=%u\n",
+             grkind, raw[1], raw[2], raw[3], raw[4], raw[5], raw[6]);
 }
 
 void mv_stage_archive_prepare(HSD_Archive* archive, UnkStageDat* map_head,

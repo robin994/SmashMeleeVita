@@ -14,6 +14,7 @@
 extern void mv_stage_archive_prepare(HSD_Archive*, UnkStageDat*, GroundParam*,
                                      MapCollData*, struct GroundItemData**);
 extern void mv_stage_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_stage_yakumono_prepare(HSD_Archive*, GrKind, void*);
 #endif
 
 /* 1C6228 */ static void grDatFiles_801C6228(UnkStageDat*);
@@ -86,6 +87,8 @@ void grDatFiles_801C6038(void* arg0, s32 arg1, s32 arg2)
             mv_stage_archive_prepare(sp14, temp_r3->unk4, stage_info.param,
                                      stage_info.coll_data,
                                      stage_info.itemdata);
+            mv_stage_yakumono_prepare(sp14, stage_info.grkind,
+                                      stage_info.yakumono_param);
         }
 #endif
         if (stage_info.map_ptcl != NULL && stage_info.map_texg != NULL) {
