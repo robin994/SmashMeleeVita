@@ -67,7 +67,7 @@ int main(void)
     /* Independent known-answer vectors for upstream HSD_Rand, seed = 1. */
     const u32 expected[] = {41, 51235, 6334, 59268, 51937};
     int passed = 1;
-    *seed_ptr = 1;
+    *HSD_RandSeedPtr = 1;
     for (unsigned i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) {
         u32 value = (u32)HSD_Rand();
         if (value != expected[i]) passed = 0;

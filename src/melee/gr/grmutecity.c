@@ -46,6 +46,8 @@ GrJoint grMc_803E30B0[] = {
     { 8, 29, 9 },
 };
 
+static void stageGObj36_37_OnInit(Ground_GObj* gobj);
+
 StageCallbacks grMc_StageCallbacks[39] = {
     {
         NULL,
@@ -300,14 +302,14 @@ StageCallbacks grMc_StageCallbacks[39] = {
         0,
     },
     {
-        grMuteCity_801F0410,
+        stageGObj36_37_OnInit,
         grMuteCity_801F043C,
         grMuteCity_801F0444,
         grMuteCity_801F0448,
         0,
     },
     {
-        grMuteCity_801F0410,
+        stageGObj36_37_OnInit,
         grMuteCity_801F043C,
         grMuteCity_801F0444,
         grMuteCity_801F0448,
@@ -339,7 +341,7 @@ StageData grMc_StageData = {
 };
 
 struct grMc_YakumonoParam {
-    int x0;
+    void* x0;
     void* x4;
     DynamicsDesc* x8;
     DynamicsDesc* xC;
@@ -521,7 +523,7 @@ void grMuteCity_801F0120(Ground_GObj* gobj)
     }
     grMuteCity_801F1328();
     grMuteCity_801F1A34(ground->u.mutecity.xCC, gobj);
-    Ground_801C2FE0(gobj);
+    Ground_UpdateMapColl(gobj);
     lb_800115F4();
 }
 
@@ -532,7 +534,7 @@ void grMuteCity_801F01B4(Ground_GObj* gobj)
     Ground* gp = GET_GROUND(gobj);
     HSD_JObj* jobj = GET_JOBJ(gobj);
 
-    Ground_801C2ED0(jobj, gp->map_id);
+    Ground_InitMapColl(jobj, gp->map_id);
     grMaterial_801C94D8(jobj);
     grAnime_801C8138(gobj, gp->map_id, false);
     grAnime_801C775C(gobj, 0, 7, 0.0f, 3600.0f);
@@ -582,15 +584,14 @@ void grMuteCity_801F0290(Ground_GObj* gobj)
         HSD_JObjSetRotationZ(gp->u.mutecity2.xC8, rot_z * gp->u.mutecity2.xD0);
     }
     grMuteCity_801F290C(gobj);
-    Ground_801C2FE0(gobj);
+    Ground_UpdateMapColl(gobj);
 }
 
 void grMuteCity_801F040C(Ground_GObj* arg) {}
 
-void grMuteCity_801F0410(Ground_GObj* gobj)
+static void stageGObj36_37_OnInit(Ground_GObj* gobj)
 {
-    Ground* gp = GET_GROUND(gobj);
-    grAnime_801C8138(gobj, gp->map_id, 0);
+    Ground_StartMapAnim(gobj);
 }
 
 bool grMuteCity_801F043C(Ground_GObj* arg)
@@ -923,7 +924,7 @@ void grMuteCity_801F04B8(Ground_GObj* gobj)
             HSD_GObj* bg_gobj = Ground_GetMapGObj(0x1D);
             if (bg_gobj != NULL) {
                 if (param != 0) {
-                    grMaterial_801C9604(bg_gobj, (s32) yakumono_param->x4, 0);
+                    grMaterial_801C9604(bg_gobj, yakumono_param->x4, 0);
                     if (gp->u.mutecity.x110 != NULL) {
                         HSD_LObjClearFlags(gp->u.mutecity.x110, LOBJ_HIDDEN);
                     }
@@ -1818,7 +1819,7 @@ DynamicModelDesc* grMuteCity_801F28A8(void)
     HSD_ASSERT(2135, archive);
     dat = archive->unk4;
     if (dat != NULL) {
-        return (DynamicModelDesc*) ((char*) dat->unk8 + 0x7B8);
+        return (DynamicModelDesc*) &dat->unk8[38];
     }
     return NULL;
 }

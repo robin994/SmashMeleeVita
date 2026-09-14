@@ -154,8 +154,7 @@ void ifStatus_PercentOnDeathAnimationThink(UnkX* value, s32 arg1, s32 arg2)
     {
         HSD_JObj* jobj_r30 = value->x54_jobj[i];
         ASSERT_NOT_NULL(jobj_r30, 993);
-        if (fabsf_bitwise(jobj_r30->translate.x) <
-            100.0f) { // 100.0f @ lbl_804DDA6C
+        if (fabsf_bitwise(jobj_r30->translate.x) < 100.0f) {
             float f = (&value->x34_vec.x)[i];
             jobj_r30 = (HSD_JObj*) jobj_get(jobj_r30, value, i);
             ASSERT_NOT_NULL(jobj_r30, 1102);
@@ -597,7 +596,7 @@ void ifStatus_802F5B48(HSD_GObj* gobj)
             p->flags.unk10 = 0;
         }
         if (p->old_damage == 0) {
-            if (gmVs_GetController_1()->fighters[(s8) p->player_slot].x4_b5) {
+            if (gmVs_GetSceneState()->fighters[(s8) p->player_slot].x4_b5) {
                 ifStatus_802F6948((s8) p->player_slot);
             }
         }
@@ -912,7 +911,7 @@ void ifStatus_802F66A4(void)
         if (reset != 0) {
 #endif
             ifStatus_804D6D60 = 0;
-            memzero(hud, 0x258);
+            memzero(hud, sizeof(hud->players));
 #ifdef MUST_MATCH
         }
     }
@@ -1002,8 +1001,8 @@ static inline void ifStatus_TriggerStockLoss(s32 player_idx,
     struct StartMeleeRules* small_thing;
     IfDamageFlags* hud_player_flags;
 
-    big_thing = gmVs_GetController_0();
-    big_thing->unk_D = player_idx;
+    big_thing = gmVs_GetSceneController();
+    big_thing->state.unk_D = player_idx;
     small_thing = gm_GetStartMeleeRules();
     hud_player = &ifStatus_GetHUDInfo()->players[player_idx];
     hud_player_flags = &hud_player->flags;
@@ -1033,7 +1032,7 @@ void ifStatus_802F69C0(s32 player_idx, s32 arg1)
 {
     VsSceneController* big_thing;
 
-    big_thing = gmVs_GetController_0();
+    big_thing = gmVs_GetSceneController();
     if (big_thing->start.match_kind != 1 && big_thing->start.x2_5 != 0) {
         if_802F7C30(arg1);
     }

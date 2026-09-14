@@ -5,7 +5,6 @@
 #include <math.h>
 
 #include "granime.h"
-#include "grkongo.static.h"
 #include "grmaterial.h"
 #include "ground.h"
 #include "grzakogenerator.h"
@@ -22,7 +21,6 @@
 #include <melee/it/kinds/itbox.h>
 #include <melee/it/kinds/itklap.h>
 #include <melee/lb/lb_00B0.h>
-#include <melee/lb/lb_00F9.h>
 #include <melee/mp/mplib.h>
 #include <sysdolphin/baselib/debug.h>
 #include <sysdolphin/baselib/gobj.h>
@@ -236,7 +234,7 @@ void grKongo_801D5490(Ground_GObj* arg0)
     PAD_STACK(8);
 
     temp_r31 = arg0->user_data;
-    Ground_801C2ED0(arg0->hsd_obj, temp_r31->map_id);
+    Ground_InitMapColl(arg0->hsd_obj, temp_r31->map_id);
     grAnime_801C8138(arg0, temp_r31->map_id, 0);
     temp_r31->x10_flags.b5 = 1;
     temp_r31->u.kongo.xE4 = -1;
@@ -251,7 +249,7 @@ void grKongo_801D5490(Ground_GObj* arg0)
     temp_r31->u.kongo.xE0 = Ground_801C3FA4(arg0, 0x28);
     grKongo_801D69B0(arg0);
     Ground_801C10B8(arg0, fn_801D542C);
-    Ground_801C2FE0(arg0);
+    Ground_UpdateMapColl(arg0);
 }
 
 bool grKongo_801D5574(Ground_GObj* arg)
@@ -264,8 +262,7 @@ void grKongo_801D557C(Ground_GObj* arg0)
     grKongo_801D7134(arg0, 0);
     grKongo_801D77E0(arg0, 0);
     grKongo_801D7BBC(arg0);
-    lb_800115F4();
-    Ground_801C2FE0(arg0);
+    Ground_UpdateWindAndMapColl(arg0);
     mpLib_8005667C(4);
 }
 
@@ -585,8 +582,8 @@ void grKongo_801D6198(Ground_GObj* arg0)
     switch (temp_r3->u.kongo3.xC4) {
     case 0:
         if (grAnime_801C83D0(arg0, 0, 1) != 0) {
-            Ground_801C2ED0((HSD_JObj*) arg0->hsd_obj, temp_r3->map_id);
-            Ground_801C2FE0(arg0);
+            Ground_InitMapColl((HSD_JObj*) arg0->hsd_obj, temp_r3->map_id);
+            Ground_UpdateMapColl(arg0);
             if ((enum GrKind) temp_r3->map_id == Gr_Kind_Test) {
                 mpJointListAdd(0);
                 mpJointSetCb1(0, temp_r3, fn_801D7E60);
@@ -1522,7 +1519,7 @@ f32 grKongo_801D8314(void)
 
 DynamicsDesc* grKongo_801D8444(enum_t arg)
 {
-    return false;
+    return NULL;
 }
 
 bool grKongo_801D844C(Vec3* a, int b, HSD_JObj* jobj)

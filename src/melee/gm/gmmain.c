@@ -165,13 +165,13 @@ int gmMain_VitaBootProbe(u32 out[6])
         }
     }
     arena_size = (intptr_t) OSGetArenaHi() - (intptr_t) OSGetArenaLo();
-    *seed_ptr = OSGetTick();
+    *HSD_RandSeedPtr = OSGetTick();
 
     out[0] = db_gameLaunchButtonState;
     out[1] = (u32) DbLevel;
     out[2] = db_804D6B20 ? 1 : 0;
     out[3] = arena_size;
-    out[4] = *seed_ptr;
+    out[4] = *HSD_RandSeedPtr;
     out[5] = OSGetConsoleSimulatedMemSize();
     return 0;
 }
@@ -182,9 +182,9 @@ int gmMain_VitaPostHsdProbe(u32 out[1])
         return -1;
     }
     GXSetMisc(GX_MT_XF_FLUSH, 8);
-    *seed_ptr = OSGetTick();
+    *HSD_RandSeedPtr = OSGetTick();
     lbAudioAx_8002838C();
-    out[0] = *seed_ptr;
+    out[0] = *HSD_RandSeedPtr;
     return 0;
 }
 
@@ -281,7 +281,7 @@ int main(void)
     HSD_GXSetFifoObj(GXInit(HSD_AllocateFifo(0x40000), 0x40000));
     HSD_InitComponent();
     GXSetMisc(1, 8);
-    *seed_ptr = OSGetTick();
+    *HSD_RandSeedPtr = OSGetTick();
     lbAudioAx_8002838C();
     lb_80019AAC(&gmMain_8015FD24);
     HSD_VISetUserPostRetraceCallback(&gmMain_8015FDA0);

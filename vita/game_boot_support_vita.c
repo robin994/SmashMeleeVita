@@ -22,21 +22,21 @@ void hsd_803AAA48(void)
      * pump until read/write support is implemented. */
 }
 
-void hsd_803B24E4(s32 *ctx, int channel, int file_no, void *work_buf)
+void hsd_803B24E4(s32 *ctx, int channel, int sector_size, void *work_buf)
 {
     CardState *state = (CardState *)ctx;
     memset(state, 0, sizeof(*state));
-    state->x20 = -1;
-    state->x4 = channel;
-    state->x8 = file_no;
-    state->x0 = work_buf;
+    state->file_no = -1;
+    state->chan = channel;
+    state->sector_size = sector_size;
+    state->sector_buf = work_buf;
 }
 
 int hsd_803B2550(s32 *ctx, const char *name, void (*callback)(int, int))
 {
     (void)callback;
     CardState *state = (CardState *)ctx;
-    int result = CARDOpen(state->x4, (char *)name, &state->file_info);
+    int result = CARDOpen(state->chan, (char *)name, &state->file_info);
     if (result < 0) return result;
     CARDClose(&state->file_info);
     return CARD_RESULT_IOERROR;
@@ -52,9 +52,9 @@ void hsd_803AC3E0(CardState *state, int file_idx, int file_size,
                   int file_flags, u8 *data)
 {
     if (!state || file_idx < 0 || file_idx >= 9) return;
-    state->x4C[file_idx] = file_size;
-    state->x70[file_idx].ptr = data;
-    state->x28[file_idx] = file_flags;
+    state->file_sizes[file_idx] = file_size;
+    state->file_data[file_idx] = data;
+    state->file_flags[file_idx] = file_flags;
 }
 
 int hsd_803B27F4(const s32 *ctx, const char *name, int a, int b,

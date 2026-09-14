@@ -1662,7 +1662,7 @@ bool Ground_801C2D24(enum_t arg0, Vec3* arg1)
     return false;
 }
 
-bool Ground_801C2ED0(HSD_JObj* jobj, s32 arg1)
+bool Ground_InitMapColl(HSD_JObj* jobj, s32 arg1)
 {
     u8 _[4];
     bool result = false;
@@ -1696,7 +1696,7 @@ bool Ground_801C2ED0(HSD_JObj* jobj, s32 arg1)
 
 static s16 Ground_804D6954;
 
-bool Ground_801C2FE0(Ground_GObj* arg0)
+bool Ground_UpdateMapColl(Ground_GObj* arg0)
 {
     StageData* stagedata;
     UnkArchiveStruct* archive;
@@ -3310,14 +3310,6 @@ Item_GObj* Ground_801C58E0(s32 arg0, s32 arg1)
     result = it_802F2094(0, &sp10, tmp, 0);
     Toy_80304A58(tmp);
     return result;
-}
-
-static inline s32 randi(s32 max)
-{
-    if (max != 0) {
-        return HSD_Randi(max);
-    }
-    return 0;
 }
 
 int Ground_801C5940(void)

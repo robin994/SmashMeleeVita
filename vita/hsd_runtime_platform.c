@@ -15,7 +15,7 @@
 #include <string.h>
 
 static FILE *runtime_log;
-void HSD_Panic(char *file, u32 line, char *message)
+void HSD_Panic(const char *file, u32 line, const char *message)
 {
     fprintf(runtime_log ? runtime_log : stderr, "HSD_PANIC %s:%lu: %s\n", file ? file : "?",
             (unsigned long)line, message ? message : "?");
@@ -23,7 +23,7 @@ void HSD_Panic(char *file, u32 line, char *message)
     abort();
 }
 
-void OSPanic(char *file, int line, char *format, ...)
+void OSPanic(const char *file, int line, const char *format, ...)
 {
     FILE *stream = runtime_log ? runtime_log : stderr;
     fprintf(stream, "OS_PANIC %s:%d: ", file ? file : "?", line);
