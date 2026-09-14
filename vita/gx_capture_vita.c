@@ -953,22 +953,31 @@ static void finalize_vertex_xf(MvGxCaptureCommand *command,
         }
     }
 
-    /* Evaluate the XF channel path for telemetry, but do not replace the raw
-     * captured CLR0 yet.  The v4.01-v4.03 bridge proved that our incomplete
-     * lighting model can drive otherwise valid retail materials to black after
-     * the first frame.  Keep the known-visible GX raster/material color path
-     * active until the XF/TEV bridge is complete enough to be authoritative. */
+    /* GX TEV consumes the post-XF raster color, not the raw CLR0 attribute and
+     * not whatever value was most recently written to TEVREG0.  Most retail
+     * stage materials use an unlit channel whose result is exact here: it is
+     * simply the selected vertex/material register color.  Feed that exact
+     * value to replay so stale TEVREG0 state cannot tint an entire scene.
+     *
+     * Keep the conservative fallback for genuinely lit channels.  The
+     * v4.01-v4.03 bridge showed that our still-incomplete light model can turn
+     * otherwise valid geometry black, so lit raster colors stay on the known
+     * visible path until the light bridge is complete. */
     if (mv_gx_material_uses_raster0(&command->material)) {
         uint32_t channel_flags = 0;
         uint32_t source = (vertex->present & (1u << GX_VA_CLR0))
                               ? vertex->color0
                               : 0xffffffffu;
         uint32_t raster = mv_gx_channel0_eval(source, eye, normal, &channel_flags);
-        (void) raster;
         if (channel_flags & MV_GX_CHANNEL_EVAL_ACTIVE) {
             ++stats.channel_eval_vertices;
             if (channel_flags & MV_GX_CHANNEL_EVAL_LIT) ++stats.channel_lit_vertices;
             if (channel_flags & MV_GX_CHANNEL_EVAL_NORMAL) ++stats.channel_normal_vertices;
+
+            if (!(channel_flags & MV_GX_CHANNEL_EVAL_LIT)) {
+                vertex->color0 = raster;
+                vertex->present |= (1u << GX_VA_CLR0);
+            }
         }
     }
 }

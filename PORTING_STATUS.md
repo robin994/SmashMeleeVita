@@ -2153,3 +2153,13 @@ Remaining fidelity work is explicit rather than hidden by the black screen: the 
 The physical v4.03 run remains black after the first visible gameplay frame even with the synchronous framebuffer readback removed. Capture remains healthy across frames (about 19.5k vertices / 13.2k triangles, no capture errors, stable texture cache), the frame-tail draw state is effectively unchanged, and the only structural rendering regression relative to the known-visible v4.00 build is still the v4.01 XF color-channel bridge. v4.02/v4.03 gated it to TEV programs that read RASC/RASA, but it still evaluates roughly 18k vertices and replaces raw CLR0 on those draws.
 
 v4.04 keeps the normal/light/channel evaluation and telemetry but no longer writes the incomplete XF lighting result back into captured CLR0. Retail replay therefore returns to the raw vertex/material raster color path that produced visible Castle geometry in v4.00, while all later fixes remain in place: gameplay winding conversion, TLUT0/CI multitexture handling, depth/frame setup, ARM32 non-finite barriers, and the non-invasive frame-tail diagnostics. Runtime marker is `MELEE_VITA_GAME_BOOT v4.04-visible-raster-baseline`; APP_VER is 01.14. This is an intentional visibility baseline, not the final lighting implementation: the XF result stays diagnostic-only until the GX channel/TEV model is complete enough to replace the raster source without blacking the frame.
+
+## v4.07 - unlit XF raster color bridge (real Vita)
+
+- The v4.06 hardware run confirms the compatible vitaGL lock fixed the full-black regression: real stage geometry is now visible on PS Vita.
+- The remaining pervasive red/pink tint is downstream of geometry/projection: runtime capture remains healthy (capture_result=0, gl_error=0, hundreds of textures prepared).
+- Gameplay telemetry shows roughly 11k channel-evaluated vertices per sampled frame but only ~456 genuinely lit vertices. The old bridge evaluated the GX/XF raster channel and then discarded that result, allowing raw CLR0 or stale TEVREG0 state to tint materials.
+- `finalize_vertex_xf()` now writes the exact post-XF raster color into captured CLR0 for active unlit channels. Genuinely lit channels retain the conservative v4.04 fallback until the incomplete Vita light model is made authoritative, avoiding the prior black-material regression.
+- Castle ARM multitexture regression still passes with both texture units, two captured TEV stages, and a valid captured CLR0 sample (0x999988ff).
+- The later JObj rotation NaNs remain a separate ARM32 transform/animation issue and are not treated by this renderer-color patch.
+- Runtime marker: `MELEE_VITA_GAME_BOOT v4.07-unlit-raster-color`; VPK version 01.17.
