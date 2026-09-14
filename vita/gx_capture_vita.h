@@ -261,6 +261,9 @@ int mv_gx_material_multitex_hsd_specular_add(const MvGxMaterialState *material);
  * modulated by the generated raster channel. */
 int mv_gx_material_uses_raster0(const MvGxMaterialState *material);
 int mv_gx_material_uses_raster1(const MvGxMaterialState *material);
+/* Exact one-texture HSD graph used heavily by Yoshi's Island. Return 1 for
+ * RGB=RASC*TEX0, A=RASA*TEXA; 2 for the same RGB with A=RASA. */
+int mv_gx_material_single_tev_rasc_tex(const MvGxMaterialState *material);
 int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *material);
 uint32_t mv_gx_material_kcolor_rgba(const MvGxMaterialState *material, unsigned stage);
 /* Resolve a texture/post-texture matrix previously loaded through

@@ -1,4 +1,38 @@
-# Porting status - 2026-09-14, v4.14 Corneria endian + GX raster lighting
+# Porting status - 2026-09-14, v4.15 Yoshi Island texture/alpha replay
+
+## 2026-09-14 — v4.15: restore Yoshi's Island alpha-tested textured layers and exact single-texture TEV
+
+The physical v4.14 run is the first one where the stage/fighter geometry is recognizable as real 3D,
+but Yoshi's Island (`stkind=95`, `GrYt.dat`) still appears largely untextured and without its background.
+The runtime proves the asset path itself is healthy: the stage nativeizer sees 175 images and 135 TObjs,
+texture preparation reports zero failures, and vitaGL reports no GL error. The decisive mismatch is draw
+selection: 805 commands are captured but only 504 are submitted.
+
+A linked ARM replay of the real `GrYt.dat` reproduces that delta exactly. 301 captured draws use GX alpha
+compare forms that the old vitaGL bridge rejected before rendering: 284 use `GEQUAL(0) AND GEQUAL(0)`,
+and 17 use `GEQUAL(231..234) AND LEQUAL(255)`. v4.15 reduces those observed GX forms exactly to one
+fixed-function `GL_GEQUAL` test (or disables alpha testing when `GEQUAL(0)` is mathematically always
+true), so all 301/301 draws are now replayable instead of silently discarded.
+
+The same audit finds 138 unique stage materials and only six generated TEV graphs. 118 materials use the
+single-texture graph `RGB = RASC * TEX0`: 72 finish with `A = RASA * TEXA`, while 46 preserve `A = RASA`.
+The old generic `GL_MODULATE` path could not distinguish those alpha equations and the texture-cache path
+could bake material state before the real raster/TEV combine. v4.15 recognizes both forms explicitly,
+keeps the texture sample raw, evaluates RGB with the post-XF raster color, and selects the correct alpha
+combine. Runtime telemetry now reports `hsd_single_rasc_tex` and `hsd_single_rasc_tex_selected`.
+
+The new `stage-yorster-texture-check` proves 118/118 exact one-texture materials are classified (72/46)
+and all 301 non-trivial runtime alpha compares are accepted. Corneria params/specular, GX channel1,
+Icicle 207/207, Castle multitexture, particle allocator/pool, TEV KONST, projection, source bridge and
+`git diff --check` remain green. Runtime marker is `MELEE_VITA_GAME_BOOT v4.15-yorster-texture` and
+APP_VER is 01.25.
+
+Hardware artifact: `build/vita-v415/SmashMeleeVita-v4.15-yorster-texture.vpk`, SHA-256
+`13977adb7c007ebfc00f8bafd1a6e0ad25350c3b017ee18ca544290aa453b560`. On hardware, repeat
+the same Yoshi's Island route. `hsd_single_rasc_tex` should be non-zero and the submitted command count
+should rise materially from the v4.14 baseline of 504/805 now that the 301 observed alpha-test draws are
+no longer rejected before replay.
+
 
 ## 2026-09-14 — v4.14: nativeize Corneria dynamics and restore post-XF COLOR0/COLOR1 lighting
 

@@ -223,6 +223,7 @@ static int material_needs_bake(const MvGxMaterialState *m)
     if (mv_gx_material_multitex_hsd_modulate(m) ||
         mv_gx_material_multitex_hsd_alpha_blend(m) ||
         mv_gx_material_multitex_hsd_specular_add(m) ||
+        mv_gx_material_single_tev_rasc_tex(m) ||
         mv_gx_material_single_tev_rasc_tex_konst(m)) return 0;
     const unsigned colormap = (m->tobj_flags >> 16) & 0xfu;
     const unsigned alphamap = (m->tobj_flags >> 20) & 0xfu;
@@ -335,6 +336,29 @@ static void apply_alpha_compare(const MvGxMaterialState *m)
         glDisable(GL_ALPHA_TEST);
         return;
     }
+
+    if (m->pe_alpha_op == GX_AOP_AND) {
+        uint8_t ref = 0;
+        if (m->pe_alpha_comp0 == GX_GEQUAL && m->pe_alpha_comp1 == GX_GEQUAL)
+            ref = m->pe_alpha_ref0 > m->pe_alpha_ref1 ?
+                  m->pe_alpha_ref0 : m->pe_alpha_ref1;
+        else if (m->pe_alpha_comp0 == GX_GEQUAL &&
+                 m->pe_alpha_comp1 == GX_LEQUAL && m->pe_alpha_ref1 == 255)
+            ref = m->pe_alpha_ref0;
+        else if (m->pe_alpha_comp0 == GX_LEQUAL && m->pe_alpha_ref0 == 255 &&
+                 m->pe_alpha_comp1 == GX_GEQUAL)
+            ref = m->pe_alpha_ref1;
+
+        /* GEQUAL 0 is true for every normalized framebuffer alpha value. */
+        if (ref == 0) {
+            glDisable(GL_ALPHA_TEST);
+            return;
+        }
+        glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GEQUAL, (float)ref / 255.0f);
+        return;
+    }
+
     glEnable(GL_ALPHA_TEST);
     glAlphaFunc(GL_GREATER, (float)m->pe_alpha_ref0 / 255.0f);
 }
@@ -351,6 +375,25 @@ static const float *vertex_texcoord(const MvGxCaptureVertex *v,
 static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two,
                                int hsd_alpha_blend)
 {
+    int single_rasc_tex = mv_gx_material_single_tev_rasc_tex(m);
+    if (single_rasc_tex) {
+        /* Exact generated HSD stage: RGB = RASC*TEX0.  Some materials use
+         * TEXA*RASA, while Yoshi's Island frequently preserves RASA and must
+         * not let transparent CMPR texels erase the sky/background layer. */
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
+        if (single_rasc_tex == 1) {
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_TEXTURE);
+        } else {
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+        }
+        return;
+    }
     if (mv_gx_material_single_tev_rasc_tex_konst(m)) {
         /* GX TEV: D + A*(1-C) + B*C with
          * A=RASC, B=TEXC, C=KONST, D=ZERO. OpenGL INTERPOLATE is
@@ -686,6 +729,8 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     unsigned hsd_alpha_blend_submitted = 0;
     unsigned hsd_specular_add_selected = 0;
     unsigned hsd_specular_add_submitted = 0;
+    unsigned hsd_single_rasc_tex_selected = 0;
+    unsigned hsd_single_rasc_tex_submitted = 0;
     unsigned texture_prepare_failures = 0;
     const int material_probe = !r->submit_logged && r->log != NULL;
     unsigned probe_tex0 = 0, probe_tex1 = 0, probe_tex2 = 0;
@@ -768,8 +813,10 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         int hsd_two = two && mv_gx_material_multitex_hsd_modulate(m);
         int hsd_alpha_blend = two ? mv_gx_material_multitex_hsd_alpha_blend(m) : 0;
         int hsd_specular_add = two && mv_gx_material_multitex_hsd_specular_add(m);
+        int hsd_single_rasc_tex = mv_gx_material_single_tev_rasc_tex(m);
         int hsd_exact_two = hsd_two || hsd_alpha_blend || hsd_specular_add;
         if (hsd_exact_two) ++hsd_multitex_selected;
+        if (hsd_single_rasc_tex) ++hsd_single_rasc_tex_selected;
         if (hsd_alpha_blend) ++hsd_alpha_blend_selected;
         if (hsd_specular_add) ++hsd_specular_add_selected;
 
@@ -888,6 +935,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         ++submitted;
         if (hsd_exact_two) ++hsd_multitex_submitted;
         if (hsd_alpha_blend) ++hsd_alpha_blend_submitted;
+        if (hsd_single_rasc_tex) ++hsd_single_rasc_tex_submitted;
     }
 
 #ifdef MELEE_VITA_GXM_DEBUG
@@ -896,10 +944,11 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     r->submitted_commands = submitted;
     if (!r->submit_logged && r->log) {
         fprintf(r->log,
-                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u hsd_alpha_blend=%u hsd_alpha_blend_selected=%u hsd_specular_add=%u hsd_specular_add_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
+                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u hsd_alpha_blend=%u hsd_alpha_blend_selected=%u hsd_specular_add=%u hsd_specular_add_selected=%u hsd_single_rasc_tex=%u hsd_single_rasc_tex_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
                 submitted, count, hsd_multitex_submitted, hsd_multitex_selected,
                 hsd_alpha_blend_submitted, hsd_alpha_blend_selected,
                 hsd_specular_add_submitted, hsd_specular_add_selected,
+                hsd_single_rasc_tex_submitted, hsd_single_rasc_tex_selected,
                 texture_prepare_failures, glGetError());
         fprintf(r->log,
                 "VITAGL_MATERIAL_SUMMARY submitted=%u tex0=%u tex1=%u tex2plus=%u raster_commands=%u raster_vertices=%u raster_black=%u raster_red=%u raster_other=%u draw_black=%u draw_red=%u draw_other=%u tev0=%u tev1=%u tev2=%u tev3plus=%u\n",

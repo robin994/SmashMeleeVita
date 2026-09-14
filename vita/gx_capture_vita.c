@@ -473,8 +473,19 @@ int mv_gx_alpha_compare_vitagl_supported(uint8_t comp0, uint8_t ref0,
                                          uint8_t ref1)
 {
     if (comp0 == GX_ALWAYS && comp1 == GX_ALWAYS) return 1;
-    return comp0 == GX_GREATER && ref0 == 0 && op == GX_AOP_OR &&
-           (comp1 == GX_NEVER || (comp1 == GX_GREATER && ref1 == 0));
+    if (comp0 == GX_GREATER && ref0 == 0 && op == GX_AOP_OR &&
+        (comp1 == GX_NEVER || (comp1 == GX_GREATER && ref1 == 0)))
+        return 1;
+
+    /* Yoshi's Island uses GX's two-comparator alpha test for foliage and
+     * background layers.  These observed AND forms collapse exactly to one
+     * fixed-function GEQUAL test (or ALWAYS when the lower bound is zero). */
+    if (op == GX_AOP_AND) {
+        if (comp0 == GX_GEQUAL && comp1 == GX_GEQUAL) return 1;
+        if (comp0 == GX_GEQUAL && comp1 == GX_LEQUAL && ref1 == 255) return 1;
+        if (comp0 == GX_LEQUAL && ref0 == 255 && comp1 == GX_GEQUAL) return 1;
+    }
+    return 0;
 }
 
 int mv_gx_material_custom_tev_cpu_bakeable(const MvGxMaterialState *material)
@@ -726,6 +737,43 @@ int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
 int mv_gx_material_uses_raster1(const MvGxMaterialState *m)
 {
     return material_uses_raster_channel(m, 1);
+}
+
+int mv_gx_material_single_tev_rasc_tex(const MvGxMaterialState *m)
+{
+    if (!m || m->texture_count != 1 || m->tev_stage_count != 1 ||
+        !(m->texgen_valid_mask & 1u) || m->texgen_src0 != GX_TG_TEX0)
+        return 0;
+    if (m->tev_order_coord[0] != GX_TEXCOORD0 ||
+        m->tev_order_map[0] != GX_TEXMAP0 ||
+        m->tev_order_color[0] != GX_COLOR0A0)
+        return 0;
+
+    static const uint8_t color[4] = {
+        GX_CC_ZERO, GX_CC_RASC, GX_CC_TEXC, GX_CC_ZERO,
+    };
+    if (memcmp(m->tev_color_in[0], color, sizeof(color)) != 0) return 0;
+
+    const uint8_t *cop = m->tev_color_op[0];
+    const uint8_t *aop = m->tev_alpha_op[0];
+    if (cop[0] != GX_TEV_ADD || cop[1] != GX_TB_ZERO ||
+        cop[2] != GX_CS_SCALE_1 || cop[3] != GX_ENABLE ||
+        cop[4] != GX_TEVPREV || aop[0] != GX_TEV_ADD ||
+        aop[1] != GX_TB_ZERO || aop[2] != GX_CS_SCALE_1 ||
+        aop[3] != GX_ENABLE || aop[4] != GX_TEVPREV)
+        return 0;
+
+    static const uint8_t alpha_texa[4] = {
+        GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO,
+    };
+    static const uint8_t alpha_rasa[4] = {
+        GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA,
+    };
+    if (memcmp(m->tev_alpha_in[0], alpha_texa, sizeof(alpha_texa)) == 0)
+        return 1;
+    if (memcmp(m->tev_alpha_in[0], alpha_rasa, sizeof(alpha_rasa)) == 0)
+        return 2;
+    return 0;
 }
 
 int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *m)
