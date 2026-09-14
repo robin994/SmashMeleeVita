@@ -19,6 +19,8 @@ set(MELEE_VITA_ARM32_SAFE_FLAGS
 set(MELEE_SIS_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/sis_font_atlas.c")
 set(MELEE_VITA_DISC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01" CACHE PATH
   "Path to the extracted GALE01 disc root used for generated retail assets")
+set(MELEE_VITA_VITAGL_LIBRARY "" CACHE FILEPATH
+  "Optional explicit libvitaGL.a; use this to lock the known-good Vita renderer build")
 add_custom_command(
   OUTPUT "${MELEE_SIS_FONT_SOURCE}"
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
@@ -279,14 +281,23 @@ target_link_options(melee_vita PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/mel
 target_link_libraries(melee_vita melee_assets melee_game_boot melee_hsd_runtime turbojpeg SceGxm_stub SceDisplay_stub SceCtrl_stub
   SceSysmodule_stub ScePgf_stub SceCommonDialog_stub SceAppMgr_stub SceTouch_stub
   SceAudio_stub SceKernelThreadMgr_stub m)
-target_link_libraries(melee_vita vitaGL vitashark SceShaccCgExt SceShaccCg_stub
+if(MELEE_VITA_VITAGL_LIBRARY)
+  if(NOT EXISTS "${MELEE_VITA_VITAGL_LIBRARY}")
+    message(FATAL_ERROR "MELEE_VITA_VITAGL_LIBRARY does not exist: ${MELEE_VITA_VITAGL_LIBRARY}")
+  endif()
+  message(STATUS "Using explicit vitaGL library: ${MELEE_VITA_VITAGL_LIBRARY}")
+  set(MELEE_VITA_VITAGL_LINK "${MELEE_VITA_VITAGL_LIBRARY}")
+else()
+  set(MELEE_VITA_VITAGL_LINK vitaGL)
+endif()
+target_link_libraries(melee_vita ${MELEE_VITA_VITAGL_LINK} vitashark SceShaccCgExt SceShaccCg_stub
   SceKernelDmacMgr_stub ScePower_stub mathneon taihen_stub stdc++
   SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceSysmodule_stub SceAppMgr_stub)
 vita_create_self(eboot.bin melee_vita UNSAFE)
 # Request Vita extended user-memory mode (ATTRIBUTE2 is a DWORD SFO field).
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 01.15 NAME "Melee Vita Runtime"
+  VERSION 01.16 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
