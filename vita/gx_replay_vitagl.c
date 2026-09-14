@@ -490,6 +490,10 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
         if(m->pe_z_enable) glEnable(GL_DEPTH_TEST);else glDisable(GL_DEPTH_TEST);
         glDepthFunc(compares[m->pe_z_func]);glDepthMask(m->pe_z_update);
         glColorMask(m->pe_color_update,m->pe_color_update,m->pe_color_update,m->pe_alpha_update);
+        /* The legacy/non-streaming bridge is used by title/menu/CSS/SSS and
+         * already bakes its camera/orientation assumptions into the captured
+         * geometry.  Keep its proven winding baseline independent from the
+         * retail streaming path below. */
         apply_alpha_compare(m);glFrontFace(GL_CW);
         if(c->cull_mode) {glEnable(GL_CULL_FACE);glCullFace(c->cull_mode==1?GL_FRONT:GL_BACK);} else glDisable(GL_CULL_FACE);
         int two=m->texture_count==2 && mv_gx_material_multitex_vitagl_supported(m);
@@ -594,7 +598,9 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         glColorMask(m->pe_color_update, m->pe_color_update,
                     m->pe_color_update, m->pe_alpha_update);
         apply_alpha_compare(m);
-        glFrontFace(GL_CW);
+        /* See the non-streaming path above: GX CW in Y-down window space is
+         * OpenGL CCW after the viewport convention change. */
+        glFrontFace(GL_CCW);
         if (c->cull_mode) {
             glEnable(GL_CULL_FACE);
             glCullFace(c->cull_mode == 1 ? GL_FRONT : GL_BACK);
@@ -643,7 +649,11 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
             for (int k = 0; k < 3; ++k) {
                 const MvGxCaptureVertex *v = verts + c->first_vertex + ids[k];
                 unsigned color = m->texture_count ? material_draw_color(m) : m->material_rgba;
-                if (v->present & (1u << MV_GX_VA_CLR0)) color = v->color0;
+                /* Keep UI replay behavior unchanged; in the streaming retail
+                 * path CLR0 is raster output only when TEV explicitly reads it. */
+                if (mv_gx_material_uses_raster0(m) &&
+                    (v->present & (1u << MV_GX_VA_CLR0)))
+                    color = v->color0;
                 glColor4ub(color >> 24, color >> 16, color >> 8, color);
                 for (int unit = 0; unit < (two ? 2 : 1); ++unit) {
                     const float (*mat)[3] = unit ? m->uv_mtx1 : m->uv_mtx;

@@ -1,4 +1,18 @@
-# Porting status - 2026-09-14, v3.99 ARM32-safe collision/HSD hardening
+# Porting status - 2026-09-14, v4.04 visible raster baseline after upstream sync
+
+## 2026-09-14 — v4.03: remove synchronous gameplay framebuffer readback from the frame boundary
+
+The physical v4.02 run makes the first-frame transition deterministic: frame 1 produces 167,977 non-black pixels with 863 commands / 19,518 vertices / 13,194 triangles, while frames 2 through 8 read back exactly zero non-black pixels even though capture remains healthy, command/vertex counts continue increasing, texture preparation has no failures and `gl_error=0`. Shader compilation is therefore not the primary black-screen explanation: an un-warmed fixed-function shader can stall first use, but it does not explain a successful first raster frame followed by persistent all-black frames with a live command stream.
+
+The v4.00-v4.02 diagnostic itself crossed a GPU synchronization boundary immediately after the first successful retail draw: `glReadPixels()` copied the complete 960x544 render target back to CPU before `vglSwapBuffers()`. On Vita/vitaGL this is both a heavyweight pipeline stall and an unnecessary change to the frame lifecycle while renderer correctness is still being established. v4.03 removes framebuffer readback entirely from normal gameplay. It replaces it with CPU-only telemetry of the final eight captured GX commands on frames 1 and 2 (`VITA_RETAIL_TAIL`), so a late fullscreen/overlay draw can still be compared without touching the GPU after submission. The v4.02 RASC/RASA gate and the v4.00 gameplay winding correction are otherwise unchanged. Runtime marker is `MELEE_VITA_GAME_BOOT v4.03-no-readback-boundary`; APP_VER is 01.13.
+
+Shader prewarming remains a later performance task rather than part of this correctness change. The runtime shader compiler is already initialized before the shared vitaGL context; once multi-frame rendering is stable, the common fixed-function state combinations can be deliberately exercised during loading to move compilation cost out of menu/gameplay frame time without confounding the black-screen investigation.
+
+## 2026-09-14 — v4.02: gate GX COLOR0/A0 on actual TEV RASC/RASA use
+
+The physical v4.01 run proves the retail renderer is still submitting healthy gameplay geometry: frame 1 reaches 164,733 non-black framebuffer pixels, later frames continue capturing about 19.5k vertices / 13.2k triangles with `capture_result=0` and `gl_error=0`, and only 3,308 vertices take the lit-channel path. The regression is therefore not culling, camera, texture preparation or a stopped renderer. v4.01 incorrectly treated `GXSetNumChans(1)` as permission to synthesize CLR0 for every captured vertex (`channel_eval` matched essentially all 19.5k vertices), even when the active TEV program did not consume RASC/RASA. The vitaGL fallback then used that synthetic color as `GL_PRIMARY_COLOR`, allowing stale/black channel state to overwrite otherwise valid material color after the first visible frame.
+
+v4.02 matches GX semantics at that boundary. Capture evaluates COLOR0/A0 only for TEV stages whose raster selector is COLOR0/A0 and whose color/alpha inputs actually reference `GX_CC_RASC`, `GX_CC_RASA` or `GX_CA_RASA`; absent vertex color defaults to white only at that explicit XF input boundary. The streaming gameplay replay likewise uses captured CLR0 only for raster-consuming materials, while the proven title/menu/CSS/SSS non-streaming path is unchanged. The v4.00 gameplay winding fix remains intact. Framebuffer readback now covers the first eight gameplay frames so first-frame-only regressions are visible directly in the log. Runtime marker is `MELEE_VITA_GAME_BOOT v4.02-raster-channel-gate`; APP_VER is 01.12.
 
 ## 2026-09-14 — v3.99: stop non-finite HSD transforms from becoming random ARM32 collision crashes
 
@@ -2104,3 +2118,34 @@ commands. v2.3 verifies 96/96 capture/classification but exposes that its offscr
 not entered. v2.4 hardware proves the command-7 offscreen GXM composition and a real 96/96 submit. v2.5
 hardware proves the MenMainBack frame-0 PE subset: alpha/additive blending, LEQUAL/no-write and GX
 back-face culling, with 96 commands submitted and 46 source triangles culled.
+# v4.00 - GX/vitaGL gameplay visibility: winding/depth fix + framebuffer probe
+
+- The latest physical-Vita black-screen log was still `MELEE_VITA_GAME_BOOT v3.98`, so it did not include the v3.99 ARM32 safety layer.  It nevertheless proves that the initial black frame is a renderer-side problem rather than failed gameplay boot: frame 1 captures 860 GX commands, submits 659 draws, has 19,510 finite vertices with 10,730 inside the frustum, prepares the Castle multitexture path with zero texture failures, and reports no GL error.
+- The later immediate-vertex decode mismatch (from about frame 23) and later non-finite JObj transform are therefore not the cause of the screen being black from frame 1.
+- Fixed the GX -> OpenGL front-face conversion in both vitaGL replay paths.  GX defines the front face clockwise after its Y-down viewport transform; OpenGL/vitaGL uses a Y-up window convention, so the equivalent winding is `GL_CCW`.  The old `GL_CW` setting inverted `GX_CULL_BACK` gameplay draws and could discard the intended front faces.
+- `mv_render_begin()` now explicitly restores the gameplay depth baseline (`glDepthRangef(0,1)`, `glClearDepthf(1)`) before clearing the shared context so title/movie/menu state cannot leak into gameplay.
+- Added a one-shot first-gameplay-frame `VITA_RETAIL_FRAMEBUFFER_PROBE` after replay and before swap.  It reads the 960x544 color buffer and logs non-black pixel count, alpha count, peak RGB, non-black bounding box, depth clear value/range, and any readback GL error.  This separates rasterization failures from presentation/swap failures on real hardware.
+- Runtime marker: `MELEE_VITA_GAME_BOOT v4.00-render-cull-fix`.
+- VPK `APP_VER`: `01.10`.
+- Host regression `make -f Makefile.vita gx-projection-check` passes with explicit GX CW/Y-down -> GL CCW/Y-up validation; the patched Vita executable also links successfully.
+
+Next physical-Vita test: install the v4.00/01.10 VPK and confirm the runtime marker.  If the screen is still black, report the single `VITA_RETAIL_FRAMEBUFFER_PROBE` line: `nonblack > 0` points at swap/display presentation, while `nonblack=0` keeps the fault inside raster/depth/material state.
+
+# v4.01 - GX XF color-channel / normal-light bridge + UI winding isolation
+
+- v4.00 hardware closes the original black-screen issue: the retail framebuffer probe reports 159,342 non-black pixels and the Castle gameplay capture submits hundreds of draws without GL errors.  The same test exposed the next real compatibility layer instead of another visibility failure: geometry/depth/camera are present, but surfaces are largely flat/neon and the menu renderer regressed after the winding correction was applied globally.
+- Isolated the winding conventions.  The legacy/non-streaming title/menu/CSS/SSS replay returns to its known-good `GL_CW` baseline; only the retail captured gameplay path performs the GX Y-down -> OpenGL Y-up front-face conversion to `GL_CCW`.
+- Implemented the previously missing GX XF COLOR0/A0 channel state. `GXSetChanCtrl()` is no longer a no-op: enable, ambient/material source, diffuse mode, attenuation mode and light mask are retained separately for color and alpha. `GXSetChanAmbColor()` / `GXSetChanMatColor()` now also preserve GX RGB-vs-alpha component semantics.
+- Exported the actual loaded `GXLightObj` state from the Vita GX boot bridge and evaluate selected lights in eye space before TEV.  This makes the raster color consumed as RASC/RASA originate from the same HSD channel configuration that the GameCube path uses instead of feeding raw vertex/material color directly into vitaGL.
+- `GXLoadNrmMtxImm()` now marks normal-matrix slots valid.  Both immediate GX packets and display-list packets transform and normalize NRM/NBT data with the selected PNMTX normal basis before channel lighting.  Indexed PNMTX positions keep the existing baked-position behavior; non-indexed positions remain matrix-driven at replay while their eye-space value is used for lighting.
+- Added `channel_eval`, `channel_lit` and `channel_normals` fields to `VITA_RETAIL_PRESENT` so hardware logs show whether the XF bridge actually processed the gameplay vertices.
+- Renderer regressions `gx-projection-check`, `vitagl-multitex-check` and `gx-nbt3-check` pass.  The full Vita executable compiles and links.  The older `gx-nbt-arm-check` currently assumes the legacy hardcoded `build/vita-full/melee_vita` path, and `stage-light-check` retains an independent GrZe-map6 fixture assertion; neither failure was introduced by this renderer patch.
+- Runtime marker: `MELEE_VITA_GAME_BOOT v4.01-gx-channel-bridge`.
+- VPK `APP_VER`: `01.11`.
+
+Remaining fidelity work is explicit rather than hidden by the black screen: the bridge currently evaluates the dominant COLOR0/A0 diffuse channel.  COLOR1/specular and the fully generic multi-stage GX TEV graph remain separate compatibility work if hardware still shows material differences after this pass.
+## 2026-09-14 — v4.04: restore the known-visible raster baseline while keeping XF lighting diagnostic-only
+
+The physical v4.03 run remains black after the first visible gameplay frame even with the synchronous framebuffer readback removed. Capture remains healthy across frames (about 19.5k vertices / 13.2k triangles, no capture errors, stable texture cache), the frame-tail draw state is effectively unchanged, and the only structural rendering regression relative to the known-visible v4.00 build is still the v4.01 XF color-channel bridge. v4.02/v4.03 gated it to TEV programs that read RASC/RASA, but it still evaluates roughly 18k vertices and replaces raw CLR0 on those draws.
+
+v4.04 keeps the normal/light/channel evaluation and telemetry but no longer writes the incomplete XF lighting result back into captured CLR0. Retail replay therefore returns to the raw vertex/material raster color path that produced visible Castle geometry in v4.00, while all later fixes remain in place: gameplay winding conversion, TLUT0/CI multitexture handling, depth/frame setup, ARM32 non-finite barriers, and the non-invasive frame-tail diagnostics. Runtime marker is `MELEE_VITA_GAME_BOOT v4.04-visible-raster-baseline`; APP_VER is 01.14. This is an intentional visibility baseline, not the final lighting implementation: the XF result stays diagnostic-only until the GX channel/TEV model is complete enough to replace the raster source without blacking the frame.

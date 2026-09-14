@@ -21,6 +21,31 @@ typedef struct {
 
 static MvRetailRuntime retail;
 
+static void mv_retail_log_tail_commands(unsigned frame)
+{
+    if (!retail.log || frame > 2u) return;
+
+    uint32_t command_count = 0;
+    const MvGxCaptureCommand *commands = mv_gx_capture_commands(&command_count);
+    uint32_t first = command_count > 8u ? command_count - 8u : 0u;
+    for (uint32_t i = first; i < command_count; ++i) {
+        const MvGxCaptureCommand *c = &commands[i];
+        const MvGxMaterialState *m = &c->material;
+        fprintf(retail.log,
+                "VITA_RETAIL_TAIL frame=%u command=%u primitive=%u triangles=%u attr_mask=%08x cull=%u textures=%u unsupported=%08x material=%08x blend=%u:%u,%u z=%u:%u:%u color_alpha=%u,%u alpha_cmp=%u,%u,%u,%u,%u viewport=%u:%g,%g,%g,%g,%g,%g\n",
+                frame, i, c->primitive, c->triangle_count, c->attr_mask,
+                c->cull_mode, m->texture_count, m->unsupported, m->material_rgba,
+                m->pe_blend_type, m->pe_src_factor, m->pe_dst_factor,
+                m->pe_z_enable, m->pe_z_func, m->pe_z_update,
+                m->pe_color_update, m->pe_alpha_update,
+                m->pe_alpha_comp0, m->pe_alpha_ref0, m->pe_alpha_op,
+                m->pe_alpha_comp1, m->pe_alpha_ref1,
+                c->viewport_valid, c->viewport[0], c->viewport[1],
+                c->viewport[2], c->viewport[3], c->viewport[4], c->viewport[5]);
+    }
+    fflush(retail.log);
+}
+
 static void mv_retail_log_clip_probe(void)
 {
     if (!retail.log) return;
@@ -167,6 +192,7 @@ void mv_retail_runtime_present_frame(int pass)
     int capture_result = mv_gx_capture_stats(&stats);
 
     if (retail.frame == 0u) mv_retail_log_clip_probe();
+    mv_retail_log_tail_commands(retail.frame + 1u);
 
     mv_render_begin();
     mv_gx_replay_draw_captured(&retail.replay);
@@ -177,11 +203,13 @@ void mv_retail_runtime_present_frame(int pass)
         (retail.frame <= 8u || (retail.frame % 120u) == 0u || capture_result != 0))
     {
         fprintf(retail.log,
-                "VITA_RETAIL_PRESENT frame=%u commands=%u vertices=%u triangles=%u capture_errors=%u capture_result=%d first_error_line=%u error_args=%u,%u,%u pos_mtx_loads=%u nrm_mtx_loads=%u textures=%u heap_generation=%u\n",
+                "VITA_RETAIL_PRESENT frame=%u commands=%u vertices=%u triangles=%u capture_errors=%u capture_result=%d first_error_line=%u error_args=%u,%u,%u pos_mtx_loads=%u nrm_mtx_loads=%u channel_eval=%u channel_lit=%u channel_normals=%u textures=%u heap_generation=%u\n",
                 retail.frame, stats.commands, stats.vertices, stats.triangles,
                 stats.errors, capture_result, stats.first_error_line,
                 stats.first_error_arg0, stats.first_error_arg1,
                 stats.first_error_arg2, stats.pos_mtx_loads, stats.nrm_mtx_loads,
+                stats.channel_eval_vertices, stats.channel_lit_vertices,
+                stats.channel_normal_vertices,
                 retail.replay.texture_count, retail.heap_generation);
         fflush(retail.log);
     }

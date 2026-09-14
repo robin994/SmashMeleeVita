@@ -44,6 +44,11 @@ void mv_render_begin(void)
 {
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    /* The GL context is shared by movie/title/menu/gameplay.  Do not inherit
+     * a stale depth clear/range from a previous renderer path: retail GX uses
+     * a 0..1 viewport depth range and clears the Z buffer to the far plane. */
+    glDepthRangef(0.0f,1.0f);
+    glClearDepthf(1.0f);
     glDepthMask(GL_TRUE);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 }

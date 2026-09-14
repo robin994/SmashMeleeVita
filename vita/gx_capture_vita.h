@@ -160,6 +160,9 @@ typedef struct {
     uint32_t nrm_mtx_loads;
     uint32_t tex_mtx_loads;
     uint32_t cull_changes;
+    uint32_t channel_eval_vertices;
+    uint32_t channel_lit_vertices;
+    uint32_t channel_normal_vertices;
     uint32_t errors;
     /* First capture error in the current frame. The line number and compact
      * arguments turn opaque capture_result=-2 failures into actionable Vita
@@ -236,6 +239,10 @@ int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *material);
 /* Exact generated GX graph used by common HSD dual-texture materials:
  * primary raster color * TEX0 * TEX1, with primary alpha preserved. */
 int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *material);
+/* True only when the captured TEV program actually consumes COLOR0/A0 as
+ * RASC/RASA. GXSetNumChans(1) alone does not mean every draw should be
+ * modulated by the generated raster channel. */
+int mv_gx_material_uses_raster0(const MvGxMaterialState *material);
 /* Resolve a texture/post-texture matrix previously loaded through
  * GXLoadTexMtxImm into the 2D affine form used by the replay. */
 int mv_gx_capture_get_tex_mtx(uint32_t id, float out[2][3]);

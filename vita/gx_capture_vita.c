@@ -6,6 +6,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "gx_state_vita.h"
+
 #define MV_CAPTURE_MAX_COMMANDS 2048u
 #define MV_CAPTURE_MAX_VERTICES 32768u
 #define MV_CAPTURE_MATRIX_SLOTS 10u
@@ -30,6 +32,7 @@ static MvGxCaptureVertex vertices[MV_CAPTURE_MAX_VERTICES];
 static float pos_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
 static uint8_t pos_mtx_valid[MV_CAPTURE_MATRIX_SLOTS];
 static float nrm_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
+static uint8_t nrm_mtx_valid[MV_CAPTURE_MATRIX_SLOTS];
 static float tex_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
 static uint8_t tex_mtx_valid[MV_CAPTURE_MATRIX_SLOTS];
 static uint32_t tex_mtx_id[MV_CAPTURE_MATRIX_SLOTS];
@@ -358,6 +361,7 @@ void mv_gx_capture_reset(void)
     memset(pos_mtx, 0, sizeof(pos_mtx));
     memset(pos_mtx_valid, 0, sizeof(pos_mtx_valid));
     memset(nrm_mtx, 0, sizeof(nrm_mtx));
+    memset(nrm_mtx_valid, 0, sizeof(nrm_mtx_valid));
     memset(tex_mtx, 0, sizeof(tex_mtx));
     memset(tex_mtx_valid, 0, sizeof(tex_mtx_valid));
     memset(tex_mtx_id, 0, sizeof(tex_mtx_id));
@@ -554,6 +558,29 @@ int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *m)
         aop[2] != GX_CS_SCALE_1 || aop[3] != GX_ENABLE ||
         aop[4] != GX_TEVPREV) return 0;
     return 1;
+}
+
+int mv_gx_material_uses_raster0(const MvGxMaterialState *m)
+{
+    if (!m) return 0;
+
+    unsigned count = m->tev_stage_count;
+    if (count > 4u) count = 4u;
+    for (unsigned stage = 0; stage < count; ++stage) {
+        const uint8_t order = m->tev_order_color[stage];
+        if (order != GX_COLOR0 && order != GX_ALPHA0 &&
+            order != GX_COLOR0A0)
+            continue;
+
+        for (unsigned arg = 0; arg < 4u; ++arg) {
+            const uint8_t color = m->tev_color_in[stage][arg];
+            if (color == GX_CC_RASC || color == GX_CC_RASA)
+                return 1;
+            if (m->tev_alpha_in[stage][arg] == GX_CA_RASA)
+                return 1;
+        }
+    }
+    return 0;
 }
 
 int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)
@@ -870,24 +897,99 @@ static int matrix_slot(u32 id)
     return slot < MV_CAPTURE_MATRIX_SLOTS ? (int)slot : -1;
 }
 
+static int transform_normal_triplet(const MvGxCaptureVertex *vertex, int slot,
+                                    unsigned base, float out[3])
+{
+    if (!(vertex->present & (1u << GX_VA_NRM)) || base + 2u >= 9u) return 0;
+    const float *src = &vertex->normal[base];
+    if (!isfinite(src[0]) || !isfinite(src[1]) || !isfinite(src[2])) return 0;
+    if (slot >= 0 && nrm_mtx_valid[slot]) {
+        out[0] = nrm_mtx[slot][0][0] * src[0] + nrm_mtx[slot][0][1] * src[1] + nrm_mtx[slot][0][2] * src[2];
+        out[1] = nrm_mtx[slot][1][0] * src[0] + nrm_mtx[slot][1][1] * src[1] + nrm_mtx[slot][1][2] * src[2];
+        out[2] = nrm_mtx[slot][2][0] * src[0] + nrm_mtx[slot][2][1] * src[1] + nrm_mtx[slot][2][2] * src[2];
+    } else if (slot >= 0 && pos_mtx_valid[slot]) {
+        /* Rigid transforms use the same 3x3 basis.  This is only a fallback
+         * for primitives that do not explicitly load a normal matrix. */
+        out[0] = pos_mtx[slot][0][0] * src[0] + pos_mtx[slot][0][1] * src[1] + pos_mtx[slot][0][2] * src[2];
+        out[1] = pos_mtx[slot][1][0] * src[0] + pos_mtx[slot][1][1] * src[1] + pos_mtx[slot][1][2] * src[2];
+        out[2] = pos_mtx[slot][2][0] * src[0] + pos_mtx[slot][2][1] * src[1] + pos_mtx[slot][2][2] * src[2];
+    } else {
+        out[0] = src[0]; out[1] = src[1]; out[2] = src[2];
+    }
+    float len2 = out[0]*out[0] + out[1]*out[1] + out[2]*out[2];
+    if (!isfinite(len2) || len2 <= 1.0e-20f) return 0;
+    float inv = 1.0f / sqrtf(len2);
+    out[0] *= inv; out[1] *= inv; out[2] *= inv;
+    return 1;
+}
+
+static void finalize_vertex_xf(MvGxCaptureCommand *command,
+                               MvGxCaptureVertex *vertex, int slot,
+                               int bake_position)
+{
+    float eye[3] = {vertex->position[0], vertex->position[1], vertex->position[2]};
+    if (slot >= 0 && pos_mtx_valid[slot]) {
+        float x = vertex->position[0], y = vertex->position[1], z = vertex->position[2];
+        eye[0] = pos_mtx[slot][0][0] * x + pos_mtx[slot][0][1] * y + pos_mtx[slot][0][2] * z + pos_mtx[slot][0][3];
+        eye[1] = pos_mtx[slot][1][0] * x + pos_mtx[slot][1][1] * y + pos_mtx[slot][1][2] * z + pos_mtx[slot][1][3];
+        eye[2] = pos_mtx[slot][2][0] * x + pos_mtx[slot][2][1] * y + pos_mtx[slot][2][2] * z + pos_mtx[slot][2][3];
+        if (bake_position) {
+            vertex->position[0] = eye[0]; vertex->position[1] = eye[1]; vertex->position[2] = eye[2];
+        }
+    }
+
+    float normal[3] = {0.0f, 0.0f, 0.0f};
+    int have_normal = transform_normal_triplet(vertex, slot, 0u, normal);
+    if (have_normal) {
+        vertex->normal[0] = normal[0]; vertex->normal[1] = normal[1]; vertex->normal[2] = normal[2];
+        if (normal_is_nbt) {
+            float extra[3];
+            if (transform_normal_triplet(vertex, slot, 3u, extra)) {
+                vertex->normal[3]=extra[0]; vertex->normal[4]=extra[1]; vertex->normal[5]=extra[2];
+            }
+            if (transform_normal_triplet(vertex, slot, 6u, extra)) {
+                vertex->normal[6]=extra[0]; vertex->normal[7]=extra[1]; vertex->normal[8]=extra[2];
+            }
+        }
+    }
+
+    /* Evaluate the XF channel path for telemetry, but do not replace the raw
+     * captured CLR0 yet.  The v4.01-v4.03 bridge proved that our incomplete
+     * lighting model can drive otherwise valid retail materials to black after
+     * the first frame.  Keep the known-visible GX raster/material color path
+     * active until the XF/TEV bridge is complete enough to be authoritative. */
+    if (mv_gx_material_uses_raster0(&command->material)) {
+        uint32_t channel_flags = 0;
+        uint32_t source = (vertex->present & (1u << GX_VA_CLR0))
+                              ? vertex->color0
+                              : 0xffffffffu;
+        uint32_t raster = mv_gx_channel0_eval(source, eye, normal, &channel_flags);
+        (void) raster;
+        if (channel_flags & MV_GX_CHANNEL_EVAL_ACTIVE) {
+            ++stats.channel_eval_vertices;
+            if (channel_flags & MV_GX_CHANNEL_EVAL_LIT) ++stats.channel_lit_vertices;
+            if (channel_flags & MV_GX_CHANNEL_EVAL_NORMAL) ++stats.channel_normal_vertices;
+        }
+    }
+}
+
 static void capture_apply_vertex_matrices(MvGxCaptureCommand *command, uint32_t first, uint16_t count)
 {
-    if (!(command->attr_mask & (1u << GX_VA_PNMTXIDX))) return;
-    command->pos_mtx_valid = 1;
+    const int indexed = (command->attr_mask & (1u << GX_VA_PNMTXIDX)) != 0;
+    if (indexed) command->pos_mtx_valid = 1;
     for (uint16_t i = 0; i < count; ++i) {
         MvGxCaptureVertex *vertex = &vertices[first + i];
-        int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
+        int vertex_slot = matrix_slot(indexed ? vertex->pos_mtx_idx : command->current_mtx);
         if (vertex_slot < 0) { CAPTURE_ERROR(vertex->pos_mtx_idx, first + i, count); return; }
         if (!pos_mtx_valid[vertex_slot]) command->pos_mtx_valid = 0;
-        float x = vertex->position[0], y = vertex->position[1], z = vertex->position[2];
-        vertex->position[0] = pos_mtx[vertex_slot][0][0] * x + pos_mtx[vertex_slot][0][1] * y + pos_mtx[vertex_slot][0][2] * z + pos_mtx[vertex_slot][0][3];
-        vertex->position[1] = pos_mtx[vertex_slot][1][0] * x + pos_mtx[vertex_slot][1][1] * y + pos_mtx[vertex_slot][1][2] * z + pos_mtx[vertex_slot][1][3];
-        vertex->position[2] = pos_mtx[vertex_slot][2][0] * x + pos_mtx[vertex_slot][2][1] * y + pos_mtx[vertex_slot][2][2] * z + pos_mtx[vertex_slot][2][3];
+        finalize_vertex_xf(command, vertex, vertex_slot, indexed);
     }
-    memset(command->pos_mtx, 0, sizeof(command->pos_mtx));
-    command->pos_mtx[0][0] = 1.0f;
-    command->pos_mtx[1][1] = 1.0f;
-    command->pos_mtx[2][2] = 1.0f;
+    if (indexed) {
+        memset(command->pos_mtx, 0, sizeof(command->pos_mtx));
+        command->pos_mtx[0][0] = 1.0f;
+        command->pos_mtx[1][1] = 1.0f;
+        command->pos_mtx[2][2] = 1.0f;
+    }
 }
 
 static void immediate_finish(void)
@@ -994,6 +1096,7 @@ void GXLoadNrmMtxImm(f32 mtx[3][4], u32 id)
     int slot = matrix_slot(id);
     if (!mtx || slot < 0) { CAPTURE_ERROR(id, slot, mtx != NULL); return; }
     memcpy(nrm_mtx[slot], mtx, sizeof(nrm_mtx[slot]));
+    nrm_mtx_valid[slot] = 1;
     ++stats.nrm_mtx_loads;
 }
 
@@ -1088,37 +1191,8 @@ void GXCallDisplayList(void *list, u32 nbytes)
                 return;
             }
         }
-        if (command->attr_mask & (1u << GX_VA_PNMTXIDX)) {
-            command->pos_mtx_valid = 1;
-            for (uint16_t i = 0; i < count; ++i) {
-                MvGxCaptureVertex *vertex = &vertices[stats.vertices + i];
-                int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
-                if (vertex_slot < 0) {
-                    CAPTURE_ERROR(vertex->pos_mtx_idx, i, count);
-                    return;
-                }
-                if (!pos_mtx_valid[vertex_slot]) command->pos_mtx_valid = 0;
-                float x = vertex->position[0];
-                float y = vertex->position[1];
-                float z = vertex->position[2];
-                vertex->position[0] = pos_mtx[vertex_slot][0][0] * x +
-                                      pos_mtx[vertex_slot][0][1] * y +
-                                      pos_mtx[vertex_slot][0][2] * z +
-                                      pos_mtx[vertex_slot][0][3];
-                vertex->position[1] = pos_mtx[vertex_slot][1][0] * x +
-                                      pos_mtx[vertex_slot][1][1] * y +
-                                      pos_mtx[vertex_slot][1][2] * z +
-                                      pos_mtx[vertex_slot][1][3];
-                vertex->position[2] = pos_mtx[vertex_slot][2][0] * x +
-                                      pos_mtx[vertex_slot][2][1] * y +
-                                      pos_mtx[vertex_slot][2][2] * z +
-                                      pos_mtx[vertex_slot][2][3];
-            }
-            memset(command->pos_mtx, 0, sizeof(command->pos_mtx));
-            command->pos_mtx[0][0] = 1.0f;
-            command->pos_mtx[1][1] = 1.0f;
-            command->pos_mtx[2][2] = 1.0f;
-        }
+        capture_apply_vertex_matrices(command, stats.vertices, count);
+        if (stats.errors) return;
         ++stats.commands;
         stats.vertices += count;
         stats.triangles += triangles;

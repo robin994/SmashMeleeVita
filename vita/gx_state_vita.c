@@ -1,8 +1,12 @@
 #include "gx_capture_vita.h"
 
 #include <dolphin/gx.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "gx_boot_vita.h"
+#include "gx_state_vita.h"
 
 /* Software GX state for Vita. These entry points replace the GameCube BP/XF
  * register shadow: state that affects the current material is copied into the
@@ -41,8 +45,25 @@ static MvGXTlutObj tluts[256];
 static u8 tlut_valid[256];
 static GXColor tev_regs[4];
 static GXColor konst_regs[4];
-static GXColor chan_amb[2];
-static GXColor chan_mat[2];
+static GXColor chan_amb[2] = {{0,0,0,0},{0,0,0,0}};
+static GXColor chan_mat[2] = {{255,255,255,255},{255,255,255,255}};
+typedef struct {
+    uint8_t enable;
+    uint8_t amb_src;
+    uint8_t mat_src;
+    uint8_t diff_fn;
+    uint8_t attn_fn;
+    uint8_t reserved[3];
+    uint32_t light_mask;
+} MvGXChannelCtrl;
+static MvGXChannelCtrl chan_color[2] = {
+    {0, GX_SRC_REG, GX_SRC_VTX, GX_DF_NONE, GX_AF_NONE, {0}, GX_LIGHT_NULL},
+    {0, GX_SRC_REG, GX_SRC_VTX, GX_DF_NONE, GX_AF_NONE, {0}, GX_LIGHT_NULL},
+};
+static MvGXChannelCtrl chan_alpha[2] = {
+    {0, GX_SRC_REG, GX_SRC_VTX, GX_DF_NONE, GX_AF_NONE, {0}, GX_LIGHT_NULL},
+    {0, GX_SRC_REG, GX_SRC_VTX, GX_DF_NONE, GX_AF_NONE, {0}, GX_LIGHT_NULL},
+};
 static u8 num_tex_gens, num_tev_stages, num_channels, num_ind_stages;
 static u8 line_width = 6, point_size = 6;
 static struct {
@@ -55,6 +76,155 @@ static uint32_t pack_rgba(GXColor c)
 {
     return ((uint32_t)c.r << 24) | ((uint32_t)c.g << 16) |
            ((uint32_t)c.b << 8) | c.a;
+}
+
+static float clamp01(float v)
+{
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+static float dot3(const float a[3], const float b[3])
+{
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+
+static int normalized3(const float in[3], float out[3])
+{
+    if (!in || !isfinite(in[0]) || !isfinite(in[1]) || !isfinite(in[2])) return 0;
+    float len2 = dot3(in, in);
+    if (!isfinite(len2) || len2 <= 1.0e-20f) return 0;
+    float inv = 1.0f / sqrtf(len2);
+    out[0] = in[0] * inv; out[1] = in[1] * inv; out[2] = in[2] * inv;
+    return 1;
+}
+
+static float light_attenuation(const MvGxLoadedLight *light,
+                               const float light_dir[3], float distance,
+                               GXAttnFn fn)
+{
+    if (fn == GX_AF_NONE) return 1.0f;
+    if (fn == GX_AF_SPEC) {
+        /* Specular is normally routed through COLOR1 by HSD.  Keep the
+         * COLOR0 fallback finite and bounded rather than inventing a second
+         * half-vector pipeline here. */
+        return 1.0f;
+    }
+
+    float spot = dot3(light->direction, light_dir);
+    float num = light->a[0] + light->a[1] * spot + light->a[2] * spot * spot;
+    float den = light->k[0] + light->k[1] * distance +
+                light->k[2] * distance * distance;
+    if (!isfinite(num) || !isfinite(den) || den <= 1.0e-20f) return 0.0f;
+    return clamp01(num / den);
+}
+
+static void eval_channel_rgb(const MvGXChannelCtrl *ctrl,
+                             const GXColor *ambient_reg,
+                             const GXColor *material_reg,
+                             const uint8_t vertex[4],
+                             const float position[3], const float normal[3],
+                             int normal_valid, uint8_t out[3])
+{
+    const uint8_t *mat = ctrl->mat_src == GX_SRC_VTX ? vertex : &material_reg->r;
+    const uint8_t *amb = ctrl->amb_src == GX_SRC_VTX ? vertex : &ambient_reg->r;
+    if (!ctrl->enable) {
+        out[0] = mat[0]; out[1] = mat[1]; out[2] = mat[2];
+        return;
+    }
+
+    float accum[3] = {amb[0] / 255.0f, amb[1] / 255.0f, amb[2] / 255.0f};
+    for (unsigned i = 0; i < 8u; ++i) {
+        if (!(ctrl->light_mask & (1u << i))) continue;
+        MvGxLoadedLight light;
+        if (mv_gx_loaded_light(i, &light) != 0 || !light.valid) continue;
+        float delta[3] = {light.position[0] - position[0],
+                          light.position[1] - position[1],
+                          light.position[2] - position[2]};
+        float len2 = dot3(delta, delta);
+        if (!isfinite(len2) || len2 <= 1.0e-20f) continue;
+        float distance = sqrtf(len2);
+        float ldir[3] = {delta[0] / distance, delta[1] / distance, delta[2] / distance};
+        float diffuse = 1.0f;
+        if (ctrl->diff_fn != GX_DF_NONE) {
+            if (!normal_valid) diffuse = 0.0f;
+            else {
+                diffuse = dot3(normal, ldir);
+                if (ctrl->diff_fn == GX_DF_CLAMP && diffuse < 0.0f) diffuse = 0.0f;
+            }
+        }
+        float attn = light_attenuation(&light, ldir, distance, (GXAttnFn)ctrl->attn_fn);
+        float scale = diffuse * attn;
+        accum[0] += ((light.color >> 24) & 0xffu) / 255.0f * scale;
+        accum[1] += ((light.color >> 16) & 0xffu) / 255.0f * scale;
+        accum[2] += ((light.color >> 8) & 0xffu) / 255.0f * scale;
+    }
+    out[0] = (uint8_t)(clamp01(accum[0]) * mat[0] + 0.5f);
+    out[1] = (uint8_t)(clamp01(accum[1]) * mat[1] + 0.5f);
+    out[2] = (uint8_t)(clamp01(accum[2]) * mat[2] + 0.5f);
+}
+
+static uint8_t eval_channel_alpha(const MvGXChannelCtrl *ctrl,
+                                  const GXColor *ambient_reg,
+                                  const GXColor *material_reg,
+                                  const uint8_t vertex[4],
+                                  const float position[3], const float normal[3],
+                                  int normal_valid)
+{
+    uint8_t mat = ctrl->mat_src == GX_SRC_VTX ? vertex[3] : material_reg->a;
+    uint8_t amb = ctrl->amb_src == GX_SRC_VTX ? vertex[3] : ambient_reg->a;
+    if (!ctrl->enable) return mat;
+    float accum = amb / 255.0f;
+    for (unsigned i = 0; i < 8u; ++i) {
+        if (!(ctrl->light_mask & (1u << i))) continue;
+        MvGxLoadedLight light;
+        if (mv_gx_loaded_light(i, &light) != 0 || !light.valid) continue;
+        float delta[3] = {light.position[0] - position[0],
+                          light.position[1] - position[1],
+                          light.position[2] - position[2]};
+        float len2 = dot3(delta, delta);
+        if (!isfinite(len2) || len2 <= 1.0e-20f) continue;
+        float distance = sqrtf(len2);
+        float ldir[3] = {delta[0] / distance, delta[1] / distance, delta[2] / distance};
+        float diffuse = 1.0f;
+        if (ctrl->diff_fn != GX_DF_NONE) {
+            diffuse = normal_valid ? dot3(normal, ldir) : 0.0f;
+            if (ctrl->diff_fn == GX_DF_CLAMP && diffuse < 0.0f) diffuse = 0.0f;
+        }
+        float attn = light_attenuation(&light, ldir, distance, (GXAttnFn)ctrl->attn_fn);
+        accum += (light.color & 0xffu) / 255.0f * diffuse * attn;
+    }
+    return (uint8_t)(clamp01(accum) * mat + 0.5f);
+}
+
+uint32_t mv_gx_channel0_eval(uint32_t vertex_rgba,
+                             const float position[3],
+                             const float normal_in[3],
+                             uint32_t *flags)
+{
+    uint32_t f = 0;
+    if (!num_channels) {
+        if (flags) *flags = 0;
+        return vertex_rgba;
+    }
+    f |= MV_GX_CHANNEL_EVAL_ACTIVE;
+    uint8_t vertex[4] = {(uint8_t)(vertex_rgba >> 24),
+                         (uint8_t)(vertex_rgba >> 16),
+                         (uint8_t)(vertex_rgba >> 8),
+                         (uint8_t)vertex_rgba};
+    float normal[3];
+    int normal_valid = normalized3(normal_in, normal);
+    if (normal_valid) f |= MV_GX_CHANNEL_EVAL_NORMAL;
+    if (chan_color[0].enable || chan_alpha[0].enable) f |= MV_GX_CHANNEL_EVAL_LIT;
+    uint8_t rgb[3];
+    eval_channel_rgb(&chan_color[0], &chan_amb[0], &chan_mat[0], vertex,
+                     position, normal, normal_valid, rgb);
+    uint8_t alpha = eval_channel_alpha(&chan_alpha[0], &chan_amb[0], &chan_mat[0],
+                                       vertex, position, normal, normal_valid);
+    if (flags) *flags = f;
+    return (uint32_t)rgb[0] << 24 | (uint32_t)rgb[1] << 16 |
+           (uint32_t)rgb[2] << 8 | alpha;
 }
 
 static u8 clamp_s10(s16 v)
@@ -216,10 +386,45 @@ void GXSetLineWidth(u8 w, GXTexOffset o) { (void)o; line_width=w; }
 void GXSetPointSize(u8 w, GXTexOffset o) { (void)o; point_size=w; }
 void GXEnableTexOffsets(GXTexCoordID c,u8 l,u8 p) { (void)c;(void)l;(void)p; }
 
-void GXSetChanAmbColor(GXChannelID c, GXColor v) { chan_amb[(unsigned)c & 1u]=v; }
-void GXSetChanMatColor(GXChannelID c, GXColor v) { chan_mat[(unsigned)c & 1u]=v; }
+static unsigned channel_index(GXChannelID c)
+{
+    return c == GX_COLOR1 || c == GX_ALPHA1 || c == GX_COLOR1A1 ? 1u : 0u;
+}
+
+void GXSetChanAmbColor(GXChannelID c, GXColor v)
+{
+    unsigned i = channel_index(c);
+    if (c == GX_COLOR0 || c == GX_COLOR1) {
+        chan_amb[i].r=v.r; chan_amb[i].g=v.g; chan_amb[i].b=v.b;
+    } else if (c == GX_ALPHA0 || c == GX_ALPHA1) {
+        chan_amb[i].a=v.a;
+    } else if (c == GX_COLOR0A0 || c == GX_COLOR1A1) {
+        chan_amb[i]=v;
+    }
+}
+void GXSetChanMatColor(GXChannelID c, GXColor v)
+{
+    unsigned i = channel_index(c);
+    if (c == GX_COLOR0 || c == GX_COLOR1) {
+        chan_mat[i].r=v.r; chan_mat[i].g=v.g; chan_mat[i].b=v.b;
+    } else if (c == GX_ALPHA0 || c == GX_ALPHA1) {
+        chan_mat[i].a=v.a;
+    } else if (c == GX_COLOR0A0 || c == GX_COLOR1A1) {
+        chan_mat[i]=v;
+    }
+}
 void GXSetChanCtrl(GXChannelID c,GXBool e,GXColorSrc a,GXColorSrc m,u32 lm,GXDiffuseFn d,GXAttnFn at)
-{ (void)c;(void)e;(void)a;(void)m;(void)lm;(void)d;(void)at; }
+{
+    unsigned i = channel_index(c);
+    MvGXChannelCtrl ctrl = {(uint8_t)(e != GX_DISABLE), (uint8_t)a, (uint8_t)m,
+                            (uint8_t)d, (uint8_t)at, {0}, lm};
+    if (c == GX_COLOR0 || c == GX_COLOR1) chan_color[i] = ctrl;
+    else if (c == GX_ALPHA0 || c == GX_ALPHA1) chan_alpha[i] = ctrl;
+    else if (c == GX_COLOR0A0 || c == GX_COLOR1A1) {
+        chan_color[i] = ctrl;
+        chan_alpha[i] = ctrl;
+    }
+}
 
 void GXSetTevColor(GXTevRegID id, GXColor c)
 { unsigned i=(unsigned)id & 3u; tev_regs[i]=c; if(id==GX_TEVREG0 || id==GX_TEVPREV) mv_gx_capture_material_state()->material_rgba=pack_rgba(c); }

@@ -36,6 +36,20 @@ typedef struct {
 _Static_assert(sizeof(NativeLight) == sizeof(GXLightObj), "GX light ABI");
 static NativeLight lights[8];
 
+int mv_gx_loaded_light(unsigned index, MvGxLoadedLight *out)
+{
+    if (!out || index >= 8u) return -1;
+    memset(out, 0, sizeof(*out));
+    out->valid = (light_mask & (1u << index)) != 0;
+    if (!out->valid) return 0;
+    out->color = lights[index].color;
+    memcpy(out->a, lights[index].a, sizeof(out->a));
+    memcpy(out->k, lights[index].k, sizeof(out->k));
+    memcpy(out->position, lights[index].position, sizeof(out->position));
+    memcpy(out->direction, lights[index].direction, sizeof(out->direction));
+    return 0;
+}
+
 VIRetraceCallback VISetPreRetraceCallback(VIRetraceCallback cb)
 { VIRetraceCallback old = pre_cb; pre_cb = cb; return old; }
 VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback cb)
