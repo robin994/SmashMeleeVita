@@ -1,3 +1,19 @@
+# Porting status - 2026-09-14, v3.98 GX TLUT0 / Castle CI multitexture fix
+
+## 2026-09-14 — v3.98: preserve palette slot zero so Castle TEX1 reaches vitaGL
+
+The physical v3.97 Training/Castle log remains black even though the upstream frame is healthy: frame 1 captures 860 commands / 19,510 vertices / 13,192 triangles with capture_errors=0, 10,775 vertices inside the full frustum, and the first in-frustum draw is a two-texture POS+CLR0+TEX0+TEX1 command. LbBf.dat is also nativeized and the gameplay camera/quake translation is finite, so the black frame exists before the later DamageLw3 immediate-particle capture error and is not caused by the damage flash, camera or projection.
+
+The v3.97 hsd_multitex=35 telemetry was misleading because it counted a dual-texture command before texture preparation. A linked-ARM audit of the exact GrCs.dat material proves TEX0 is 64x64 CMPR with 4096/4096 non-black and non-zero-alpha pixels and its captured CLR0 is visible on 42/42 vertices (sample 0x999988ff). The second stage, however, is a 32x32 GX_TF_C4 texture. Before this fix its material state was image1=0x074bb680, palette1=NULL, entries=16, palette format=2; mv_gx_decode therefore returned -1 and gx_replay_vitagl skipped the entire command when prepare(second) failed.
+
+The root cause is exact GX semantics in vita/gx_state_vita.c. GX_TLUT0 is numerically zero and HSD_TObjSetup intentionally assigns the first CI palette to GX_TLUT0, calls GXLoadTlut(..., 0), then GXInitTexObjCI(..., tlut_name=0). The Vita bridge incorrectly used tlut_name != 0 as its palette-presence test, turning a valid slot-zero TLUT into NULL. v3.98 tracks GXLoadTlut validity independently for all 256 software slots and decides palette usage from the texture format (C4/C8/C14X2), so slot zero is valid while ordinary non-CI textures do not inherit stale TLUT metadata.
+
+The linked-ARM Castle regression now proves the full material chain: TEX0 decodes 4096/4096 non-black pixels; TEX1 resolves palette 0x074bb880, decodes successfully with 1024/1024 non-black pixels and 778 non-zero-alpha pixels; CLR0 is visible on 42/42 vertices; and HSD_MObjSetup still produces the exact two-stage RASC*TEX0 then PREV*TEX1 program with independent post-texture matrices. Replay telemetry now distinguishes hsd_multitex_selected from hsd_multitex actually submitted and reports texture_prepare_failures, so hardware can verify the slot-zero fix directly.
+
+Validation on the final v3.98 ELF: stage-multitex-check PASS; vitaGL multitexture source check PASS; Training raw PASS; complete stage-raw corpus PASS including GrCs.dat; GX NBT ARM PASS; GX projection/depth + CW culling baseline PASS; GX FIFO PASS; ItCo/Food PASS; LbBf ColorOverlay PASS; HPS playhead PASS; shared mini-DAT relocation PASS; fighter-command endian PASS; git diff --check clean. Runtime marker is MELEE_VITA_GAME_BOOT v3.98 and APP_VER is 01.08. Hardware artifact: build/vita-full/SmashMeleeVita-v3.98-tlut0-ci-multitex.vpk, 3,309,271 bytes, SHA-256 2fce1bb34c127fcf175fe5d4220e0ac238ba51908c0eec49ba42a179a135f473.
+
+Next physical test: repeat Training on Princess Peach's Castle. The key submit line must show hsd_multitex equal to the dual-texture commands that survive preparation, hsd_multitex_selected at least as large, and texture_prepare_failures=0. Unlike v3.97, the C4 second layer bound to GX_TLUT0 now has a real palette and should no longer cause those Castle draws to be skipped before glBegin. The separate DamageLw3 immediate-particle 12/13/non-finite error remains isolated for later work and is not hidden by this change.
+
 # Porting status - 2026-09-14, v3.97 LbBf damage-flash ColorOverlay nativeization
 
 ## 2026-09-14 — v3.97: fix the retail full-screen damage-flash endian boundary revealed by the first visible Castle frame

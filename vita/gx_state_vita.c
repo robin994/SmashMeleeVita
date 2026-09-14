@@ -38,6 +38,7 @@ _Static_assert(sizeof(MvGXTexObj) <= sizeof(GXTexObj), "GXTexObj software ABI");
 _Static_assert(sizeof(MvGXTlutObj) <= sizeof(GXTlutObj), "GXTlutObj software ABI");
 
 static MvGXTlutObj tluts[256];
+static u8 tlut_valid[256];
 static GXColor tev_regs[4];
 static GXColor konst_regs[4];
 static GXColor chan_amb[2];
@@ -140,23 +141,38 @@ void GXInitTlutObj(GXTlutObj *obj, void *lut, GXTlutFmt fmt, u16 entries)
 
 void GXLoadTlut(GXTlutObj *obj, u32 name)
 {
-    tluts[name & 0xffu] = *(MvGXTlutObj *)obj;
+    const u32 slot = name & 0xffu;
+    tluts[slot] = *(MvGXTlutObj *)obj;
+    tlut_valid[slot] = 1;
+}
+
+static int texture_uses_tlut(u8 format)
+{
+    return format == GX_TF_C4 || format == GX_TF_C8 || format == GX_TF_C14X2;
 }
 
 static void bind_texture_layer(const MvGXTexObj *t, unsigned layer)
 {
     MvGxMaterialState *m = mv_gx_capture_material_state();
-    const MvGXTlutObj *p = &tluts[t->tlut_name & 0xffu];
-    const uint8_t *palette = t->tlut_name ? (const uint8_t *)(uintptr_t)p->palette : NULL;
+    const u32 slot = t->tlut_name & 0xffu;
+    const MvGXTlutObj *p = &tluts[slot];
+    /* GX_TLUT0 is numeric zero and is a fully valid TLUT name.  Do not use
+     * tlut_name!=0 as a palette-presence sentinel: HSD assigns its first CI
+     * texture to slot 0.  Track GXLoadTlut state independently instead. */
+    const int uses_tlut = texture_uses_tlut(t->format);
+    const uint8_t *palette =
+        uses_tlut && tlut_valid[slot] ? (const uint8_t *)(uintptr_t)p->palette : NULL;
+    const u16 palette_entries = uses_tlut && tlut_valid[slot] ? p->entries : 0;
+    const u8 palette_format = uses_tlut && tlut_valid[slot] ? p->format : 0;
     if (layer == 0) {
         m->image=(const uint8_t *)(uintptr_t)t->image; m->palette=palette;
         m->width=t->width; m->height=t->height; m->format=t->format;
-        m->palette_format=p->format; m->palette_entries=p->entries;
+        m->palette_format=palette_format; m->palette_entries=palette_entries;
         m->wrap_s=t->wrap_s; m->wrap_t=t->wrap_t; m->mag_filter=t->mag_filter;
     } else if (layer == 1) {
         m->image1=(const uint8_t *)(uintptr_t)t->image; m->palette1=palette;
         m->width1=t->width; m->height1=t->height; m->format1=t->format;
-        m->palette_format1=p->format; m->palette_entries1=p->entries;
+        m->palette_format1=palette_format; m->palette_entries1=palette_entries;
         m->wrap_s1=t->wrap_s; m->wrap_t1=t->wrap_t; m->mag_filter1=t->mag_filter;
     } else {
         m->unsupported |= MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;

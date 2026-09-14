@@ -564,7 +564,9 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     const GLenum compares[] = {GL_NEVER,GL_LESS,GL_EQUAL,GL_LEQUAL,GL_GREATER,GL_NOTEQUAL,GL_GEQUAL,GL_ALWAYS};
     const GLenum factors[] = {GL_ZERO,GL_ONE,GL_SRC_COLOR,GL_ONE_MINUS_SRC_COLOR,GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA};
     unsigned submitted = 0;
-    unsigned hsd_multitex = 0;
+    unsigned hsd_multitex_selected = 0;
+    unsigned hsd_multitex_submitted = 0;
+    unsigned texture_prepare_failures = 0;
 
     for (unsigned i = 0; i < count; ++i) {
         const MvGxCaptureCommand *c = cmd + i;
@@ -602,11 +604,11 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
 
         int two = m->texture_count == 2 && mv_gx_material_multitex_vitagl_supported(m);
         int hsd_two = two && mv_gx_material_multitex_hsd_modulate(m);
-        if (hsd_two) ++hsd_multitex;
+        if (hsd_two) ++hsd_multitex_selected;
         glActiveTexture(GL_TEXTURE0);
         if (m->texture_count) {
             GLuint id = prepare(r, m);
-            if (!id) continue;
+            if (!id) { ++texture_prepare_failures; continue; }
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
             setup_texture0_env(m, hsd_two);
@@ -618,7 +620,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
             MvGxMaterialState second;
             second_layer_material(m, &second);
             GLuint id = prepare(r, &second);
-            if (!id) continue;
+            if (!id) { ++texture_prepare_failures; continue; }
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
             setup_texture1_env(m, hsd_two);
@@ -658,13 +660,15 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         glEnd();
         glPopMatrix();
         ++submitted;
+        if (hsd_two) ++hsd_multitex_submitted;
     }
 
     r->submitted_commands = submitted;
     if (!r->submit_logged && r->log) {
         fprintf(r->log,
-                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u gl_error=%x camera=per-command\n",
-                submitted, count, hsd_multitex, glGetError());
+                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
+                submitted, count, hsd_multitex_submitted, hsd_multitex_selected,
+                texture_prepare_failures, glGetError());
         fflush(r->log);
         r->submit_logged = 1;
     }

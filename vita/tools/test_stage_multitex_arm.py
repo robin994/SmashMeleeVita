@@ -133,6 +133,34 @@ assert texgen_valid & 3 == 3, hex(texgen_valid)
 assert (texgen_src0, texgen_src1) == (4, 5), (texgen_src0, texgen_src1)
 assert 1 <= tev_count <= 4, tev_count
 assert arm.call("mv_gx_material_multitex_hsd_modulate", state) == 1
+# The exact retail texture must decode to visible pixels before vitaGL touches it.
+image=u32(arm,state+0); palette=u32(arm,state+4); material_rgba=u32(arm,state+8)
+width,height,pentries=struct.unpack("<HHH",arm.uc.mem_read(state+48,6))
+fmt,pfmt,wraps,wrapt,mag,count=arm.uc.mem_read(state+54,6)
+source_size=arm.call("mv_gx_texture_size",width,height,fmt)
+out=arm.alloc(width*height*4)
+assert arm.call("mv_gx_decode",out,width*height*4,width*4,image,source_size,width,height,fmt,palette,pentries*2,pfmt) == 0
+pix=bytes(arm.uc.mem_read(out,width*height*4))
+nonblack=sum(1 for i in range(0,len(pix),4) if pix[i] or pix[i+1] or pix[i+2])
+nonzero_alpha=sum(1 for i in range(3,len(pix),4) if pix[i])
+assert nonblack > (width*height)//16, (width,height,fmt,nonblack)
+assert nonzero_alpha > (width*height)//16, (width,height,fmt,nonzero_alpha)
+print("CASTLE_TEX0_PIXELS",width,height,fmt,hex(material_rgba),"nonblack",nonblack,"alpha",nonzero_alpha,flush=True)
+# TEX1 participates multiplicatively too, so it must also contain visible samples.
+image1=u32(arm,state+212); palette1=u32(arm,state+216)
+width1,height1,pentries1=struct.unpack("<HHH",arm.uc.mem_read(state+228,6))
+fmt1,pfmt1=arm.uc.mem_read(state+234,2)
+source_size1=arm.call("mv_gx_texture_size",width1,height1,fmt1)
+out1=arm.alloc(width1*height1*4)
+decode1=arm.call("mv_gx_decode",out1,width1*height1*4,width1*4,image1,source_size1,width1,height1,fmt1,palette1,pentries1*2,pfmt1)
+print("CASTLE_TEX1_META",hex(image1),hex(palette1),width1,height1,pentries1,fmt1,pfmt1,"size",source_size1,"decode",decode1,flush=True)
+assert decode1 == 0
+pix1=bytes(arm.uc.mem_read(out1,width1*height1*4))
+nonblack1=sum(1 for i in range(0,len(pix1),4) if pix1[i] or pix1[i+1] or pix1[i+2])
+nonzero_alpha1=sum(1 for i in range(3,len(pix1),4) if pix1[i])
+assert nonblack1 > (width1*height1)//16, (width1,height1,fmt1,nonblack1)
+assert nonzero_alpha1 > (width1*height1)//16, (width1,height1,fmt1,nonzero_alpha1)
+print("CASTLE_TEX1_PIXELS",width1,height1,fmt1,"nonblack",nonblack1,"alpha",nonzero_alpha1,flush=True)
 assert arm.call("mv_gx_material_multitex_vitagl_supported", state) == 1
 
 # HSD_TObjSetupMtx loads post-texture matrices before GXSetTexCoordGen2.
@@ -157,6 +185,33 @@ print("CASTLE_TEV",
       "color_op=", color_op[:tev_count],
       "alpha_op=", alpha_op[:tev_count],
       flush=True)
+
+# Locate this material in a real HSD draw capture and prove CLR0 is visible too.
+# These sizes/offsets are the Vita ARM ABI of gx_capture_vita.h.
+CMD_SIZE=472; CMD_MATERIAL_OFF=172; VERTEX_SIZE=76; VERTEX_COLOR_OFF=64
+found_color=False
+for capture_root in roots:
+    capture_stats=arm.alloc(64)
+    if arm.call("mv_hsd_gx_capture_runtime",capture_root,1,0,capture_stats) != 0:
+        continue
+    ccount=arm.alloc(4); vcount=arm.alloc(4)
+    cptr=arm.call("mv_gx_capture_commands",ccount)
+    vptr=arm.call("mv_gx_capture_vertices",vcount)
+    for cmd_index in range(u32(arm,ccount)):
+        ca=cptr+cmd_index*CMD_SIZE
+        first,vc,tris,attr=struct.unpack("<4I",arm.uc.mem_read(ca,16))
+        cmd_image=u32(arm,ca+CMD_MATERIAL_OFF)
+        if cmd_image != image:
+            continue
+        colors=[struct.unpack("<I",arm.uc.mem_read(vptr+(first+j)*VERTEX_SIZE+VERTEX_COLOR_OFF,4))[0] for j in range(vc)]
+        visible_colors=[c for c in colors if (c >> 8) != 0 and (c & 0xff) != 0]
+        assert visible_colors,(cmd_index,vc,[hex(c) for c in colors[:8]])
+        print("CASTLE_CLR0_PIXELS","cmd",cmd_index,"verts",vc,"visible",len(visible_colors),"sample",hex(visible_colors[0]),flush=True)
+        found_color=True
+        break
+    if found_color:
+        break
+assert found_color
 
 # Static retail descriptors prove this is not a synthetic graph: all nine
 # Castle dual-texture materials route the two texture objects from TEX0/TEX1.
