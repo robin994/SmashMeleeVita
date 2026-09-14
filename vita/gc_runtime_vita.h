@@ -97,3 +97,11 @@ enum {
  * to HSD_JObjLoadJoint because descriptor scalar conversion is still required. */
 int mv_lbarchive_boot_probe(uint32_t out[MV_LBARCHIVE_STAT_COUNT]);
 
+/* Advance one already-completed host DVD/ARQ operation at a GameCube-visible
+ * scheduling boundary. Callbacks are never dispatched inline from the API
+ * that submitted the request. */
+void mv_gc_async_pump(void);
+unsigned mv_gc_async_pending(void);
+unsigned mv_gc_alarm_pump(void);
+void mv_gc_sync_yield(void);
+

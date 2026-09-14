@@ -10,6 +10,7 @@
 
 #define MV_ARAM_SIZE (16u * 1024u * 1024u)
 #define MV_ARAM_BASE 0x4000u
+#define MV_ARQ_PENDING_MAX 32u
 
 static uint8_t *aram_raw;
 static uint8_t *aram;
@@ -20,6 +21,16 @@ static int ar_initialized;
 static int arq_initialized;
 static uint32_t arq_chunk_size = 0x1000;
 static ARQCallback ar_dma_callback;
+
+typedef struct {
+    ARQRequest *request;
+    ARQCallback callback;
+} MvArqPending;
+
+static MvArqPending arq_pending[MV_ARQ_PENDING_MAX];
+static unsigned arq_pending_head;
+static unsigned arq_pending_tail;
+static unsigned arq_pending_count;
 
 static int ai_initialized;
 static int ai_dma_enabled;
@@ -55,7 +66,8 @@ u32 ARGetDMAStatus(void)
     return 0;
 }
 
-void ARStartDMA(u32 type, u32 mainmem_addr, u32 aram_addr, u32 length)
+static void mv_aram_transfer(u32 type, u32 mainmem_addr, u32 aram_addr,
+                             u32 length)
 {
     if (!ar_initialized || !aram || (mainmem_addr & 31u) ||
         (aram_addr & 31u) || (length & 31u) || length == 0 ||
@@ -72,6 +84,11 @@ void ARStartDMA(u32 type, u32 mainmem_addr, u32 aram_addr, u32 length)
     } else {
         HSD_Panic(__FILE__, __LINE__, "unsupported ARAM DMA direction");
     }
+}
+
+void ARStartDMA(u32 type, u32 mainmem_addr, u32 aram_addr, u32 length)
+{
+    mv_aram_transfer(type, mainmem_addr, aram_addr, length);
     if (ar_dma_callback) {
         ar_dma_callback(NULL);
     }
@@ -156,10 +173,47 @@ void ARQInit(void)
     if (!ar_initialized) {
         HSD_Panic(__FILE__, __LINE__, "ARQInit before ARInit");
     }
+    arq_pending_head = 0;
+    arq_pending_tail = 0;
+    arq_pending_count = 0;
     arq_initialized = 1;
 }
 
-void ARQReset(void) { arq_initialized = 0; }
+void ARQReset(void)
+{
+    arq_initialized = 0;
+    arq_pending_head = 0;
+    arq_pending_tail = 0;
+    arq_pending_count = 0;
+    memset(arq_pending, 0, sizeof(arq_pending));
+}
+
+static void mv_arq_enqueue(ARQRequest *request, ARQCallback callback)
+{
+    if (arq_pending_count >= MV_ARQ_PENDING_MAX) {
+        HSD_Panic(__FILE__, __LINE__, "Vita ARQ completion queue overflow");
+    }
+    arq_pending[arq_pending_tail].request = request;
+    arq_pending[arq_pending_tail].callback = callback;
+    arq_pending_tail = (arq_pending_tail + 1u) % MV_ARQ_PENDING_MAX;
+    ++arq_pending_count;
+}
+
+unsigned mv_arq_async_pending(void)
+{
+    return arq_pending_count;
+}
+
+void mv_arq_async_pump(void)
+{
+    if (!arq_pending_count) return;
+    MvArqPending pending = arq_pending[arq_pending_head];
+    memset(&arq_pending[arq_pending_head], 0,
+           sizeof(arq_pending[arq_pending_head]));
+    arq_pending_head = (arq_pending_head + 1u) % MV_ARQ_PENDING_MAX;
+    --arq_pending_count;
+    if (pending.callback) pending.callback(pending.request);
+}
 
 void ARQPostRequest(ARQRequest *request, u32 owner, u32 type, u32 priority,
                     u32 source, u32 dest, u32 length, ARQCallback callback)
@@ -178,20 +232,40 @@ void ARQPostRequest(ARQRequest *request, u32 owner, u32 type, u32 priority,
     request->length = length;
     request->callback = callback;
     if (type == ARQ_TYPE_MRAM_TO_ARAM) {
-        ARStartDMA(type, source, dest, length);
+        mv_aram_transfer(type, source, dest, length);
     } else if (type == ARQ_TYPE_ARAM_TO_MRAM) {
-        ARStartDMA(type, dest, source, length);
+        mv_aram_transfer(type, dest, source, length);
     } else {
         HSD_Panic(__FILE__, __LINE__, "unsupported Vita ARQ direction");
     }
-    if (callback) {
-        callback(request);
+    mv_arq_enqueue(request, callback);
+}
+
+void ARQRemoveRequest(ARQRequest *request)
+{
+    if (!request) return;
+    for (unsigned i = 0, pos = arq_pending_head; i < arq_pending_count;
+         ++i, pos = (pos + 1u) % MV_ARQ_PENDING_MAX)
+    {
+        if (arq_pending[pos].request == request)
+            arq_pending[pos].callback = NULL;
     }
 }
 
-void ARQRemoveRequest(ARQRequest *request) { (void)request; }
-void ARQRemoveOwnerRequest(u32 owner) { (void)owner; }
-void ARQFlushQueue(void) {}
+void ARQRemoveOwnerRequest(u32 owner)
+{
+    for (unsigned i = 0, pos = arq_pending_head; i < arq_pending_count;
+         ++i, pos = (pos + 1u) % MV_ARQ_PENDING_MAX)
+    {
+        if (arq_pending[pos].request && arq_pending[pos].request->owner == owner)
+            arq_pending[pos].callback = NULL;
+    }
+}
+
+void ARQFlushQueue(void)
+{
+    while (arq_pending_count) mv_arq_async_pump();
+}
 void ARQSetChunkSize(u32 size)
 {
     if (!size || (size & 31u)) {
@@ -200,6 +274,9 @@ void ARQSetChunkSize(u32 size)
     arq_chunk_size = size;
 }
 u32 ARQGetChunkSize(void) { return arq_chunk_size; }
+
+const uint8_t *mv_aram_data(void) { return ar_initialized ? aram : NULL; }
+uint32_t mv_aram_capacity(void) { return ar_initialized ? MV_ARAM_SIZE : 0; }
 
 int mv_aram_clear(uint32_t dest, uint32_t size)
 {

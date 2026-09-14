@@ -14,6 +14,97 @@
 #include <melee/gr/stage.h>
 #include <melee/pl/player.h>
 #include <sysdolphin/baselib/debug.h>
+#include <sysdolphin/baselib/devcom.h>
+
+#ifdef MELEE_VITA_PLATFORM
+/* Retail GameCube waits rely on DVD/ARQ interrupts progressing while the
+ * main thread is inside lbDvd polling loops. Vita models those completions
+ * cooperatively, so every retail wait boundary must explicitly advance one
+ * host completion or it can deadlock forever without a coredump. */
+extern void mv_gc_async_pump(void);
+extern unsigned mv_gc_async_pending(void);
+extern unsigned mv_gc_alarm_pump(void);
+extern void mv_gc_sync_yield(void);
+void lbDvd_80017CC4(void);
+void lbDvd_800174E8(int index);
+
+static unsigned lbDvd_VitaRecoverOrphanPreload(void)
+{
+    /* state=2 means the preload already allocated its destination and handed a
+     * request to DevCom. If neither DevCom priority 2 nor the Vita completion
+     * queues contain work anymore, that request is orphaned and can otherwise
+     * block lbDvd_80017CC4 forever. */
+    if (mv_gc_async_pending() != 0 || HSD_DevComIsBusy(2))
+        return 0;
+
+    for (int i = 0; i < (signed)ARRAY_SIZE(preloadCache.entries); ++i) {
+        PreloadEntry* e = &preloadCache.entries[i];
+        if (e->state != 2)
+            continue;
+
+        if (e->load_score < 0) {
+            OSReport("VITA_LBDVD_ORPHAN_STATE2_DROP index=%d entry=%d heap=%d score=%d\n",
+                     i, e->entry_num, e->heap, e->load_score);
+            lbDvd_800174E8(i);
+            return 1;
+        }
+
+        if (e->raw_data != NULL && e->raw_data->addr != NULL && e->size != 0) {
+            DVDFileInfo info;
+            if (DVDFastOpen(e->entry_num, &info)) {
+                s32 result = DVDReadPrio(&info, e->raw_data->addr,
+                                         OSRoundUp32B(e->size), 0, 2);
+                DVDClose(&info);
+                if (result >= 0) {
+                    e->state = 3;
+                    OSReport("VITA_LBDVD_ORPHAN_STATE2_SYNC index=%d entry=%d heap=%d size=%u score=%d\n",
+                             i, e->entry_num, e->heap, (unsigned)e->size,
+                             e->load_score);
+                    lbDvd_80017CC4();
+                    return 1;
+                }
+                OSReport("VITA_LBDVD_ORPHAN_STATE2_SYNC_FAIL index=%d entry=%d result=%d\n",
+                         i, e->entry_num, (int)result);
+            }
+        }
+        break;
+    }
+    return 0;
+}
+
+static inline unsigned lbDvd_VitaPumpAsync(void)
+{
+    /* Preload scheduling may first compact heap 2/3. Retail performs that
+     * compaction from OSAlarm callbacks while DVD interrupts continue in
+     * parallel. Vita is cooperative, so a synchronous wait must advance all
+     * three boundaries explicitly: due heap alarms, the preload scheduler that
+     * promotes state=1 to an actual DevCom request, then DVD/ARQ completion. */
+    unsigned progressed = mv_gc_alarm_pump();
+
+    if (mv_gc_async_pending() == 0) {
+        /* A stale DevCom DVD-active latch can leave a preload entry in state=2
+         * while the host has no completion queued. Kick DevCom first so it can
+         * repair that impossible state and resubmit the request. If DevCom has
+         * no priority-2 request at all, repair/drop the orphaned preload entry
+         * before asking the scheduler to promote a state=1 entry. */
+        HSD_DevComDVDWakeUp();
+        if (mv_gc_async_pending() == 0)
+            progressed += lbDvd_VitaRecoverOrphanPreload();
+        if (mv_gc_async_pending() == 0)
+            lbDvd_80017CC4();
+    }
+
+    if (mv_gc_async_pending() != 0) {
+        mv_gc_async_pump();
+        ++progressed;
+    }
+    if (progressed == 0) {
+        mv_gc_sync_yield();
+        progressed = 1;
+    }
+    return progressed;
+}
+#endif
 
 /* 0189EC */ static void lbDvd_800189EC(int);
 
@@ -100,6 +191,9 @@ static bool lbDvd_80017644(int heap)
 void lbDvd_80017700(int arg0)
 {
     while (lbDvd_80017644(arg0)) {
+#ifdef MELEE_VITA_PLATFORM
+        lbDvd_VitaPumpAsync();
+#endif
         lb_800195D0();
     }
 }
@@ -372,6 +466,24 @@ void* lbDvd_GetPreloadedArchive(ssize_t entry_num)
 
     OSRestoreInterrupts(interrupt);
     lbDvd_800189EC(entry_num);
+#ifdef MELEE_VITA_PLATFORM
+    /* Never let a broken GameCube preload schedule trap a Vita LoadSync
+     * forever. lbArchive_80017040 already has a validated synchronous fallback
+     * (lbFile_8001668C + PREPARE_RAW + InitializeDAT). Return NULL only if the
+     * requested cache entry is still genuinely unresolved after the bounded
+     * cooperative wait. */
+    if (lbDvd_800187F4(entry_num) == 1) {
+        OSReport("VITA_LBDVD_PRELOAD_SYNC_FALLBACK entry=%d state=%u heap=%d score=%d pending_async=%u\n",
+                 entry_num, (unsigned)entry->state, entry->heap,
+                 entry->load_score, mv_gc_async_pending());
+        if (entry->state == 1 && mv_gc_async_pending() == 0) {
+            lbDvd_800174E8((int)i);
+        } else if (entry->load_score > 0) {
+            entry->load_score = -entry->load_score;
+        }
+        return NULL;
+    }
+#endif
     if (entry->load_state == 1) {
         PreloadEntry* entry = &preloadCache.entries[i];
         type = entry->type;
@@ -658,9 +770,42 @@ int lbDvd_800187F4(int entry_num)
 
 void lbDvd_800189EC(int entry_num)
 {
+#ifdef MELEE_VITA_PLATFORM
+    unsigned pumps = 0;
+    unsigned loops = 0;
+#endif
     while (lbDvd_800187F4(entry_num) == 1) {
+#ifdef MELEE_VITA_PLATFORM
+        ++loops;
+        pumps += lbDvd_VitaPumpAsync();
+        if (loops == 1 || (loops % 512u) == 0) {
+            int state = -1, heap = -1, score = 0;
+            for (int i = 0; i < (signed)ARRAY_SIZE(preloadCache.entries); ++i) {
+                PreloadEntry* e = &preloadCache.entries[i];
+                if (e->state != 0 && e->entry_num == entry_num && e->load_score > 0) {
+                    state = e->state; heap = e->heap; score = e->load_score; break;
+                }
+            }
+            OSReport("VITA_LBDVD_WAIT_ENTRY_PROGRESS entry=%d loops=%u state=%d heap=%d persistent=%d score=%d pending_async=%u\n",
+                     entry_num, loops, state, heap, preloadCache.persistent_heap,
+                     score, mv_gc_async_pending());
+        }
+        if (loops >= 1000u) {
+            OSReport("VITA_LBDVD_WAIT_ENTRY_TIMEOUT entry=%d loops=%u pending_async=%u persistent=%d action=sync_fallback\n",
+                     entry_num, loops, mv_gc_async_pending(),
+                     preloadCache.persistent_heap);
+            break;
+        }
+#else
         lb_800195D0();
+#endif
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (pumps != 0) {
+        OSReport("VITA_LBDVD_WAIT_ENTRY_DRAIN entry=%d loops=%u pumps=%u pending_async=%u\n",
+                 entry_num, loops, pumps, mv_gc_async_pending());
+    }
+#endif
 }
 
 int lbDvd_80018A2C(u8 arg0)
@@ -733,9 +878,21 @@ int lbDvd_80018A2C(u8 arg0)
 
 void lbDvd_80018C2C(u8 arg0)
 {
+#ifdef MELEE_VITA_PLATFORM
+    unsigned pumps = 0;
+#endif
     while (lbDvd_80018A2C(arg0) == 1) {
+#ifdef MELEE_VITA_PLATFORM
+        pumps += lbDvd_VitaPumpAsync();
+#endif
         lb_800195D0();
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (pumps != 0) {
+        OSReport("VITA_LBDVD_WAIT_GROUP_DRAIN mask=%u pumps=%u pending_async=%u\n",
+                 (unsigned)arg0, pumps, mv_gc_async_pending());
+    }
+#endif
 }
 
 void lbDvd_80018C6C(void)
@@ -768,6 +925,9 @@ static inline void inline0(void)
         if (lbHeap_800158E8(lbDvd_804D37F4[i]) == 1) {
             tmp = lbDvd_804D37F4[i];
             while (lbDvd_80017598(tmp) != 0) {
+#ifdef MELEE_VITA_PLATFORM
+                lbDvd_VitaPumpAsync();
+#endif
                 lb_800195D0();
             }
         }
@@ -821,11 +981,17 @@ void lbDvd_80018CF4(int arg0)
     }
     if (lbHeap_800158E8(2) == 1) {
         while (lbDvd_80017598(2) != 0) {
+#ifdef MELEE_VITA_PLATFORM
+            lbDvd_VitaPumpAsync();
+#endif
             lb_800195D0();
         }
     }
     if (lbHeap_800158E8(3) == 1) {
         while (lbDvd_80017598(3) != 0) {
+#ifdef MELEE_VITA_PLATFORM
+            lbDvd_VitaPumpAsync();
+#endif
             lb_800195D0();
         }
     }

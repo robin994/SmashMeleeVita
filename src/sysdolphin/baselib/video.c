@@ -5,6 +5,10 @@
 #include <dolphin/gx.h>
 #include <dolphin/vi.h>
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_retail_runtime_present_frame(int pass);
+#endif
+
 HSD_VIInfo HSD_VIData;
 static u8 garbage[HSD_ANTIALIAS_GARBAGE_SIZE] ATTRIBUTE_ALIGN(32);
 
@@ -304,6 +308,9 @@ void HSD_VICopyXFBAsync(HSD_RenderPass rpass)
 
     idx = HSD_VIWaitXFBDrawEnable();
     HSD_VICopyEFB2XFBPtr(HSD_VIGetVIStatus(), HSD_VIGetXFBPtr(idx), rpass);
+#ifdef MELEE_VITA_PLATFORM
+    mv_retail_runtime_present_frame((int) rpass);
+#endif
     HSD_VISetXFBWaitDone(idx);
 
     HSD_VIGXSetDrawDone(idx);

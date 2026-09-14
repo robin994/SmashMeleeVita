@@ -849,6 +849,11 @@ Fighter_GObj* Fighter_Create(struct plAllocInfo* input)
     Fighter* fp;
     HSD_JObj* jobj;
 
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_BEGIN kind=%d slot=%d sub=%d transform=%d\n",
+             (int) input->internal_id, (int) input->slot, (int) input->b0,
+             (int) input->has_transformation);
+#endif
     gobj = GObj_Create(HSD_GOBJ_CLASS_FIGHTER, 8, 0);
     GObj_SetupGXLink(gobj, &ftDrawCommon_80080E18, 5U, 0U);
     /**
@@ -861,16 +866,53 @@ Fighter_GObj* Fighter_Create(struct plAllocInfo* input)
     GObj_InitUserData(gobj, 4U, &Fighter_Unload_8006DABC, fp);
     ftData_8008572C(input->internal_id);
     Fighter_UnkInitLoad_80068914(gobj, input);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=base_data costume=%d ft_data=%p\n",
+             (int) fp->kind, (int) fp->x619_costume_id, (void*) fp->ft_data);
+#endif
     efAsync_LoadSync(ftData_UnkBytePerCharacter[fp->kind]);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=effect_pass effect=%d\n",
+             (int) fp->kind, (int) ftData_UnkBytePerCharacter[fp->kind]);
+#endif
     ftData_80085820(fp->kind, fp->x619_costume_id);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=costume_archive_pass costume=%d\n",
+             (int) fp->kind, (int) fp->x619_costume_id);
+#endif
 
     Fighter_UnkUpdateCostumeJoint_800686E4(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=costume_jobj_pass root=%p\n",
+             (int) fp->kind, (void*) GET_JOBJ(gobj));
+#endif
 
     ftData_80085B10(fp);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=figatree_table_pass motions=%d parts=%u\n",
+             (int) fp->kind, (int) fp->x58C,
+             (unsigned) ftPartsTable[fp->kind]->parts_num);
+#endif
     ftParts_80074E58(fp);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=parts_alloc_pass parts=%u\n",
+             (int) fp->kind, (unsigned) ftPartsTable[fp->kind]->parts_num);
+#endif
     ftParts_SetupParts(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=parts_setup_pass dobjs=%u\n",
+             (int) fp->kind, (unsigned) fp->dobj_list.count);
+#endif
     ftAnim_80070308(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=anim_setup_pass tobjs=%u\n",
+             (int) fp->kind, (unsigned) fp->tobj_list.n_costume_tobjs);
+#endif
     ftCo_800C884C(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=common_state_pass\n",
+             (int) fp->kind);
+#endif
 
     Fighter_80068E64(gobj);
 
@@ -880,20 +922,33 @@ Fighter_GObj* Fighter_Create(struct plAllocInfo* input)
     ftAnim_8006FE48(gobj);
 
     Fighter_UnkUpdateVecFromBones_8006876C(fp);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=bones_pass\n", (int) fp->kind);
+#endif
 
     ftCo_8009F578(fp);
 
     if (ftData_OnLoad[fp->kind]) {
         ftData_OnLoad[fp->kind](gobj);
     }
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=onload_pass\n", (int) fp->kind);
+#endif
 
     Fighter_Create_Inline2(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=motion_lengths_pass\n", (int) fp->kind);
+#endif
 
     ftColl_8007B320(gobj);
     fp->x890_cameraBox = Camera_80029020();
 
     jobj = GET_JOBJ(gobj);
     lbShadow_8000ED54(&fp->x20A4, jobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_STAGE kind=%d stage=collision_camera_shadow_pass\n",
+             (int) fp->kind);
+#endif
     HSD_GObj_SetupProc(gobj, &Fighter_8006A1BC, 0);
     HSD_GObj_SetupProc(gobj, &Fighter_8006A360, 1);
     HSD_GObj_SetupProc(gobj, &Fighter_8006ABA0, 2);
@@ -927,6 +982,11 @@ Fighter_GObj* Fighter_Create(struct plAllocInfo* input)
         }
     }
     ftLib_800867E8(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_CREATE_PASS kind=%d slot=%d gobj=%p root=%p\n",
+             (int) fp->kind, (int) fp->player_id, (void*) gobj,
+             (void*) GET_JOBJ(gobj));
+#endif
     return gobj;
 }
 

@@ -207,8 +207,19 @@ static void second_layer_material(const MvGxMaterialState *source, MvGxMaterialS
     out->tev_active = source->tev1_active;
 }
 
+static int material_simple_c0_texa_a0(const MvGxMaterialState *m)
+{
+    return m->texture_count == 1 && m->simple_tev_color_c0 &&
+           m->simple_tev_alpha_texa_a0;
+}
+
 static int material_needs_bake(const MvGxMaterialState *m)
 {
+    /* The captured HSD two-stage graph consumes raw TEX0/TEX1 samples and
+     * multiplies them by the raster color in the GL combiner. Baking the
+     * MObj material color into TEX0 here would apply a color term that is not
+     * present in the retail TEV program. */
+    if (mv_gx_material_multitex_hsd_modulate(m)) return 0;
     const unsigned colormap = (m->tobj_flags >> 16) & 0xfu;
     const unsigned alphamap = (m->tobj_flags >> 20) & 0xfu;
     return (m->tev_valid && m->tev_active != 0 &&
@@ -234,6 +245,8 @@ static int texture_key_equal(const MvGxMaterialState *a,
 
     return a->material_rgba == b->material_rgba &&
            a->tobj_flags == b->tobj_flags && a->blending == b->blending &&
+           a->simple_tev_color_c0 == b->simple_tev_color_c0 &&
+           a->simple_tev_alpha_texa_a0 == b->simple_tev_alpha_texa_a0 &&
            a->tev_valid == b->tev_valid && a->tev_active == b->tev_active &&
            (!a->tev_valid ||
             (!memcmp(a->tev_op, b->tev_op, sizeof(a->tev_op)) &&
@@ -244,6 +257,7 @@ static int texture_key_equal(const MvGxMaterialState *a,
 
 static uint32_t material_draw_color(const MvGxMaterialState *m)
 {
+    if (material_simple_c0_texa_a0(m)) return m->material_rgba;
     if (material_needs_bake(m)) return 0xffffffffu;
     const unsigned colormap = (m->tobj_flags >> 16) & 0xfu;
     const unsigned alphamap = (m->tobj_flags >> 20) & 0xfu;
@@ -268,8 +282,14 @@ static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
     if(!pixels) return 0;
     if(mv_gx_decode(pixels,bytes,m->width*4,m->image,size,m->width,m->height,m->format,
                     m->palette,(size_t)m->palette_entries*2,m->palette_format)) {free(pixels);return 0;}
-    if(material_needs_bake(m))
+    if (material_simple_c0_texa_a0(m)) {
+        /* GX SIS: RGB is TEVREG0 (C0), alpha is texture alpha * A0.
+         * Make the sampled texture an alpha mask and let GL_MODULATE apply C0. */
+        for(size_t i=0;i<bytes;i+=4)
+            pixels[i+0]=pixels[i+1]=pixels[i+2]=255;
+    } else if(material_needs_bake(m)) {
         for(size_t i=0;i<bytes;i+=4) bake_material_pixel(m,pixels+i);
+    }
     GLuint id;glGenTextures(1,&id);glBindTexture(GL_TEXTURE_2D,id);
     const GLenum wrap[]={GL_CLAMP_TO_EDGE,GL_REPEAT,GL_MIRRORED_REPEAT};
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,wrap[m->wrap_s]);
@@ -294,9 +314,9 @@ static GLuint prepare(MvGxReplay *r,const MvGxMaterialState *m)
 }
 static int alpha_compare_supported(const MvGxMaterialState *m)
 {
-    if (m->pe_alpha_comp0 == GX_ALWAYS && m->pe_alpha_comp1 == GX_ALWAYS) return 1;
-    return m->pe_alpha_comp0 == GX_GREATER && m->pe_alpha_ref0 == 0 &&
-           m->pe_alpha_op == GX_AOP_OR && m->pe_alpha_comp1 == GX_NEVER;
+    return mv_gx_alpha_compare_vitagl_supported(
+        m->pe_alpha_comp0, m->pe_alpha_ref0, m->pe_alpha_op,
+        m->pe_alpha_comp1, m->pe_alpha_ref1);
 }
 
 static void apply_alpha_compare(const MvGxMaterialState *m)
@@ -309,11 +329,64 @@ static void apply_alpha_compare(const MvGxMaterialState *m)
     glAlphaFunc(GL_GREATER, (float)m->pe_alpha_ref0 / 255.0f);
 }
 
+static const float *vertex_texcoord(const MvGxCaptureVertex *v,
+                                    const MvGxMaterialState *m, int unit)
+{
+    uint8_t src = unit ? m->texgen_src1 : m->texgen_src0;
+    uint8_t bit = (uint8_t)(1u << unit);
+    if ((m->texgen_valid_mask & bit) && src == GX_TG_TEX1) return v->tex1;
+    return v->tex0;
+}
+
+static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two)
+{
+    if (!hsd_two) {
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        return;
+    }
+    /* Exact HSD stage 0 for Castle: RGB = RASC * TEX0, alpha = RASA. */
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+    (void)m;
+}
+
+static void setup_texture1_env(const MvGxMaterialState *m, int hsd_two)
+{
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
+    if (hsd_two) {
+        /* Exact HSD stage 1: RGB = PREV * TEX1, alpha remains RASA. */
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
+    } else if (((m->tobj1_flags >> 20) & 0xfu) == 3u) {
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_TEXTURE);
+    } else {
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
+    }
+}
+
 static int supported(const MvGxCaptureCommand *c,int relaxed)
 {
     unsigned bad=c->material.unsupported;
     bad &= ~(MV_GX_MATERIAL_UNSUPPORTED_COLORMAP|MV_GX_MATERIAL_UNSUPPORTED_ALPHAMAP);
-    if(mv_gx_material_multitex_vitagl_supported(&c->material)) bad &= ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
+    if(mv_gx_material_multitex_vitagl_supported(&c->material)) {
+        bad &= ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
+        if (mv_gx_material_multitex_hsd_modulate(&c->material)) {
+            const uint32_t required = (1u << MV_GX_VA_CLR0) |
+                                      (1u << MV_GX_VA_TEX0) |
+                                      (1u << (MV_GX_VA_TEX0 + 1u));
+            if ((c->attr_mask & required) != required) return 0;
+        }
+    }
     if(mv_gx_material_custom_tev_cpu_bakeable(&c->material)) bad &= ~MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV;
     /* Retain existing title bridge's explicit approximation until general TEV. */
     if(relaxed) bad &= ~(MV_GX_MATERIAL_UNSUPPORTED_CUSTOM_TEV|MV_GX_MATERIAL_UNSUPPORTED_MULTITEX);
@@ -370,6 +443,24 @@ static void norm(float *a)
 static void cross(const float *a,const float *b,float *v)
 {v[0]=a[1]*b[2]-a[2]*b[1];v[1]=a[2]*b[0]-a[0]*b[2];v[2]=a[0]*b[1]-a[1]*b[0];}
 static void captured_viewport(const MvGxCaptureCommand *c);
+static void captured_projection(const MvGxCaptureCommand *c)
+{
+    float projection[16];
+    /* GX perspective depth is -w..0 while OpenGL expects -w..w. Convert the
+     * projection row exactly: z_gl = 2*z_gx + w. X/Y and W are unchanged. */
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            float value = c->projection[row][col];
+            if (row == 2)
+                value = 2.0f * c->projection[2][col] + c->projection[3][col];
+            projection[col * 4 + row] = value;
+        }
+    }
+    glMatrixMode(GL_PROJECTION);
+    glLoadMatrixf(projection);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+}
 void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
 {
     if(!r || !r->ready || !cam || cam->projection_type!=1) return;
@@ -393,12 +484,7 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
         if(!supported(c,i>=r->relaxed_from_command) || c->first_vertex>nverts || c->vertex_count>nverts-c->first_vertex || m->pe_z_func>7 || m->pe_src_factor>7 || m->pe_dst_factor>7 || c->cull_mode==3) continue;
         if (c->projection_valid) {
             captured_viewport(c);
-            float projection[16];
-            for (int row = 0; row < 4; ++row)
-                for (int col = 0; col < 4; ++col)
-                    projection[col * 4 + row] = c->projection[row][col];
-            glMatrixMode(GL_PROJECTION); glLoadMatrixf(projection);
-            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            captured_projection(c);
         }
         if(m->pe_blend_type) {glEnable(GL_BLEND);glBlendFunc(m->pe_src_factor==2?GL_DST_COLOR:m->pe_src_factor==3?GL_ONE_MINUS_DST_COLOR:factors[m->pe_src_factor],factors[m->pe_dst_factor]);} else glDisable(GL_BLEND);
         if(m->pe_z_enable) glEnable(GL_DEPTH_TEST);else glDisable(GL_DEPTH_TEST);
@@ -407,23 +493,14 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
         apply_alpha_compare(m);glFrontFace(GL_CW);
         if(c->cull_mode) {glEnable(GL_CULL_FACE);glCullFace(c->cull_mode==1?GL_FRONT:GL_BACK);} else glDisable(GL_CULL_FACE);
         int two=m->texture_count==2 && mv_gx_material_multitex_vitagl_supported(m);
+        int hsd_two=two && mv_gx_material_multitex_hsd_modulate(m);
         glActiveTexture(GL_TEXTURE0);
-        if(m->texture_count) {GLuint id=prepare(r,m);if(!id)continue;glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);} else glDisable(GL_TEXTURE_2D);
+        if(m->texture_count) {GLuint id=prepare(r,m);if(!id)continue;glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);setup_texture0_env(m,hsd_two);} else glDisable(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE1);
         if(two) {
             MvGxMaterialState second;second_layer_material(m,&second);GLuint id=prepare(r,&second);if(!id)continue;
             glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,id);
-            glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_COMBINE);
-            glTexEnvi(GL_TEXTURE_ENV,GL_COMBINE_RGB,GL_MODULATE);
-            glTexEnvi(GL_TEXTURE_ENV,GL_SRC0_RGB,GL_PREVIOUS);glTexEnvi(GL_TEXTURE_ENV,GL_SRC1_RGB,GL_TEXTURE);
-            if(((m->tobj1_flags>>20)&0xfu)==3u) {
-                glTexEnvi(GL_TEXTURE_ENV,GL_COMBINE_ALPHA,GL_MODULATE);
-                glTexEnvi(GL_TEXTURE_ENV,GL_SRC0_ALPHA,GL_PREVIOUS);
-                glTexEnvi(GL_TEXTURE_ENV,GL_SRC1_ALPHA,GL_TEXTURE);
-            } else {
-                glTexEnvi(GL_TEXTURE_ENV,GL_COMBINE_ALPHA,GL_REPLACE);
-                glTexEnvi(GL_TEXTURE_ENV,GL_SRC0_ALPHA,GL_PREVIOUS);
-            }
+            setup_texture1_env(m,hsd_two);
         } else glDisable(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE0);
         glPushMatrix();float model[16]={0};model[15]=1;
@@ -439,7 +516,8 @@ void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)
                 for(int unit=0;unit<(two?2:1);unit++) {
                     const float (*mat)[3]=unit?m->uv_mtx1:m->uv_mtx;
                     int valid=unit?m->uv_mtx1_valid:m->uv_mtx_valid;
-                    float u=v->tex0[0],vv=v->tex0[1];
+                    const float *tc=vertex_texcoord(v,m,unit);
+                    float u=tc[0],vv=tc[1];
                     glMultiTexCoord2f(GL_TEXTURE0+unit,valid?mat[0][0]*u+mat[0][1]*vv+mat[0][2]:u,valid?mat[1][0]*u+mat[1][1]*vv+mat[1][2]:vv);
                 }
                 glVertex3fv(v->position);
@@ -486,6 +564,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     const GLenum compares[] = {GL_NEVER,GL_LESS,GL_EQUAL,GL_LEQUAL,GL_GREATER,GL_NOTEQUAL,GL_GEQUAL,GL_ALWAYS};
     const GLenum factors[] = {GL_ZERO,GL_ONE,GL_SRC_COLOR,GL_ONE_MINUS_SRC_COLOR,GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA};
     unsigned submitted = 0;
+    unsigned hsd_multitex = 0;
 
     for (unsigned i = 0; i < count; ++i) {
         const MvGxCaptureCommand *c = cmd + i;
@@ -497,14 +576,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
             continue;
 
         captured_viewport(c);
-        float projection[16];
-        for (int row = 0; row < 4; ++row)
-            for (int col = 0; col < 4; ++col)
-                projection[col * 4 + row] = c->projection[row][col];
-        glMatrixMode(GL_PROJECTION);
-        glLoadMatrixf(projection);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
+        captured_projection(c);
 
         if (m->pe_blend_type) {
             glEnable(GL_BLEND);
@@ -529,13 +601,15 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         }
 
         int two = m->texture_count == 2 && mv_gx_material_multitex_vitagl_supported(m);
+        int hsd_two = two && mv_gx_material_multitex_hsd_modulate(m);
+        if (hsd_two) ++hsd_multitex;
         glActiveTexture(GL_TEXTURE0);
         if (m->texture_count) {
             GLuint id = prepare(r, m);
             if (!id) continue;
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
-            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+            setup_texture0_env(m, hsd_two);
         } else {
             glDisable(GL_TEXTURE_2D);
         }
@@ -547,18 +621,7 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
             if (!id) continue;
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, id);
-            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
-            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_RGB, GL_PREVIOUS);
-            glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_RGB, GL_TEXTURE);
-            if (((m->tobj1_flags >> 20) & 0xfu) == 3u) {
-                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
-                glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
-                glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_TEXTURE);
-            } else {
-                glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
-                glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PREVIOUS);
-            }
+            setup_texture1_env(m, hsd_two);
         } else {
             glDisable(GL_TEXTURE_2D);
         }
@@ -583,7 +646,8 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
                 for (int unit = 0; unit < (two ? 2 : 1); ++unit) {
                     const float (*mat)[3] = unit ? m->uv_mtx1 : m->uv_mtx;
                     int valid = unit ? m->uv_mtx1_valid : m->uv_mtx_valid;
-                    float u = v->tex0[0], vv = v->tex0[1];
+                    const float *tc = vertex_texcoord(v, m, unit);
+                    float u = tc[0], vv = tc[1];
                     glMultiTexCoord2f(GL_TEXTURE0 + unit,
                         valid ? mat[0][0] * u + mat[0][1] * vv + mat[0][2] : u,
                         valid ? mat[1][0] * u + mat[1][1] * vv + mat[1][2] : vv);
@@ -599,8 +663,8 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     r->submitted_commands = submitted;
     if (!r->submit_logged && r->log) {
         fprintf(r->log,
-                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u gl_error=%x camera=per-command\n",
-                submitted, count, glGetError());
+                "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u gl_error=%x camera=per-command\n",
+                submitted, count, hsd_multitex, glGetError());
         fflush(r->log);
         r->submit_logged = 1;
     }

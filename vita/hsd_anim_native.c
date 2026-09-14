@@ -1,5 +1,6 @@
 #include "hsd_anim_native.h"
 #include "hsd_anim.h"
+#include <sysdolphin/baselib/robj.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -36,18 +37,18 @@ static void *convert(Context *c, uint32_t offset, unsigned type, unsigned depth)
         if(entries[i].busy) { c->error=-1; return NULL; }
         return entries[i].value;
     }
-    size_t bytes=type==1?20:type==2?16:20;
+    size_t bytes=type==1?20:type==2?16:type==4?8:20;
     const uint8_t *p=mv_dat_span(c->dat,offset,bytes);
     if (!p) { c->error=-1; return NULL; }
     Entry *e=&entries[c->out->count++];
     e->offset=offset;e->type=type;e->busy=1;
-    e->value=calloc(1,type==1?sizeof(HSD_AnimJoint):type==2?sizeof(HSD_AObjDesc):sizeof(HSD_FObjDesc));
+    e->value=calloc(1,type==1?sizeof(HSD_AnimJoint):type==2?sizeof(HSD_AObjDesc):type==4?sizeof(HSD_RObjAnimJoint):sizeof(HSD_FObjDesc));
     if (!e->value) { c->error=-1; return NULL; }
     if(type==1) {
-        HSD_AnimJoint *a=e->value; uint32_t unused;
+        HSD_AnimJoint *a=e->value;
         a->child=reference(c,offset,1,depth);a->next=reference(c,offset+4,1,depth);
-        a->aobjdesc=reference(c,offset+8,2,depth);a->flags=mv_be32(p+16);
-        if(mv_dat_pointer(c->dat,offset+12,&unused)!=0) c->error=-2;
+        a->aobjdesc=reference(c,offset+8,2,depth);
+        a->robj_anim=reference(c,offset+12,4,depth);a->flags=mv_be32(p+16);
     } else if(type==2) {
         HSD_AObjDesc *a=e->value; uint32_t obj_target;
         a->flags=mv_be32(p);a->end_frame=scalar(p+4);
@@ -62,6 +63,10 @@ static void *convert(Context *c, uint32_t offset, unsigned type, unsigned depth)
         a->obj_id=0;
         /* Validate the compressed streams with the independent bounded reader. */
         if(mv_aobj_validate_jobj(c->dat,offset)) c->error=-2;
+    } else if(type==4) {
+        HSD_RObjAnimJoint *r=e->value;
+        r->next=reference(c,offset,4,depth);
+        r->aobjdesc=reference(c,offset+4,2,depth);
     } else {
         HSD_FObjDesc *f=e->value;uint32_t stream;
         f->next=reference(c,offset,3,depth);f->length=mv_be32(p+4);f->startframe=scalar(p+8);

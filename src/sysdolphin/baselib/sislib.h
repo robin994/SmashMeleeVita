@@ -90,6 +90,11 @@ struct HSD_Text {
     u8 kerning;
     u8 alignment;
     u8 x9F;
+#ifdef MELEE_VITA_PLATFORM
+    /* Exact camera supplied to the SIS context. GX-link masks are not unique
+       once menu/CSS/overlay cameras coexist in the same scene. */
+    HSD_GObj* vita_camera;
+#endif
 };
 
 struct sislib_UnkAlloc3 {
@@ -101,6 +106,9 @@ struct sislib_UnkAlloc3 {
     u8 xD;
     u8 xE;
     u8 xF;
+#ifdef MELEE_VITA_PLATFORM
+    HSD_GObj* vita_parent_camera;
+#endif
 };
 
 extern SIS* HSD_SisLib_804D1124[5];

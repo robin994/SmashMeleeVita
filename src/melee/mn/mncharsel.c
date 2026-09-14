@@ -44,6 +44,9 @@
 #include "css_assets_vita.h"
 #endif
 #include <sysdolphin/baselib/sislib.h>
+#ifdef MELEE_VITA_PLATFORM
+#include <sysdolphin/baselib/synth.h>
+#endif
 
 static u8 mnCharSel_804D50C8[4] = { 1, 2, 4, 8 };
 static u8 mnCharSel_804D50CC[4] = { 1, 0, 0, 2 };
@@ -96,7 +99,11 @@ static u8 mnCharSel_804D6CF5; ///< number of (open? valid?) CSS doors
 static u8 mnCharSel_804D6CF6; ///< ::CSSPendingSceneChangeKind
 static u8 mnCharSel_804D6CF7;
 static u8 mnCharSel_804D6CF8;
-static s8 mnCharSel_804D6CF9;
+static u8 mnCharSel_804D6CF9;
+#ifdef MELEE_VITA_PLATFORM
+static u8 mnCharSel_vita_deferred_audio_start;
+static u8 mnCharSel_vita_start_latched;
+#endif
 
 /// Can't be enum bc float, but reused values
 #define ICONROWHT_TOP_TOP 20.0F
@@ -4222,24 +4229,40 @@ s32 mnCharSel_802640A0(void)
     s32 icon;
     u8 match_type = mnCharSel_804D6CB0->match_type;
 
-    if (match_type != 0) {
-        lbAudioAx_800237A8(mnCharSel_803F0A48.mode_info[match_type].enter_sfx,
-                           0x7F, 0x40);
-    } else {
-        switch (gmMainLib_GetGameRules()->mode) {
-        case 0:
-            lbAudioAx_800237A8(0x7535, 0x7F, 0x40);
-            break;
-        case 1:
-            lbAudioAx_800237A8(0x7538, 0x7F, 0x40);
-            break;
-        case 2:
-            lbAudioAx_800237A8(0x7537, 0x7F, 0x40);
-            break;
-        case 3:
-            lbAudioAx_800237A8(0x7536, 0x7F, 0x40);
-            break;
+#ifdef MELEE_VITA_PLATFORM
+    /* Retail reaches this point only after the CSS SFX bank is ready. Vita
+     * bounds that wait so a slow DevCom chain cannot freeze the visual scene;
+     * consequently never consume a half-loaded bank here. */
+    if (HSD_SynthSFXGetPendingLoadCount() != 0) {
+        OSReport("GAME_CSS_BUILD_ENTER_SFX_DEFERRED pending=%d\n",
+                 HSD_SynthSFXGetPendingLoadCount());
+        mv_css_vita_trace("GAME_CSS_BUILD_ENTER_SFX_DEFERRED");
+        mnCharSel_vita_deferred_audio_start = 1;
+    } else
+#endif
+    {
+        if (match_type != 0) {
+            lbAudioAx_800237A8(mnCharSel_803F0A48.mode_info[match_type].enter_sfx,
+                               0x7F, 0x40);
+        } else {
+            switch (gmMainLib_GetGameRules()->mode) {
+            case 0:
+                lbAudioAx_800237A8(0x7535, 0x7F, 0x40);
+                break;
+            case 1:
+                lbAudioAx_800237A8(0x7538, 0x7F, 0x40);
+                break;
+            case 2:
+                lbAudioAx_800237A8(0x7537, 0x7F, 0x40);
+                break;
+            case 3:
+                lbAudioAx_800237A8(0x7536, 0x7F, 0x40);
+                break;
+            }
         }
+#ifdef MELEE_VITA_PLATFORM
+        mv_css_vita_trace("GAME_CSS_BUILD_ENTER_SFX_PASS");
+#endif
     }
 
     mnCharSel_804D6CE0 = NULL;
@@ -4295,6 +4318,9 @@ s32 mnCharSel_802640A0(void)
 #endif
     HSD_GObj_SetupProc(gobj, mn_8022BA1C, 5);
     ctx = HSD_SisLib_803A611C(0, gobj, 7, 8, 0x80, 1, 0x80, 0);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_CAMERA_PASS");
+#endif
 
 #ifndef MELEE_VITA_PLATFORM
     gobj = GObj_Create(3, 4, 0x80);
@@ -4324,6 +4350,9 @@ s32 mnCharSel_802640A0(void)
     HSD_GObj_SetupProc(gobj, fn_80263354, 4);
     HSD_JObjReqAnimAll(jobj, 0.0f);
     HSD_JObjAnimAll(jobj);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_BACKGROUND_PASS");
+#endif
 
     mnCharSel_804D6CBC = GObj_Create(4, 5, 0x80);
     if (mnCharSel_804D6CF5 == 1) {
@@ -4349,6 +4378,9 @@ s32 mnCharSel_802640A0(void)
     HSD_JObjAnimAll(mnCharSel_804D6CC0);
     HSD_ForeachAnim(mnCharSel_804D6CC0, JOBJ_TYPE, ALL_TYPE_MASK,
                     HSD_AObjStopAnim, AOBJ_ARG_AOV, 0, 0);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_MENU_PASS");
+#endif
 
     if (gm_IsCKindUnlocked(CKind_Luigi) == 0) {
         row_a = 2;
@@ -4415,6 +4447,10 @@ s32 mnCharSel_802640A0(void)
             break;
         }
     }
+
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_ICONS_PASS");
+#endif
 
     {
         u8 mt = mnCharSel_804D6CB0->match_type;
@@ -4508,6 +4544,10 @@ s32 mnCharSel_802640A0(void)
         cursor->x10 = -21.5f;
     }
 
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_CURSORS_PASS");
+#endif
+
     for (i = 0, slot = 0; i < num_players; i++, slot++) {
         {
             HSD_GObj* model_gobj = GObj_Create(4, 5, 0x80);
@@ -4569,6 +4609,10 @@ s32 mnCharSel_802640A0(void)
             }
         }
     }
+
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_TOKENS_PASS");
+#endif
 
     spE8 = mnCharSel_804DC580;
     for (i = 0; i < num_players; i++) {
@@ -4768,6 +4812,10 @@ s32 mnCharSel_802640A0(void)
             td->text->default_kerning = 0;
         }
     }
+
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_TAGS_PASS");
+#endif
 
     if (mnCharSel_804D6CF5 == 1) {
         switch (mnCharSel_804D6CB0->match_type) {
@@ -5211,6 +5259,10 @@ s32 mnCharSel_802640A0(void)
         }
     }
 
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_MODE_UI_PASS");
+#endif
+
     (void) ((u8*) text)[num_players];
     (void) icons[num_players];
     gobj = GObj_Create(4, 5, 0x80);
@@ -5224,6 +5276,9 @@ s32 mnCharSel_802640A0(void)
     HSD_JObjReqAnimAll(jobj, 0.0f);
     HSD_ForeachAnim(jobj, JOBJ_TYPE, ALL_TYPE_MASK, HSD_AObjStopAnim,
                     AOBJ_ARG_AOV, 0, 0);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_PRESS_START_PASS");
+#endif
 
     mnCharSel_804D6CF7 = 0;
     if (mnCharSel_804D6CF5 == 1) {
@@ -5309,19 +5364,45 @@ s32 mnCharSel_802640A0(void)
 
     mnCharSel_8025EE8C(mnCharSel_804D6CB0->match_type);
     PAD_STACK(0x20);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_BUILD_LOGIC_PASS");
+    if (HSD_SynthSFXGetPendingLoadCount() != 0) {
+        mnCharSel_vita_deferred_audio_start = 1;
+        mv_css_vita_trace("GAME_CSS_BUILD_FINAL_AUDIO_DEFERRED");
+        return 0;
+    }
+    mv_css_vita_trace("GAME_CSS_BUILD_FINAL_AUDIO_BEGIN");
+    {
+        int result = lbAudioAx_80023F28(gmMainLib_8015ECB0());
+        mv_css_vita_trace("GAME_CSS_BUILD_FINAL_AUDIO_PASS");
+        return result;
+    }
+#else
     return lbAudioAx_80023F28(gmMainLib_8015ECB0());
+#endif
 }
 
 void mnCharSel_Scene_OnEnter(void* arg0)
 {
     PAD_STACK(8);
 
+#ifdef MELEE_VITA_PLATFORM
+    mnCharSel_vita_deferred_audio_start = 0;
+    mnCharSel_vita_start_latched = 0;
+    mv_css_vita_trace("GAME_CSS_CARD_BEGIN");
+#endif
     lbCardNew_AllocWorkArea();
     lbCardGame_LoadArchive(0);
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_CARD_PASS");
+#endif
     mnCharSel_804D6CB0 = (CSSData*) arg0;
 
     mnCharSel_804D6CF0 = mnCharSel_804D6CB0->unk_0x0 - 1;
 
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_NAMES_BEGIN");
+#endif
     for (mnCharSel_804D6CF8 = 0; mnCharSel_804D6CF8 < 0x78;
          mnCharSel_804D6CF8++)
     {
@@ -5329,6 +5410,9 @@ void mnCharSel_Scene_OnEnter(void* arg0)
             break;
         }
     }
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_NAMES_PASS");
+#endif
     mnCharSel_804D6CF9 = -1;
     mnCharSel_804D6CF8++;
 
@@ -5337,11 +5421,24 @@ void mnCharSel_Scene_OnEnter(void* arg0)
     mnCharSel_803F0DFC.doors[2].selected_since_load = 0;
     mnCharSel_803F0DFC.doors[3].selected_since_load = 0;
 
+#ifdef MELEE_VITA_PLATFORM
+    mv_css_vita_trace("GAME_CSS_AUDIO_BANK_BEGIN");
+#endif
     lbAudioAx_80026F2C(0x12);
-
     lbAudioAx_8002702C(2, 8);
     lbAudioAx_80027168();
+#ifdef MELEE_VITA_PLATFORM
+    /* Retail waits without a timeout here. On Vita the SFX loader runs above
+     * deferred DVD/ARAM completions, so a single bad bank must not deadlock
+     * the entire Character Select scene. Give it a bounded head start; any
+     * remaining transfers continue from the normal per-frame async pump. */
+    if (lbAudioAx_VitaWaitForLoadsBounded(96))
+        mv_css_vita_trace("GAME_CSS_AUDIO_BANK_DEFERRED");
+    else
+        mv_css_vita_trace("GAME_CSS_AUDIO_BANK_PASS");
+#else
     lbAudioAx_80027648();
+#endif
 #ifdef MELEE_VITA_PLATFORM
     mnCharSel_804D6CD0 = NULL;
     mnCharSel_804D6CD4 = NULL;
@@ -5384,6 +5481,65 @@ void mnCharSel_Scene_OnEnter(void* arg0)
 #endif
 }
 
+#ifdef MELEE_VITA_PLATFORM
+u32 mnCharSel_VitaDebugState(void)
+{
+    u32 model_state = 0xff;
+    u32 sel_icon = 0xff;
+    if (mnCharSel_804A0BD0[0] != NULL)
+        model_state = mnCharSel_804A0BD0[0]->x5;
+    if (mnCharSel_804D6CF5 != 0)
+        sel_icon = mnCharSel_803F0DFC.doors[0].sel_icon;
+    return (((u32) mnCharSel_804D6CF6 & 0xf) << 28) |
+           (((u32) mnCharSel_804D6CF7 & 0xff) << 20) |
+           (((u32) mnCharSel_804D6CF2 & 0xff) << 12) |
+           ((model_state & 0xf) << 8) | (sel_icon & 0xff);
+}
+
+static int mnCharSel_VitaConsumeLatchedStart(void)
+{
+    if (!mnCharSel_vita_start_latched || mnCharSel_804D6CB0 == NULL ||
+        mnCharSel_804D6CF6 != 0 || mnCharSel_804D6CF2 != 0 ||
+        mnCharSel_804D6CF5 != 1 || mnCharSel_804A0BC0[0] == NULL ||
+        mnCharSel_804A0BD0[0] == NULL)
+    {
+        return 0;
+    }
+
+    /* Scene_OnFrame cancels pending scene-change 1 whenever the character
+     * model/token is still attached to a cursor.  Require the same stable
+     * token state the retail exit path checks instead of forcing CF6 early. */
+    if (mnCharSel_804A0BC0[0]->x5 == 1 ||
+        mnCharSel_804A0BD0[0]->x5 != 0 ||
+        mnCharSel_803F0DFC.doors[0].sel_icon >= 0x19)
+    {
+        return 0;
+    }
+
+    mnCharSel_vita_start_latched = 0;
+    mnCharSel_804D6CF7 = 1;
+    mnCharSel_804D6CF6 = 1;
+    mnCharSel_804D6CF2 = 0xff;
+    return 1;
+}
+
+int mnCharSel_VitaTryStart(void)
+{
+    if (mnCharSel_804D6CB0 == NULL || mnCharSel_804D6CF6 != 0 ||
+        mnCharSel_804D6CF5 != 1 || mnCharSel_804A0BC0[0] == NULL ||
+        mnCharSel_803F0DFC.doors[0].sel_icon >= 0x19 ||
+        mnCharSel_804A0BC0[0]->x5 == 1)
+    {
+        return 0;
+    }
+
+    /* Preserve a real Vita START edge until the original token/cooldown state
+     * reaches the exact condition accepted by Scene_OnFrame. */
+    mnCharSel_vita_start_latched = 1;
+    return mnCharSel_VitaConsumeLatchedStart() ? 1 : 2;
+}
+#endif
+
 void mnCharSel_Scene_OnFrame(void)
 {
     int num_slots;
@@ -5392,6 +5548,16 @@ void mnCharSel_Scene_OnFrame(void)
     int i;
 
     PAD_STACK(8);
+#ifdef MELEE_VITA_PLATFORM
+    if (mnCharSel_vita_deferred_audio_start &&
+        HSD_SynthSFXGetPendingLoadCount() == 0)
+    {
+        mnCharSel_vita_deferred_audio_start = 0;
+        mv_css_vita_trace("GAME_CSS_DEFERRED_AUDIO_BEGIN");
+        lbAudioAx_80023F28(gmMainLib_8015ECB0());
+        mv_css_vita_trace("GAME_CSS_DEFERRED_AUDIO_PASS");
+    }
+#endif
 
     mnCharSel_804D6CEC += 1;
     if (mnCharSel_804D6CF6 <= 1) {
@@ -5464,6 +5630,10 @@ void mnCharSel_Scene_OnFrame(void)
     if (mnCharSel_804D6CF2 != 0) {
         mnCharSel_804D6CF2--;
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (mnCharSel_VitaConsumeLatchedStart())
+        mv_css_vita_trace("GAME_CSS_VITA_START_CONSUMED");
+#endif
     switch (mnCharSel_804D6CF6) {
     case 1:
         for (i = 0; i < 4; i++) {
@@ -5474,11 +5644,24 @@ void mnCharSel_Scene_OnFrame(void)
             }
         }
         if (mnCharSel_804D6CF6 != 0) {
+#ifdef MELEE_VITA_PLATFORM
+            mv_css_vita_trace("GAME_CSS_EXIT_SCENE_COMPLETE_BEGIN");
+#endif
             gm_801A4B60();
+#ifdef MELEE_VITA_PLATFORM
+            mv_css_vita_trace("GAME_CSS_EXIT_SCENE_COMPLETE_PASS");
+#endif
             if (mnCharSel_804D6CF5 == 4) {
                 lbAudioAx_8002411C(0x147);
             }
-            sfxForward();
+#ifdef MELEE_VITA_PLATFORM
+            if (HSD_SynthSFXGetPendingLoadCount() != 0)
+                mv_css_vita_trace("GAME_CSS_EXIT_SFX_DEFERRED");
+            else
+#endif
+            {
+                sfxForward();
+            }
         }
         break;
     case 2:

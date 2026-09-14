@@ -6,7 +6,7 @@ import struct
 from arm_harness import ArmHarness
 from arm_component import boot_component
 from unicorn import UC_HOOK_CODE
-from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC
+from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP
 
 ASSET = Path("orig/GALE01/files/ItCo.dat")
 ARTICLE_COUNTS = (43, 118, 47)
@@ -63,7 +63,28 @@ for model in models:
     joint = ptr(raw, relocs, model)
     if joint is not None:
         joint_roots.add(joint)
-assert len(joint_roots) == 78, f"unexpected unique item model root count {len(joint_roots)}"
+assert len(joint_roots) == 78, f"unexpected generic item model root count {len(joint_roots)}"
+
+# Food (common item kind 18) replaces the Article base joint with one of 28
+# HSD_Joint roots stored in its bespoke special-attribute table. These roots
+# and the scalar count/heal/placement fields must cross the endian boundary too.
+food_article = ptr(raw, relocs, article_tables[0] + 18 * 4)
+assert food_article is not None
+food_attrs = ptr(raw, relocs, food_article + 4)
+assert food_attrs is not None
+food_count = word(raw, food_attrs)
+assert food_count == 28, f"unexpected Food count {food_count}"
+food_expected = []
+for i in range(food_count):
+    rec = food_attrs + i * 0x10
+    joint = ptr(raw, relocs, rec + 4)
+    assert joint is not None, f"Food {i} missing model joint"
+    heal = struct.unpack_from(">i", raw, 32 + rec + 8)[0]
+    xoff = struct.unpack_from(">f", raw, 32 + rec + 0x0C)[0]
+    yoff = struct.unpack_from(">f", raw, 32 + rec + 0x10)[0]
+    food_expected.append((rec, joint, heal, xoff, yoff))
+    joint_roots.add(joint)
+assert len(joint_roots) == 106, f"unexpected item+Food HSD root count {len(joint_roots)}"
 
 arm = ArmHarness("build/vita-full/melee_vita")
 # The harness uses a bump allocator and intentionally ignores free(); the real Vita
@@ -74,6 +95,12 @@ arm.heap_end += extra_heap
 
 
 def silent(m, _address, _size, _data):
+    message = arm.string(m.reg_read(UC_ARM_REG_R0)).decode(errors="replace")
+    if "VITA_HSD_GRAPH_SET_VALIDATE_FAIL" in message:
+        root = struct.unpack("<I", m.mem_read(m.reg_read(UC_ARM_REG_SP), 4))[0]
+        print(f"HSD_VALIDATE file={arm.string(m.reg_read(UC_ARM_REG_R1)).decode()} label={arm.string(m.reg_read(UC_ARM_REG_R2)).decode()} index={m.reg_read(UC_ARM_REG_R3)} root=0x{root:08x}", flush=True)
+    elif "VITA_ITEM_STATE_RAW" in message:
+        print(message, flush=True)
     m.reg_write(UC_ARM_REG_PC, m.reg_read(UC_ARM_REG_LR))
 
 
@@ -85,7 +112,34 @@ src = arm.alloc(len(raw))
 arm.uc.mem_write(src, raw)
 name = arm.alloc(len(b"ItCo.dat\0"))
 arm.uc.mem_write(name, b"ItCo.dat\0")
-arm.call("mv_gameplay_archive_prepare_raw", src, len(raw), name)
+try:
+    arm.call("mv_gameplay_archive_prepare_raw", src, len(raw), name)
+except AssertionError as limit:
+    if str(limit) != "mv_gameplay_archive_prepare_raw: did not return":
+        raise
+    for _ in range(12):
+        pc = arm.uc.reg_read(UC_ARM_REG_PC)
+        thumb = bool(arm.uc.reg_read(UC_ARM_REG_CPSR) & 32)
+        arm.uc.emu_start(pc | thumb, arm.stop, timeout=30000000, count=100000000)
+        if arm.uc.reg_read(UC_ARM_REG_PC) == arm.stop:
+            break
+    assert arm.uc.reg_read(UC_ARM_REG_PC) == arm.stop, "ItCo nativeizer timed out"
+
+# Food scalar fields must be native ARM values before relocation, while each
+# x4 HSD_Joint relocation word remains byte-for-byte untouched.
+data_base = src + 32
+native_food_count = struct.unpack("<i", arm.uc.mem_read(data_base + food_attrs, 4))[0]
+assert native_food_count == food_count, (native_food_count, food_count)
+for i, (rec, joint, heal, xoff, yoff) in enumerate(food_expected):
+    raw_joint_bytes = raw[32 + rec + 4:32 + rec + 8]
+    native_joint_bytes = bytes(arm.uc.mem_read(data_base + rec + 4, 4))
+    assert native_joint_bytes == raw_joint_bytes, f"Food {i} relocation word was mutated"
+    native_heal = struct.unpack("<i", arm.uc.mem_read(data_base + rec + 8, 4))[0]
+    native_xoff = struct.unpack("<f", arm.uc.mem_read(data_base + rec + 0x0C, 4))[0]
+    native_yoff = struct.unpack("<f", arm.uc.mem_read(data_base + rec + 0x10, 4))[0]
+    assert native_heal == heal, (i, native_heal, heal)
+    assert abs(native_xoff - xoff) < 1e-6, (i, native_xoff, xoff)
+    assert abs(native_yoff - yoff) < 1e-6, (i, native_yoff, yoff)
 
 # Every root JObj flag must now equal the retail BE numeric value when read as ARM LE.
 for joint in joint_roots:
@@ -105,7 +159,7 @@ for joint in sorted(joint_roots):
     loaded += 1
 
 print(
-    f"PASS ItCo item HSD: articles={len(articles)} models={len(models)} "
-    f"joint_roots={len(joint_roots)} loaded={loaded}; raw conversion, relocation, "
+    f"PASS ItCo item HSD+Food: articles={len(articles)} models={len(models)} "
+    f"food={food_count} joint_roots={len(joint_roots)} loaded={loaded}; raw conversion, relocation, "
     "RObj bytecode refs and original HSD load/remove all succeeded"
 )

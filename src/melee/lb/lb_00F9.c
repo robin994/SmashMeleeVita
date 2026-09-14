@@ -153,6 +153,13 @@ void lb_8000FD48(HSD_JObj* jobj, DynamicsDesc* desc, size_t max_count)
     desc->count = 0;
 
     while ((s32) desc->count < (s32) max_count) {
+#ifdef MELEE_VITA_PLATFORM
+        if (jobj == NULL) {
+            OSReport("VITA_DYNAMICS_CHAIN_SHORT requested=%u built=%u desc=%p\n",
+                     (unsigned) max_count, desc->count, desc);
+            break;
+        }
+#endif
         if ((s32) desc->count == 0) {
             desc->data = (prev = popDynamicsData());
         } else {
@@ -1001,9 +1008,30 @@ void lb_80011710(DynamicsDesc* arg0, DynamicsDesc* arg1)
     arg1->pos.y = arg0->pos.y;
     arg1->pos.z = arg0->pos.z;
     data1 = arg1->data;
+#ifdef MELEE_VITA_PLATFORM
+    if (arg0->count == 0 || arg1->count == 0 || arg0->data == NULL ||
+        data1 == NULL)
+    {
+        if (arg0->count != arg1->count) {
+            OSReport("VITA_DYNAMICS_COUNT_MISMATCH source=%u built=%u\n",
+                     arg0->count, arg1->count);
+        }
+        return;
+    }
+#endif
     data0 = &arg0->data->desc.lb_unk1.array[0];
+#ifdef MELEE_VITA_PLATFORM
+    if (arg0->count != arg1->count) {
+        OSReport("VITA_DYNAMICS_COUNT_MISMATCH source=%u built=%u\n",
+                 arg0->count, arg1->count);
+    }
+    for (data1 = arg1->data, i = 0;
+         i < (int) arg0->count && i < (int) arg1->count && data1 != NULL;
+         data1 = data1->next, i++)
+#else
     for (data1 = arg1->data, i = 0; i < (int) arg0->count;
          data1 = data1->next, i++)
+#endif
     {
         s32 tmp0, tmp1;
         data1->desc.lb_unk0.unk_4C = data0[i].unk_0;

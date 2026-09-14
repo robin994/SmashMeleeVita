@@ -1,14 +1,14 @@
 # SmashMeleeVita
 
 Experimental native PS Vita port based on [doldecomp/melee](https://github.com/doldecomp/melee).
-**Not playable yet.** The current build reads original big-endian HSD menu data, decodes GX
-textures on ARM and renders the static `MenMainBack` geometry through its original HSD camera.
-This is still a diagnostic scene/browser, not the original menu loop.
+**Not playable yet.** v3.67 runs the original opening/title/menu callbacks, Character Select and
+Stage Select, then continues through Melee's original `GameMode` and `GameScene` loop toward the
+first real Training/VS match. GameCube HSD/GX output is converted on ARM and replayed by vitaGL.
 Upstream history and source provenance are preserved. Port changes are currently local.
 
-v2.6 executes original GM_BOOT selection and GS_MEMCARD OnEnter with native camera/GObj
-initialization. ARM checks pass; physical Vita validation is pending. The scene OnFrame,
-opening movie and title screen still do not run. Audio initialization remains partial.
+The v3.67 package removes the confirmed `MnSlMap.usd` ShapeSet crash and repairs the common SIS
+camera/projection path used by menu labels, CSS names and difficulty text. Linked-ARM regressions
+pass; the visual fixes and first match still require validation on physical Vita hardware.
 
 See [PORTING_STATUS.md](PORTING_STATUS.md) for verified results and remaining work.
 Original GameCube build instructions remain in [.github/README.md](.github/README.md).
@@ -31,20 +31,26 @@ Requirements: VitaSDK with vita2d, CMake, Make, and Python 3.
 
 ```sh
 make -f Makefile.vita
-make -f Makefile.vita boot-assets
+make -f Makefile.vita full-assets
 ```
 
-1. Install `build/vita/SmashMeleeVita-assets.vpk` with VitaShell (title ID `SMEL00001`, version 00.18).
-2. Extract `build/vita/SmashMeleeVita-boot-assets.zip` into **ux0:data/**. This supplies eight original archives under
-   `ux0:data/SmashMeleeVita/files/`. The previous menu-only ZIP is insufficient.
-3. Launch Melee Vita Runtime. It starts on the static `MenMainBack` scene using
-   `ScMenMain_cam_int1_camera`; Square toggles the texture browser, L/R changes texture pages,
-   Triangle toggles diagnostics and SELECT+START exits.
+1. Install the current named hardware candidate
+   `build/vita-full/SmashMeleeVita-v3.67-original-gamemode-sss-shapeset-sis.vpk` with VitaShell
+   (title ID `SMEL00001`, APP_VER `00.77`). A default local rebuild writes the same package as
+   `build/vita/SmashMeleeVita-assets.vpk`.
+2. For the retail runtime, copy the **complete** extracted `orig/GALE01/files/`
+   tree recursively to `ux0:data/SmashMeleeVita/files/`. In particular, keep
+   subdirectories such as `audio/` and `audio/us/`; copying only the old
+   menu/boot ZIP will deadlock/fail when the original game requests SFX banks.
+   `make -f Makefile.vita full-assets` creates a hash-verified local ZIP with
+   the same complete tree if transferring a single archive is more convenient.
+3. Launch Melee Vita Runtime. It runs the opening movie, original title and original main menu.
+   For the current first-match test, choose 1P -> Training, select a character, press Start,
+   select a stage and press Start. SELECT+START remains the emergency exit chord.
 4. Retrieve `ux0:data/SmashMeleeVita/runtime.log` after the run. Each launch replaces the log.
 
 The VPK contains program code only. The local data ZIP contains a hash-verified copy of the
-user's menu and boot archives, not preconverted images. Data decoding takes place on Vita at runtime.
-Only 12 textures are allocated at once; page changes wait for rendering before freeing them.
+user's original disc files, not preconverted images. Data decoding takes place on Vita at runtime.
 A missing/corrupt archive produces an error screen and a log marker.
 
 The PAD diagnostics map Cross -> A, Square -> B, Circle -> X, Triangle -> Y, Select -> Z,

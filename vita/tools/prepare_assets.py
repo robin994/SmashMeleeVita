@@ -11,12 +11,17 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--orig', type=Path, default=ROOT/'orig/GALE01')
 parser.add_argument('--output', type=Path, default=ROOT/'build/vita/SmashMeleeVita-menu-assets.zip')
 parser.add_argument('--boot', action='store_true', help='Include original memory-card scene archives')
+parser.add_argument('--full', action='store_true',
+                    help='Include the complete extracted files/ tree required by the retail runtime')
 args = parser.parse_args()
 manifest = json.loads((args.orig/'extraction-manifest.json').read_text())
 if manifest['dol_sha1'] != '08e0bf20134dfcb260699671004527b2d6bb1a45':
     raise SystemExit('Unexpected extraction version')
 names = ['MnMaAll.usd']
-if args.boot:
+if args.full:
+    names = [r['path'][len('files/'):] for r in manifest['outputs']
+             if r['path'].startswith('files/')]
+elif args.boot:
     names += ['LbMcGame.dat', 'LbMcGame.usd', 'NtMemAc.dat', 'NtMemAc.usd',
               'NtMsgWin.dat', 'SdMsgBox.dat', 'SdMsgBox.usd']
 records = {r['path']: r for r in manifest['outputs']}

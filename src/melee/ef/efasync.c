@@ -1334,6 +1334,10 @@ void efAsync_LoadSync(int idx)
             }
         }
         lookup->data = &spC->data;
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_EF_LOAD_SYNC_PASS idx=%d file=%s data=%p preloaded=%u\n",
+                 idx, lookup->ef_DAT_file, lookup->data, (unsigned)chk);
+#endif
     }
 }
 

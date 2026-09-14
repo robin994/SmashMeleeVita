@@ -72,6 +72,8 @@ enum StageHsdRawKind {
     STAGE_HSD_RAW_FOG_ADJ,
     STAGE_HSD_RAW_FOG_DESC,
     STAGE_HSD_RAW_FOG_ANIM,
+    STAGE_HSD_RAW_DYNAMICS_DESC,
+    STAGE_HSD_RAW_DYNAMICS_DATA,
     STAGE_HSD_RAW_KIND_COUNT,
 };
 
@@ -275,6 +277,7 @@ static void stage_hsd_raw_spline(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_shape_joint(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_shape_anim(StageHsdRawContext* ctx, u32 offset);
 static void stage_hsd_raw_robj(StageHsdRawContext* ctx, u32 offset);
+static void stage_hsd_raw_robj_anim(StageHsdRawContext* ctx, u32 offset);
 
 static int stage_hsd_jobj_fobj_type_supported(u8 type)
 {
@@ -930,8 +933,8 @@ static void stage_hsd_raw_anim_joint(StageHsdRawContext* ctx, u32 offset)
     if (stage_hsd_raw_pointer(ctx, offset + 8, &target, "anim.aobj")) {
         stage_hsd_raw_aobj(ctx, target, 12);
     }
-    if (stage_hsd_raw_pointer(ctx, offset + 12, &target, "anim.legacy") != 0) {
-        stage_hsd_raw_fail(ctx, "anim.legacy", offset);
+    if (stage_hsd_raw_pointer(ctx, offset + 12, &target, "anim.robj")) {
+        stage_hsd_raw_robj_anim(ctx, target);
     }
     stage_swap32(raw + 16);
 }
@@ -1115,6 +1118,123 @@ static int stage_hsd_find_public(const MvDat* dat, const char* wanted,
     return 0;
 }
 
+typedef struct StageDynamicsPublic {
+    uint32_t root;
+    uint32_t source;
+    uint32_t count;
+    int has_source;
+} StageDynamicsPublic;
+
+static void stage_hsd_raw_dynamics_publics(StageHsdRawContext* ctx,
+                                           u32* root_count_out,
+                                           u32* record_count_out)
+{
+    StageDynamicsPublic* entries;
+    size_t entry_count = 0;
+    u32 root_count = 0;
+    u32 record_count = 0;
+
+    entries = calloc(ctx->dat->public_count, sizeof(*entries));
+    if (entries == NULL && ctx->dat->public_count != 0) {
+        stage_hsd_raw_fail(ctx, "stage.dynamics.alloc", 0);
+    }
+
+    /* Stage DATs expose cloth/flag chains as independent public
+     * DynamicsDesc roots (for example GrCs dynamicsdata_flag3/4/6). Their
+     * scalar fields are still PPC big-endian after HSD relocation. Gather all
+     * roots before mutating anything so shared source arrays can be converted
+     * exactly once using the largest referenced record count. */
+    for (u32 i = 0; i < ctx->dat->public_count; ++i) {
+        const char* name;
+        uint32_t target;
+        if (mv_dat_public(ctx->dat, i, &name, &target) != 0) {
+            free(entries);
+            stage_hsd_raw_fail(ctx, "stage.dynamics.public", i);
+        }
+        if (strncmp(name, "dynamicsdata_", 13) != 0) {
+            continue;
+        }
+
+        u8* raw = stage_hsd_raw_span(ctx, target, 0x14,
+                                     "stage.dynamics.desc");
+        uint32_t source = 0;
+        int source_result = stage_hsd_raw_pointer(
+            ctx, target, &source, "stage.dynamics.data");
+        u32 count = stage_be32(raw + 4);
+        if (count > 32 || (count != 0 && source_result != 1)) {
+            free(entries);
+            stage_hsd_raw_fail(ctx, "stage.dynamics.count/source", target);
+        }
+        entries[entry_count++] = (StageDynamicsPublic) {
+            target, source, count, source_result == 1
+        };
+    }
+
+    for (size_t i = 0; i < entry_count; ++i) {
+        StageDynamicsPublic* entry = &entries[i];
+        if (!stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_DYNAMICS_DESC,
+                                entry->root))
+        {
+            u8* raw = stage_hsd_raw_span(ctx, entry->root, 0x14,
+                                         "stage.dynamics.desc");
+            stage_swap32(raw + 4);
+            stage_swap32(raw + 8);
+            stage_swap32(raw + 0x0C);
+            stage_swap32(raw + 0x10);
+            ++root_count;
+        }
+    }
+
+    for (size_t i = 0; i < entry_count; ++i) {
+        StageDynamicsPublic* entry = &entries[i];
+        if (!entry->has_source || entry->count == 0) {
+            continue;
+        }
+        int first = 1;
+        u32 max_count = entry->count;
+        for (size_t j = 0; j < i; ++j) {
+            if (entries[j].has_source && entries[j].source == entry->source) {
+                first = 0;
+                break;
+            }
+        }
+        if (!first) {
+            continue;
+        }
+        for (size_t j = i + 1; j < entry_count; ++j) {
+            if (entries[j].has_source && entries[j].source == entry->source &&
+                entries[j].count > max_count)
+            {
+                max_count = entries[j].count;
+            }
+        }
+        if (stage_hsd_raw_seen(ctx, STAGE_HSD_RAW_DYNAMICS_DATA,
+                               entry->source))
+        {
+            continue;
+        }
+        u8* raw = stage_hsd_raw_span(ctx, entry->source,
+                                     (size_t) max_count * 0x3C,
+                                     "stage.dynamics.records");
+        for (size_t word = 0; word < (size_t) max_count * (0x3C / 4); ++word) {
+            stage_swap32(raw + word * 4);
+        }
+        record_count += max_count;
+    }
+
+    if (entry_count != 0) {
+        OSReport("VITA_STAGE_DYNAMICS_NATIVE roots=%u records=%u\n",
+                 root_count, record_count);
+    }
+    free(entries);
+    if (root_count_out != NULL) {
+        *root_count_out = root_count;
+    }
+    if (record_count_out != NULL) {
+        *record_count_out = record_count;
+    }
+}
+
 static int stage_hsd_find_effect_public(const MvDat* dat, uint32_t* offset,
                                         const char** public_name)
 {
@@ -1144,6 +1264,199 @@ static int stage_hsd_name_ends_with(const char* name, const char* suffix)
     size_t suffix_len = strlen(suffix);
     return name_len >= suffix_len &&
            strcmp(name + name_len - suffix_len, suffix) == 0;
+}
+
+static u32 stage_repack_ppc_bitfields(u32 word, const u8* widths, size_t count)
+{
+    u32 native = 0;
+    u32 ppc_shift = 32;
+    u32 arm_shift = 0;
+
+    for (size_t i = 0; i < count; ++i) {
+        u32 width = widths[i];
+        u32 mask;
+        if (width == 0 || width > 31 || width > ppc_shift ||
+            arm_shift + width > 32)
+        {
+            HSD_Panic(__FILE__, __LINE__, "stage script bitfield layout invalid");
+        }
+        ppc_shift -= width;
+        mask = (1u << width) - 1u;
+        native |= ((word >> ppc_shift) & mask) << arm_shift;
+        arm_shift += width;
+    }
+    if (ppc_shift != 0 || arm_shift != 32) {
+        HSD_Panic(__FILE__, __LINE__, "stage script bitfield width mismatch");
+    }
+    return native;
+}
+
+static void stage_store_native32(void* ptr, u32 value)
+{
+    memcpy(ptr, &value, sizeof(value));
+}
+
+static void stage_yaku_repack_word(MvDat* dat, u32 offset,
+                                   const u8* widths, size_t count)
+{
+    u8* raw = (u8*) (uintptr_t) mv_dat_span(dat, offset, sizeof(u32));
+    if (raw == NULL) {
+        HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll command outside DAT");
+    }
+    stage_store_native32(raw,
+                         stage_repack_ppc_bitfields(stage_be32(raw), widths,
+                                                    count));
+}
+
+static void stage_yaku_scripts_prepare_raw(MvDat* dat, const char* filename)
+{
+    static const u8 command_fields[] = { 6, 26 };
+    static const u8 hitbox0_fields[] = { 6, 3, 3, 7, 13 };
+    static const u8 pair16_fields[] = { 16, 16 };
+    static const u8 hitbox3_fields[] = { 9, 9, 9, 1, 1, 1, 1, 1 };
+    static const u8 hitbox4_fields[] = { 9, 5, 1, 8, 3, 4, 1, 1 };
+    static const u8 effect0_fields[] = { 6, 10, 16 };
+    static const u8 item23_fields[] = { 6, 13, 13 };
+    uint32_t table;
+    uint32_t roots[8] = { 0 };
+    u32 root_count = 0;
+    u32 command_count = 0;
+    u32 hitbox_count = 0;
+    u32 goto_count = 0;
+    int terminated = 0;
+
+    if (stage_hsd_find_public(dat, "ALDYakuAll", &table) <= 0) {
+        return;
+    }
+
+    const u8* first = mv_dat_span(dat, table, sizeof(u32));
+    if (first == NULL || stage_be32(first) != 0) {
+        HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll state zero invalid");
+    }
+
+    /* ALDYakuAll replaces ItemStateDesc::xC_script for It_PKind_Random.
+     * These command streams retain the GameCube/PPC bitfield layout after
+     * HSD pointer relocation.  On ARM the first six serialized bits would be
+     * interpreted as the low six bits of the first byte (for example retail
+     * 0x2c000008, opcode 11, becomes opcode 44).  Repack only typed scalar
+     * command words here; relocation words (the target following opcode 7)
+     * remain byte-for-byte raw for HSD_ArchiveParse. */
+    for (u32 state = 1; state < 8; ++state) {
+        uint32_t script;
+        int result = mv_dat_pointer(dat, table + state * sizeof(uint32_t), &script);
+        if (result < 0) {
+            HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll script pointer invalid");
+        }
+        if (result == 0) {
+            terminated = 1;
+            break;
+        }
+
+        int duplicate = 0;
+        for (u32 i = 0; i < root_count; ++i) {
+            if (roots[i] == script) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        roots[root_count++] = script;
+
+        u32 word_index = 0;
+        int script_done = 0;
+        while (!script_done && word_index < 64) {
+            u32 offset = script + word_index * sizeof(u32);
+            const u8* raw = mv_dat_span(dat, offset, sizeof(u32));
+            if (raw == NULL) {
+                HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll script outside DAT");
+            }
+            u32 opcode = stage_be32(raw) >> 26;
+            ++command_count;
+
+            switch (opcode) {
+            case 0: /* Reset/end */
+                stage_yaku_repack_word(dat, offset, command_fields,
+                                       sizeof(command_fields));
+                ++word_index;
+                script_done = 1;
+                break;
+            case 1: /* SynchronousTimer */
+            case 3: /* SetLoop */
+            case 4: /* ExecuteLoop */
+            case 15: /* item command without scalar payload */
+                stage_yaku_repack_word(dat, offset, command_fields,
+                                       sizeof(command_fields));
+                ++word_index;
+                break;
+            case 7: { /* Goto + relocatable pointer word */
+                uint32_t target;
+                stage_yaku_repack_word(dat, offset, command_fields,
+                                       sizeof(command_fields));
+                if (mv_dat_pointer(dat, offset + sizeof(u32), &target) != 1) {
+                    HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll goto target invalid");
+                }
+                word_index += 2;
+                ++goto_count;
+                script_done = 1;
+                break;
+            }
+            case 10: /* Item effect command: opcode/arg plus four s16 pairs. */
+                if (mv_dat_span(dat, offset, 5 * sizeof(u32)) == NULL) {
+                    HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll effect outside DAT");
+                }
+                stage_yaku_repack_word(dat, offset + 0x00, effect0_fields,
+                                       sizeof(effect0_fields));
+                for (u32 payload = 1; payload < 5; ++payload) {
+                    stage_yaku_repack_word(dat, offset + payload * 4,
+                                           pair16_fields, sizeof(pair16_fields));
+                }
+                word_index += 5;
+                break;
+            case 23:
+                stage_yaku_repack_word(dat, offset, item23_fields,
+                                       sizeof(item23_fields));
+                ++word_index;
+                break;
+            case 11: { /* Create item hitbox: six serialized words. */
+                if (mv_dat_span(dat, offset, 6 * sizeof(u32)) == NULL) {
+                    HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll hitbox outside DAT");
+                }
+                stage_yaku_repack_word(dat, offset + 0x00, hitbox0_fields,
+                                       sizeof(hitbox0_fields));
+                stage_yaku_repack_word(dat, offset + 0x04, pair16_fields,
+                                       sizeof(pair16_fields));
+                stage_yaku_repack_word(dat, offset + 0x08, pair16_fields,
+                                       sizeof(pair16_fields));
+                stage_yaku_repack_word(dat, offset + 0x0C, hitbox3_fields,
+                                       sizeof(hitbox3_fields));
+                stage_yaku_repack_word(dat, offset + 0x10, hitbox4_fields,
+                                       sizeof(hitbox4_fields));
+                /* Word 5 is intentionally byte-addressed by it_802790C0 and
+                 * therefore already has the correct serialized byte order. */
+                word_index += 6;
+                ++hitbox_count;
+                break;
+            }
+            default:
+                OSReport("VITA_STAGE_YAKU_SCRIPT_INVALID file=%s state=%u word=%u opcode=%u off=%08x\n",
+                         filename != NULL ? filename : "?", state, word_index,
+                         opcode, offset);
+                HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll opcode unsupported");
+            }
+        }
+        if (!script_done) {
+            HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll script unterminated");
+        }
+    }
+
+    if (!terminated) {
+        HSD_Panic(__FILE__, __LINE__, "stage ALDYakuAll table unterminated");
+    }
+    OSReport("VITA_STAGE_YAKU_SCRIPT_NATIVE_PASS file=%s scripts=%u commands=%u hitboxes=%u gotos=%u\n",
+             filename != NULL ? filename : "?", root_count, command_count,
+             hitbox_count, goto_count);
 }
 
 void mv_hsd_joint_graph_prepare_raw(void* bytes, size_t size,
@@ -1362,14 +1675,18 @@ void mv_fighter_archive_prepare_raw(void* bytes, size_t size, const char* filena
             mv_dat_close(&dat);
             return;
         }
-        if (strncmp(name, "Ply", 3) != 0) {
+        if (strncmp(name, "Ply", 3) != 0 || strstr(name + 3, "5K") == NULL) {
             continue;
         }
-        if (stage_hsd_name_ends_with(name, "5K_Share_joint")) {
+        /* Retail alternate costumes insert a colour token after 5K, e.g.
+         * PlySamus5KBk_Share_joint. Matching only 5K_Share_joint left every
+         * non-default costume in GameCube byte order and could alias ordinary
+         * ROOT_XLU flags to JOBJ_PTCL on little-endian ARM. */
+        if (stage_hsd_name_ends_with(name, "_Share_joint")) {
             joint_root = target;
             joint_name = name;
         } else if (stage_hsd_name_ends_with(name,
-                                            "5K_Share_matanim_joint")) {
+                                            "_Share_matanim_joint")) {
             matanim_root = target;
         }
     }
@@ -2105,6 +2422,73 @@ void mv_ifall_archive_prepare_raw(void* bytes, size_t size, const char* filename
     mv_dat_close(&dat);
 }
 
+void mv_training_archive_prepare_raw(void* bytes, size_t size,
+                                             const char* filename)
+{
+    MvDat dat;
+    uint32_t table;
+    MvIfAllRoots roots = { 0 };
+
+    if (bytes == NULL || size == 0 || mv_dat_open(&dat, bytes, size) != 0)
+        return;
+    if (stage_hsd_find_public(&dat, "ScGamTraining_scene_models", &table) <= 0) {
+        mv_dat_close(&dat);
+        return;
+    }
+
+    ifall_collect_model_table(&dat, table, &roots);
+    if (roots.model_count == 0 || roots.joint_count == 0) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "Training model table empty");
+    }
+
+    /* Validate the untouched PPC descriptors before mutating them.  GmTrain
+       has no real JOBJ_PTCL nodes; several ROOT_XLU flags (0x20000000) only
+       become a false 0x20 PTCL flag when consumed unswapped on little-endian
+       ARM, which is the v3.82 hardware panic this path fixes. */
+    MvNativeHsd probe = { 0 };
+    int validation = mv_hsd_native_validate_raw_set(
+        &dat, roots.joints, roots.joint_count, &probe);
+    if (validation != 0) {
+        OSReport("VITA_TRAINING_VALIDATE_FAIL file=%s code=%d unsupported=%s off=%08x val=%08x\n",
+                 filename != NULL ? filename : "GmTrain", validation,
+                 mv_hsd_native_unsupported_name(probe.unsupported_kind),
+                 probe.unsupported_offset, probe.unsupported_value);
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "Training JObj validation failed");
+    }
+
+    StageHsdRawContext ctx = { 0 };
+    ctx.dat = &dat;
+    ctx.seen = calloc(STAGE_HSD_RAW_MAX_SEEN, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) {
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "Training raw visited allocation failed");
+    }
+    for (size_t i = 0; i < roots.joint_count; ++i)
+        stage_hsd_raw_joint(&ctx, roots.joints[i]);
+    for (size_t i = 0; i < roots.anim_count; ++i)
+        stage_hsd_raw_anim_joint(&ctx, roots.anims[i]);
+    for (size_t i = 0; i < roots.matanim_count; ++i)
+        stage_hsd_raw_matanim_joint(&ctx, roots.matanims[i]);
+    for (size_t i = 0; i < roots.shape_count; ++i)
+        stage_hsd_raw_shape_joint(&ctx, roots.shapes[i]);
+
+    OSReport("VITA_TRAINING_HSD_RAW_NATIVE_PASS file=%s models=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u animjoints=%u matjoints=%u shapejoints=%u\n",
+             filename != NULL ? filename : "GmTrain", roots.model_count,
+             ctx.converted[STAGE_HSD_RAW_JOINT],
+             ctx.converted[STAGE_HSD_RAW_DOBJ],
+             ctx.converted[STAGE_HSD_RAW_MOBJ],
+             ctx.converted[STAGE_HSD_RAW_POBJ],
+             ctx.converted[STAGE_HSD_RAW_TOBJ],
+             ctx.converted[STAGE_HSD_RAW_ANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_MATANIM_JOINT],
+             ctx.converted[STAGE_HSD_RAW_SHAPE_JOINT]);
+
+    free(ctx.seen);
+    mv_dat_close(&dat);
+}
+
 void mv_scene_sidecar_archive_prepare_raw(void* bytes, size_t size,
                                           const char* filename)
 {
@@ -2463,6 +2847,8 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
         HSD_Panic(__FILE__, __LINE__, "stage raw map_head invalid");
     }
 
+    stage_yaku_scripts_prepare_raw(&dat, filename);
+
     u32 map_count = mv_be32(map_head + 0x0C);
     if (map_count > 0x400) {
         OSReport("VITA_STAGE_HSD_RAW_INVALID kind=map-count value=%u file=%s\n",
@@ -2550,6 +2936,100 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
         }
     }
 
+    /* quake_model_set is an independent DynamicModelDesc public. It is not a
+     * child of map_head, but grLib_801C9CEC() loads its JObj and animation
+     * table directly for Camera_RequestQuake(). Leaving these descriptors in
+     * GameCube byte order makes fields such as FObjDesc::length=5 appear as
+     * 0x05000000 on ARM; the resulting animation can poison the quake JObj
+     * translation and therefore the gameplay CObj view matrix. Nativeize this
+     * graph at the same pre-relocation boundary as ordinary stage models. */
+    uint32_t quake_model_offset = 0;
+    int quake_model_result =
+        stage_hsd_find_public(&dat, "quake_model_set", &quake_model_offset);
+    if (quake_model_result > 0) {
+        (void) stage_hsd_raw_span(&ctx, quake_model_offset, 16,
+                                  "stage.quake-model");
+        uint32_t target;
+        int result = stage_hsd_raw_pointer(&ctx, quake_model_offset, &target,
+                                           "stage.quake.joint");
+        if (result == 1) {
+            stage_hsd_raw_joint(&ctx, target);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "stage.quake.joint", quake_model_offset);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, quake_model_offset + 4, &target,
+                                       "stage.quake.anim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target, "stage.quake.anim",
+                                           stage_hsd_raw_anim_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "stage.quake.anim-table",
+                               quake_model_offset + 4);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, quake_model_offset + 8, &target,
+                                       "stage.quake.matanim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target,
+                                           "stage.quake.matanim",
+                                           stage_hsd_raw_matanim_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "stage.quake.matanim-table",
+                               quake_model_offset + 8);
+        }
+
+        result = stage_hsd_raw_pointer(&ctx, quake_model_offset + 12, &target,
+                                       "stage.quake.shapeanim-table");
+        if (result == 1) {
+            stage_hsd_raw_scene_anim_table(&ctx, target,
+                                           "stage.quake.shapeanim",
+                                           stage_hsd_raw_shape_joint);
+        } else if (result < 0) {
+            stage_hsd_raw_fail(&ctx, "stage.quake.shapeanim-table",
+                               quake_model_offset + 12);
+        }
+
+        OSReport("VITA_STAGE_QUAKE_HSD_RAW_NATIVE_PASS file=%s model=%08x\n",
+                 filename != NULL ? filename : "?", quake_model_offset);
+    }
+
+    /* map_head->unk28 is the stage material/flags table. Retail aliases these
+     * entries with HSD_MObjDesc objects: grDatFiles_801C6228 later ORs
+     * RENDER_SHADOW into entry->unk4, which is the MObj rendermode field.
+     * Nativeize every table entry here, before relocation, so the post-parse
+     * stage metadata pass must not byte-swap the same scalar a second time. */
+    u32 internal_count = mv_be32(map_head + 0x2C);
+    if (internal_count > 0x400) {
+        free(ctx.seen);
+        free(roots);
+        mv_dat_close(&dat);
+        HSD_Panic(__FILE__, __LINE__, "stage raw internal MObj count invalid");
+    }
+    if (internal_count != 0) {
+        uint32_t internal_table;
+        int result = stage_hsd_raw_pointer(&ctx, map_head_offset + 0x28,
+                                           &internal_table,
+                                           "stage.internal-mobj-table");
+        if (result != 1 ||
+            mv_dat_span(&dat, internal_table,
+                        (size_t) internal_count * sizeof(u32)) == NULL)
+        {
+            free(ctx.seen);
+            free(roots);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "stage raw internal MObj table invalid");
+        }
+        for (u32 i = 0; i < internal_count; ++i) {
+            uint32_t mobj;
+            result = stage_hsd_raw_pointer(&ctx, internal_table + i * 4,
+                                           &mobj, "stage.internal-mobj");
+            if (result == 1) {
+                stage_hsd_raw_mobj(&ctx, mobj);
+            }
+        }
+    }
+
     /* UnkStageDat_x8_t is not only a model descriptor. The same serialized
      * map entry also owns animation tables plus camera/light/fog descriptors.
      * HSD_ArchiveParse relocates these pointers but does not byte-swap their
@@ -2620,9 +3100,16 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
                                   "stage.map_plit.light-list");
     }
 
-    OSReport("VITA_STAGE_HSD_RAW_NATIVE_PASS file=%s maps=%u roots=%u extern_roots=%u map_plit=%u validate_joints=%u validate_dobjs=%u validate_pobjs=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u vtx=%u images=%u tluts=%u matrices=%u envelopes=%u splines=%u animjoints=%u matjoints=%u shapejoints=%u cameras=%u lights=%u lightanims=%u wobjs=%u fogs=%u\n",
+    u32 dynamics_root_count = 0;
+    u32 dynamics_record_count = 0;
+    stage_hsd_raw_dynamics_publics(&ctx, &dynamics_root_count,
+                                   &dynamics_record_count);
+
+    OSReport("VITA_STAGE_HSD_RAW_NATIVE_PASS file=%s maps=%u roots=%u extern_roots=%u quake_model=%u map_plit=%u dynamics=%u dynamics_records=%u validate_joints=%u validate_dobjs=%u validate_pobjs=%u joints=%u dobjs=%u mobjs=%u pobjs=%u tobjs=%u vtx=%u images=%u tluts=%u matrices=%u envelopes=%u splines=%u animjoints=%u matjoints=%u shapejoints=%u cameras=%u lights=%u lightanims=%u wobjs=%u fogs=%u\n",
              filename != NULL ? filename : "?", map_count, root_count,
-             external_root_count, map_plit_result > 0 ? 1u : 0u,
+             external_root_count, quake_model_result > 0 ? 1u : 0u,
+             map_plit_result > 0 ? 1u : 0u,
+             dynamics_root_count, dynamics_record_count,
              (unsigned) validated_joints, (unsigned) validated_dobjs,
              (unsigned) validated_pobjs,
              ctx.converted[STAGE_HSD_RAW_JOINT],
@@ -3128,12 +3615,23 @@ void mv_stage_archive_prepare(HSD_Archive* archive, UnkStageDat* map_head,
     if (map_head->unk28 != NULL && map_head->unk2C > 0) {
         stage_require_range(archive, map_head->unk28,
                             (size_t) map_head->unk2C * sizeof(*map_head->unk28));
-        if (raw) {
-            for (s32 i = 0; i < map_head->unk2C; ++i) {
-                UnkStageDatInternal* entry = map_head->unk28[i];
-                if (entry != NULL) {
-                    stage_require_range(archive, entry, sizeof(*entry));
-                    stage_swap32(&entry->unk4);
+        for (s32 i = 0; i < map_head->unk2C; ++i) {
+            UnkStageDatInternal* entry = map_head->unk28[i];
+            if (entry != NULL) {
+                stage_require_range(archive, entry, sizeof(*entry));
+                /* This aliases HSD_MObjDesc::rendermode and was already
+                 * nativeized by mv_stage_archive_prepare_raw(). Swapping it
+                 * here again produced 0x3c001000 on Great Bay after
+                 * MObjLoad added RENDER_TOON. Validate instead of mutating. */
+                const u32 flags = entry->unk4;
+                const u32 allowed = 0x6C007FFFu;
+                if ((flags & ~allowed) != 0 ||
+                    (flags & 0x60000000u) == 0x20000000u)
+                {
+                    OSReport("VITA_STAGE_INTERNAL_MOBJ_INVALID index=%d flags=%08x\n",
+                             i, flags);
+                    HSD_Panic(__FILE__, __LINE__,
+                              "stage internal MObj flags not native");
                 }
             }
         }

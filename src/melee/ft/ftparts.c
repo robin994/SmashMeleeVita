@@ -396,6 +396,13 @@ void ftParts_SetupParts(Fighter_GObj* fighter_obj)
     u32 part = 0;
     u32 tree_depth = 0;
     int dobj_count = 0;
+#ifdef MELEE_VITA_PLATFORM
+    u32 vita_steps = 0;
+    bool vita_guard_hit = false;
+    OSReport("VITA_FIGHTER_PARTS_BEGIN kind=%d expected=%u root=%p\n",
+             (int) fp->kind, (unsigned) ftPartsTable[fp->kind]->parts_num,
+             (void*) jobj);
+#endif
 
     if (ftPartsTable[fp->kind]->parts_num > MAX_FT_PARTS) {
         HSD_ASSERTREPORT(503, 0, "fighter parts num over! player %d\n",
@@ -403,6 +410,19 @@ void ftParts_SetupParts(Fighter_GObj* fighter_obj)
     }
 
     while (jobj != NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        if (++vita_steps > MAX_FT_PARTS * 4U ||
+            part >= ftPartsTable[fp->kind]->parts_num)
+        {
+            OSReport("VITA_FIGHTER_PARTS_GUARD kind=%d part=%u expected=%u steps=%u jobj=%p depth=%u\n",
+                     (int) fp->kind, (unsigned) part,
+                     (unsigned) ftPartsTable[fp->kind]->parts_num,
+                     (unsigned) vita_steps, (void*) jobj,
+                     (unsigned) tree_depth);
+            vita_guard_hit = true;
+            break;
+        }
+#endif
         if (ftParts_8007506C(fp->kind, part) != 0) {
             fp->parts[part].joint = NULL;
             part++;
@@ -447,6 +467,12 @@ void ftParts_SetupParts(Fighter_GObj* fighter_obj)
     }
 
     fp->dobj_list.count = dobj_count;
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_PARTS_PASS kind=%d visited=%u expected=%u dobjs=%d steps=%u guard=%d\n",
+             (int) fp->kind, (unsigned) part,
+             (unsigned) ftPartsTable[fp->kind]->parts_num, dobj_count,
+             (unsigned) vita_steps, (int) vita_guard_hit);
+#endif
 
     if (part != ftPartsTable[fp->kind]->parts_num) {
         HSD_ASSERTREPORT(546, 0, "fighter parts num not match! player %d\n",
@@ -777,6 +803,9 @@ HSD_TObj* ftParts_80075240(DObjList* arg0, int n)
             mobj = dobj != NULL ? dobj->mobj : NULL;
             if (mobj != NULL) {
                 tobj = HSD_MObjGetTObj(mobj);
+#ifdef MELEE_VITA_PLATFORM
+                int vita_tobj_steps = 0;
+#endif
                 while (true) {
                     if (tobj == NULL) {
                         break;
@@ -785,6 +814,13 @@ HSD_TObj* ftParts_80075240(DObjList* arg0, int n)
                         return tobj;
                     }
                     tobj_i++;
+#ifdef MELEE_VITA_PLATFORM
+                    if (++vita_tobj_steps > 256) {
+                        OSReport("VITA_FIGHTER_TOBJ_GUARD requested=%d dobj=%d seen=%d tobj=%p\n",
+                                 n, i, tobj_i, (void*) tobj);
+                        break;
+                    }
+#endif
                     tobj = HSD_TObjGetNext(tobj);
                 }
             }

@@ -24,6 +24,10 @@
 #include <dolphin/os.h>
 #include <dolphin/vi.h>
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_retail_runtime_start_render(int pass);
+#endif
+
 static void HSD_DVDInit(void);
 static void HSD_GXInit(void);
 static void HSD_OSInit(void);
@@ -276,6 +280,9 @@ void HSD_StartRender(HSD_RenderPass pass)
 {
     GXRenderModeObj* rmode = HSD_VIGetRenderMode();
     current_render_pass = pass;
+#ifdef MELEE_VITA_PLATFORM
+    mv_retail_runtime_start_render((int) pass);
+#endif
     if (rmode->aa) {
         GXSetPixelFmt(GX_PF_RGB565_Z16, current_z_fmt);
     } else {

@@ -47,6 +47,7 @@ extern void mv_fighter_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_gameplay_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_pause_scene_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_ifall_archive_prepare_raw(void*, size_t, const char*);
+extern void mv_training_archive_prepare_raw(void*, size_t, const char*);
 extern void mv_scene_sidecar_archive_prepare_raw(void*, size_t, const char*);
 
 typedef struct {
@@ -167,6 +168,10 @@ void mv_boot_archive_prepare_raw(void *bytes, size_t size, const char *filename)
      * intentionally unavailable. Detect and nativeize its complete HUD model
      * schema from public roots before relocation. */
     mv_ifall_archive_prepare_raw(bytes, size, filename);
+    /* Training exposes a DynamicModelDesc** public directly rather than a
+       SceneDesc. Nativeize it before HSD relocation so ROOT_XLU flags cannot
+       alias JOBJ_PTCL on little-endian ARM. */
+    mv_training_archive_prepare_raw(bytes, size, filename);
     /* SceneDesc sidecars such as IfCoGet/IfPrize are independent archives
        loaded from gameplay/UI callbacks, not children of IfAll. Nativeize the
        whole source-derived family before HSD relocation as well. */

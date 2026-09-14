@@ -4,6 +4,7 @@
 #include "hsd_data.h"
 #include "hsd_matanim_native.h"
 #include "hsd_native.h"
+#include "hsd_shapeanim_native.h"
 
 #include <melee/sc/types.h>
 #include <stdint.h>
@@ -41,6 +42,7 @@ static int sss_use_us;
 static MvNativeHsd sss_models[12];
 static MvNativeAnim sss_anims[12];
 static MvNativeMatAnim sss_matanims[12];
+static MvNativeShapeAnim sss_shapeanims[12];
 static MvCamera sss_camera;
 static HSD_WObjDesc sss_eye, sss_interest;
 static Vec3 sss_up;
@@ -109,6 +111,7 @@ static int build_camera(uint32_t offset)
 void mv_sss_vita_release(void)
 {
     for (unsigned i = 0; i < 12; ++i) {
+        mv_native_shapeanim_free(&sss_shapeanims[i]);
         mv_native_matanim_free(&sss_matanims[i]);
         mv_native_anim_free(&sss_anims[i]);
         mv_hsd_native_free(&sss_models[i]);
@@ -153,8 +156,13 @@ static int build_set(unsigned index, uint32_t base, StaticModelDesc *out)
         out->matanim_joint = sss_matanims[index].root;
     }
     r = table_pointer(base + 12, &target);
-    if (r != 0) return -7;
-    out->shapeanim_joint = NULL;
+    if (r < 0) return -7;
+    if (r == 1) {
+        if (mv_native_shapeanim_build_at(&sss_dat, target,
+                                         &sss_shapeanims[index]))
+            return -8;
+        out->shapeanim_joint = sss_shapeanims[index].root;
+    }
     return 0;
 }
 
@@ -193,7 +201,7 @@ int mv_sss_vita_prepare(int use_us, void **data_table)
         sss_use_us = use_us;
         if (sss_log) {
             fprintf(sss_log,
-                    "GAME_SSS_NATIVE_PREPARE_PASS source=%s sets=12 camera=table+0 renderer=vitaGL shapeanim=none\n",
+                    "GAME_SSS_NATIVE_PREPARE_PASS source=%s sets=12 camera=table+0 renderer=vitaGL shapeanim=native\n",
                     use_us ? "MnSlMap.usd" : "MnSlMap.dat");
             fflush(sss_log);
         }

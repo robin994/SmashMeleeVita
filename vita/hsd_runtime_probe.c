@@ -251,6 +251,8 @@ static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
     if (out->texture_count != 1) out->unsupported |= MV_GX_MATERIAL_UNSUPPORTED_MULTITEX;
 
     out->tobj_flags = first->flags & ~TEX_MTX_DIRTY;
+    out->texgen_src0 = (uint8_t)first->src;
+    out->texgen_valid_mask |= 1u;
     out->blending = first->blending;
     out->wrap_s = (uint8_t)first->wrap_s;
     out->wrap_t = (uint8_t)first->wrap_t;
@@ -297,6 +299,8 @@ static void capture_material_state(const HSD_DObj *dobj, MvGxMaterialState *out)
     const HSD_TObj *second = first->next;
     if (second) {
         out->tobj1_flags = second->flags & ~TEX_MTX_DIRTY;
+        out->texgen_src1 = (uint8_t)second->src;
+        out->texgen_valid_mask |= 2u;
         out->blending1 = second->blending;
         out->wrap_s1 = (uint8_t)second->wrap_s;
         out->wrap_t1 = (uint8_t)second->wrap_t;
@@ -475,4 +479,21 @@ int mv_hsd_gx_capture_runtime(HSD_JObj *root, int reset, int visibility, MvGxCap
     if (capture_joints(root,identity,NULL,0,visibility)) return -3;
     if (mv_gx_capture_stats(capture)) return -4;
     return 0;
+}
+
+int mv_hsd_shared_skin_lazy_probe(HSD_Joint *joint)
+{
+    if (!joint) return -1;
+    HSD_PObjDesc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.flags = POBJ_SKIN;
+    desc.u.joint = joint;
+    HSD_PObj *pobj = HSD_PObjLoadDesc(&desc);
+    if (!pobj) return -2;
+    HSD_PObjResolveRefs(pobj, &desc);
+    s32 success = 0;
+    HSD_JObj *resolved = HSD_IDGetData((u32) joint, &success);
+    int result = (success && resolved && pobj->u.jobj == resolved) ? 0 : -3;
+    HSD_PObjRemoveAll(pobj);
+    return result;
 }

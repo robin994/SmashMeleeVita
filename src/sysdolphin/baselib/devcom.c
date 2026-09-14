@@ -4,9 +4,31 @@
 #include "devcom.static.h"
 #include "synth.h"
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_gc_async_pump(void);
+extern unsigned mv_gc_async_pending(void);
+#endif
+
 bool HSD_DevComIsBusy(int idx)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* Busy-wait users on GameCube are released by hardware interrupts. Vita
+     * returns the state observed at entry, then advances one emulated hardware
+     * completion. Thus the submitting code can observe BUSY at least once. */
+    bool busy = (bool) devComStatus[idx];
+    if (busy) {
+        /* If DevCom still owns work but the Vita hardware-completion queues are
+         * empty, give the DVD scheduler a chance to repair a stale active latch
+         * or retry a previously rejected submission before pumping. */
+        if (mv_gc_async_pending() == 0)
+            HSD_DevComDVDWakeUp();
+        if (mv_gc_async_pending() != 0)
+            mv_gc_async_pump();
+    }
+    return busy;
+#else
     return (bool) devComStatus[idx];
+#endif
 }
 
 static void HSD_DevComUnlink(HSD_DevCom* dc)
@@ -326,8 +348,29 @@ void HSD_DevComDVDWakeUp(void)
     int buf_idx;
 
     if (HSD_DevCom_804D77F5 != 0) {
+#ifdef MELEE_VITA_PLATFORM
+        /* GameCube hardware cannot have an asserted DVD-active latch without
+         * a device operation capable of delivering the corresponding IRQ.
+         * On Vita all DVD/ARQ completions are represented by the cooperative
+         * host queue.  If that queue is empty, the latch is stale (typically
+         * after a scene/audio cancellation) and would otherwise block every
+         * later preload in state=2 forever. */
+        if (mv_gc_async_pending() == 0) {
+            OSReport("VITA_DEVCOM_STALE_DVD_RECOVER file=%d type=%04x size=%u src=%08lx dest=%08lx\n",
+                     dvdDC ? dvdDC->file : -1,
+                     dvdDC ? (unsigned)dvdDC->type : 0u,
+                     dvdDC ? (unsigned)dvdDC->size : 0u,
+                     dvdDC ? (unsigned long)dvdDC->src : 0ul,
+                     dvdDC ? (unsigned long)dvdDC->dest : 0ul);
+            HSD_DevCom_804D77F5 = 0;
+        } else {
+            OSRestoreInterrupts(enabled);
+            return;
+        }
+#else
         OSRestoreInterrupts(enabled);
         return;
+#endif
     }
     for (i = 0; i < 3; i++) {
         if ((dvdDC = devComStatus[i])) {
@@ -343,20 +386,39 @@ void HSD_DevComDVDWakeUp(void)
             }
             DVDFastOpen(dvdDC->file, &fileinfo);
             if (dvdDC->type == 0x21) {
-                DVDReadAsyncPrio(&fileinfo, (void*) dvdDC->dest,
-                                 MIN(dvdDC->size, 0x80000), (s32) dvdDC->src,
-                                 HSD_DevComDVDMemCallback, 2);
-                HSD_DevCom_804D77F5 = 1;
+                BOOL accepted = DVDReadAsyncPrio(
+                    &fileinfo, (void*) dvdDC->dest,
+                    MIN(dvdDC->size, 0x80000), (s32) dvdDC->src,
+                    HSD_DevComDVDMemCallback, 2);
+                HSD_DevCom_804D77F5 = accepted ? 1 : 0;
+#ifdef MELEE_VITA_PLATFORM
+                if (!accepted) {
+                    OSReport("VITA_DEVCOM_DVD_SUBMIT_FAIL file=%d type=%04x size=%u src=%08lx dest=%08lx path=direct\n",
+                             dvdDC->file, (unsigned)dvdDC->type,
+                             (unsigned)dvdDC->size, (unsigned long)dvdDC->src,
+                             (unsigned long)dvdDC->dest);
+                }
+#endif
                 OSRestoreInterrupts(enabled);
                 return;
             }
             buf_idx = getRelayBufIdx();
             if (buf_idx >= 0) {
                 HSD_DevCom_804D77F6 = buf_idx;
-                DVDReadAsyncPrio(&fileinfo, HSD_DevCom_804C6330_bufs[buf_idx],
-                                 MIN(dvdDC->size, DEVCOM_BUF_SIZE), dvdDC->src,
-                                 HSD_DevComDVDCallback, 2);
-                HSD_DevCom_804D77F5 = 1;
+                BOOL accepted = DVDReadAsyncPrio(
+                    &fileinfo, HSD_DevCom_804C6330_bufs[buf_idx],
+                    MIN(dvdDC->size, DEVCOM_BUF_SIZE), dvdDC->src,
+                    HSD_DevComDVDCallback, 2);
+                HSD_DevCom_804D77F5 = accepted ? 1 : 0;
+#ifdef MELEE_VITA_PLATFORM
+                if (!accepted) {
+                    devComRelayBufFlag[buf_idx] = false;
+                    OSReport("VITA_DEVCOM_DVD_SUBMIT_FAIL file=%d type=%04x size=%u src=%08lx dest=%08lx path=relay buf=%d\n",
+                             dvdDC->file, (unsigned)dvdDC->type,
+                             (unsigned)dvdDC->size, (unsigned long)dvdDC->src,
+                             (unsigned long)dvdDC->dest, buf_idx);
+                }
+#endif
                 OSRestoreInterrupts(enabled);
                 return;
             }
@@ -364,6 +426,50 @@ void HSD_DevComDVDWakeUp(void)
     }
     OSRestoreInterrupts(enabled);
 }
+
+#ifdef MELEE_VITA_PLATFORM
+static volatile int mv_devcom_probe_state;
+static u8 mv_devcom_probe_dest[32] __attribute__((aligned(32)));
+
+static void mv_devcom_probe_direct_cb(int req, int args, void* buf,
+                                      bool cancelflag)
+{
+    (void) req; (void) args;
+    if (!cancelflag && buf == NULL)
+        mv_devcom_probe_state |= 2;
+    else
+        mv_devcom_probe_state |= 0x80;
+}
+
+static void mv_devcom_probe_relay_cb(int req, int args, void* buf,
+                                     bool cancelflag)
+{
+    (void) req; (void) args;
+    if (!cancelflag && buf != NULL)
+        mv_devcom_probe_state |= 1;
+    else
+        mv_devcom_probe_state |= 0x40;
+
+    /* This mirrors HSD_SynthPStreamHeaderCallback: a relay-buffer (0x22)
+     * completion submits a direct-memory (0x21) request before the outer
+     * DevCom callback has returned. */
+    HSD_DevComRequest(1, 0, (uintptr_t) mv_devcom_probe_dest, 32, 0x21, 0,
+                      mv_devcom_probe_direct_cb, NULL);
+}
+
+int mv_devcom_reentrant_probe_begin(void)
+{
+    mv_devcom_probe_state = 0;
+    memset(mv_devcom_probe_dest, 0, sizeof(mv_devcom_probe_dest));
+    return HSD_DevComRequest(1, 0, 0, 32, 0x22, 1,
+                             mv_devcom_probe_relay_cb, NULL);
+}
+
+int mv_devcom_reentrant_probe_state(void)
+{
+    return mv_devcom_probe_state;
+}
+#endif
 
 static inline int HSD_DevComGetDestType(int type)
 {

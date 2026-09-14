@@ -17,6 +17,10 @@
 #include <dolphin/types.h>
 #include <melee/lb/lbarchive.h> ///< @todo Circular include
 
+#ifdef MELEE_VITA_PLATFORM
+extern void mv_gx_capture_reset_material_state(void);
+#endif
+
 static inline u16 sis_stream_u16(const void *ptr)
 {
 #ifdef MELEE_VITA_PLATFORM
@@ -499,6 +503,12 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
         text = (HSD_Text*) pass;
     }
     if (text->hidden == 0 && text->sis_buffer != NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        /* SIS completely programs its one-stage material below. Do not let
+         * stale unsupported/multitexture state from the previously captured
+         * menu model make otherwise-valid glyph quads fail replay filtering. */
+        mv_gx_capture_reset_material_state();
+#endif
         u8 *sis_cursor = (u8 *)text->sis_buffer;
         if (gobj != NULL) {
             SIS *sis = HSD_SisLib_804D1124[text->font_idx];
@@ -515,7 +525,11 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
             }
             HSD_CObjGetViewingMtx(HSD_CObjGetCurrent(), (MtxPtr)&m);
         } else {
+#ifdef MELEE_VITA_PLATFORM
+            Mtx44 projection_m;
+#else
             Mtx projection_m;
+#endif
 
             GXSetZMode(0U, 0U, 0U);
             GXSetViewport(0.0F, 0.0F, 640.0F, 480.0F, 0.0F, 1.0F);
@@ -525,9 +539,15 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                      -480.0F, 0.0F, 640.0F, 0.0F, 2.0F);
             GXSetProjection((MtxPtr) ((u8*) &projection_m[2][3] - 0x40), 0);
 #else
+#ifdef MELEE_VITA_PLATFORM
+            MTXOrtho(projection_m, 0.0F, -480.0F, 0.0F, 640.0F, 0.0F,
+                     2.0F);
+            GXSetProjection(projection_m, GX_ORTHOGRAPHIC);
+#else
             MTXOrtho((MtxPtr)&projection_m, 0.0F, -480.0F, 0.0F, 640.0F,
                      0.0F, 2.0F);
             GXSetProjection((MtxPtr)&projection_m, 0);
+#endif
 #endif
             m[0][0] = 1.0F;
             m[0][1] = 0.0F;
@@ -981,9 +1001,14 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
 }
 
 #ifdef MELEE_VITA_PLATFORM
-static HSD_GObj *HSD_SisLib_VitaFindCamera(const HSD_GObj *text_gobj)
+static HSD_GObj *HSD_SisLib_VitaFindCamera(const HSD_Text *text)
 {
+    const HSD_GObj *text_gobj = text != NULL ? text->entity : NULL;
     if (!text_gobj || text_gobj->gx_link >= 64 || !HSD_GObjPLinkHead) return NULL;
+    if (text->vita_camera != NULL &&
+        text->vita_camera->obj_kind == HSD_GObj_CameraKind &&
+        text->vita_camera->hsd_obj != NULL)
+        return text->vita_camera;
     const u64 mask = (u64)1 << text_gobj->gx_link;
     HSD_GObj **heads = HSD_GObjPLinkHead;
     for (unsigned p = 0; p <= HSD_GObjLibInitData.p_link_max; ++p) {
@@ -1001,7 +1026,7 @@ int HSD_SisLib_VitaCaptureAll(void)
     int rendered = 0;
     for (HSD_Text *text = HSD_SisLib_804D7978; text; text = text->next) {
         if (!text->entity || text->hidden || !text->sis_buffer) continue;
-        HSD_GObj *camera = HSD_SisLib_VitaFindCamera(text->entity);
+        HSD_GObj *camera = HSD_SisLib_VitaFindCamera(text);
         if (!camera) continue;
         if (HSD_CObjSetCurrent((HSD_CObj *)camera->hsd_obj)) {
             HSD_SisLib_803A84BC(text->entity, 2);

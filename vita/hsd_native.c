@@ -27,6 +27,7 @@ typedef struct HSD_TObjTevDesc HSD_TObjTevDesc;
 typedef struct HSD_Material HSD_Material;
 typedef struct HSD_PEDesc HSD_PEDesc;
 typedef struct HSD_EnvelopeDesc HSD_EnvelopeDesc;
+typedef struct HSD_ShapeSetDesc HSD_ShapeSetDesc;
 
 struct HSD_VtxDescList {
     int32_t attr, attr_type, comp_cnt, comp_type;
@@ -51,6 +52,17 @@ struct HSD_PObjDesc {
 struct HSD_EnvelopeDesc {
     HSD_Joint *joint;
     float weight;
+};
+
+struct HSD_ShapeSetDesc {
+    uint16_t flags;
+    uint16_t nb_shape;
+    int32_t nb_vertex_index;
+    HSD_VtxDescList *vertex_desc;
+    uint8_t **vertex_idx_list;
+    int32_t nb_normal_index;
+    HSD_VtxDescList *normal_desc;
+    uint8_t **normal_idx_list;
 };
 
 struct HSD_Material {
@@ -150,6 +162,7 @@ _Static_assert(sizeof(HSD_TexLODDesc) == 16, "HSD_TexLODDesc ARM32 layout");
 _Static_assert(sizeof(HSD_TObjTevDesc) == 32, "HSD_TObjTevDesc ARM32 layout");
 _Static_assert(sizeof(HSD_Material) == 20, "HSD_Material ARM32 layout");
 _Static_assert(sizeof(HSD_PEDesc) == 12, "HSD_PEDesc ARM32 layout");
+_Static_assert(sizeof(HSD_ShapeSetDesc) == 28, "HSD_ShapeSetDesc ARM32 layout");
 #endif
 
 #define MV_NATIVE_MAX_NODES 32768u
@@ -172,6 +185,7 @@ enum {
     NK_LOD,
     NK_TEV,
     NK_MTX,
+    NK_SHAPESET,
 };
 
 enum {
@@ -395,7 +409,7 @@ static HSD_MObjDesc *build_mobj(NativeBuild *b, uint32_t offset);
 static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset);
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset);
 static HSD_Joint *build_joint(NativeBuild *b, uint32_t offset);
-static int validate_raw_shape_set(NativeBuild *b, uint32_t offset);
+static HSD_ShapeSetDesc *build_shape_set(NativeBuild *b, uint32_t offset);
 
 static int validate_raw_spline(const MvDat *dat, uint32_t offset)
 {
@@ -717,66 +731,87 @@ static HSD_VtxDescList *build_vtx(NativeBuild *b, uint32_t offset)
     return out;
 }
 
-static int validate_raw_shape_index_lists(NativeBuild *b, uint32_t list_offset,
-                                          uint16_t nb_shape, int32_t index_count,
-                                          uint32_t desc_offset)
+static uint8_t **build_shape_index_lists(NativeBuild *b, uint32_t list_offset,
+                                         uint16_t nb_shape, int32_t index_count,
+                                         HSD_VtxDescList *desc)
 {
-    const uint8_t *desc = mv_dat_span(b->dat, desc_offset, 24);
-    if (!desc || index_count <= 0) return -1;
-    uint32_t attr_type = mv_be32(desc + 4);
+    if (!desc || index_count <= 0) return NULL;
     size_t index_size;
-    if (attr_type == 2u) index_size = 1u;
-    else if (attr_type == 3u) index_size = 2u;
-    else return -1;
-    if ((size_t) index_count > SIZE_MAX / index_size) return -1;
+    if (desc->attr_type == 2) index_size = 1u;
+    else if (desc->attr_type == 3) index_size = 2u;
+    else return NULL;
+    if ((size_t) index_count > SIZE_MAX / index_size) return NULL;
     size_t bytes = (size_t) index_count * index_size;
+    uint8_t **out = own_calloc(b, nb_shape, sizeof(*out));
+    if (!out) return NULL;
     for (uint16_t i = 0; i < nb_shape; ++i) {
         uint32_t target;
         if (pointer_offset(b->dat, list_offset + (uint32_t) i * 4u,
                            &target) != 1 ||
             mv_dat_span(b->dat, target, bytes) == NULL)
         {
-            return -1;
+            return NULL;
         }
+        out[i] = (uint8_t *)(uintptr_t) mv_dat_span(b->dat, target, bytes);
     }
-    return 0;
+    return out;
 }
 
-static int validate_raw_shape_set(NativeBuild *b, uint32_t offset)
+static HSD_ShapeSetDesc *build_shape_set(NativeBuild *b, uint32_t offset)
 {
+    int existing;
+    NativeEntry *entry = begin_entry(b, NK_SHAPESET, offset,
+                                     sizeof(HSD_ShapeSetDesc), &existing);
+    if (!entry || b->status < 0) return NULL;
+    if (existing) return b->status ? NULL : entry->ptr;
     const uint8_t *p = mv_dat_span(b->dat, offset, 28);
-    if (!p) return -1;
-    uint16_t nb_shape = mv_be16(p + 2);
-    int32_t nb_vertex_index = (int32_t) mv_be32(p + 4);
-    int32_t nb_normal_index = (int32_t) mv_be32(p + 16);
-    if (nb_shape == 0 || nb_shape > 1024 || nb_vertex_index < 0 ||
-        nb_vertex_index > (1 << 20) || nb_normal_index < 0 ||
-        nb_normal_index > (1 << 20))
+    HSD_ShapeSetDesc *out = entry->ptr;
+    if (!p) { b->status = -1; return NULL; }
+    out->flags = mv_be16(p);
+    out->nb_shape = mv_be16(p + 2);
+    out->nb_vertex_index = (int32_t) mv_be32(p + 4);
+    out->nb_normal_index = (int32_t) mv_be32(p + 16);
+    if (out->nb_shape == 0 || out->nb_shape > 1024 ||
+        out->nb_vertex_index < 0 || out->nb_vertex_index > (1 << 20) ||
+        out->nb_normal_index < 0 || out->nb_normal_index > (1 << 20))
     {
-        return -1;
+        b->status = -1;
+        return NULL;
     }
     uint32_t desc, lists;
-    if (nb_vertex_index != 0) {
+    /* Additive ShapeSets contain a base shape followed by nb_shape deltas;
+       average ShapeSets contain exactly nb_shape absolute samples. */
+    uint16_t list_count = out->nb_shape + ((out->flags & 2u) ? 1u : 0u);
+    if (list_count < out->nb_shape) {
+        b->status = -1;
+        return NULL;
+    }
+    if (out->nb_vertex_index != 0) {
         if (pointer_offset(b->dat, offset + 8, &desc) != 1 ||
             pointer_offset(b->dat, offset + 12, &lists) != 1 ||
-            validate_raw_shape_index_lists(b, lists, nb_shape,
-                                           nb_vertex_index, desc) != 0 ||
-            build_vtx(b, desc) == NULL)
+            !(out->vertex_desc = build_vtx(b, desc)) ||
+            !(out->vertex_idx_list = build_shape_index_lists(
+                  b, lists, list_count, out->nb_vertex_index,
+                  out->vertex_desc)))
         {
-            return -1;
+            if (!b->status) b->status = -1;
+            return NULL;
         }
     }
-    if (nb_normal_index != 0) {
+    if (out->nb_normal_index != 0) {
         if (pointer_offset(b->dat, offset + 20, &desc) != 1 ||
             pointer_offset(b->dat, offset + 24, &lists) != 1 ||
-            validate_raw_shape_index_lists(b, lists, nb_shape,
-                                           nb_normal_index, desc) != 0 ||
-            build_vtx(b, desc) == NULL)
+            !(out->normal_desc = build_vtx(b, desc)) ||
+            !(out->normal_idx_list = build_shape_index_lists(
+                  b, lists, list_count, out->nb_normal_index,
+                  out->normal_desc)))
         {
-            return -1;
+            if (!b->status) b->status = -1;
+            return NULL;
         }
     }
-    return 0;
+    entry->state = 2;
+    return out;
 }
 
 static HSD_TObjDesc *build_tobj(NativeBuild *b, uint32_t offset)
@@ -874,8 +909,7 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
     out->flags = mv_be16(p + 12);
     out->n_display = mv_be16(p + 14);
     const uint16_t pobj_type = out->flags & MV_POBJ_TYPE_MASK;
-    if (pobj_type == MV_POBJ_TYPE_MASK ||
-        (pobj_type == MV_POBJ_SHAPEANIM && !b->raw_validation)) {
+    if (pobj_type == MV_POBJ_TYPE_MASK) {
         mark_unsupported(b, MV_NATIVE_UNSUPPORTED_POBJ_TYPE,
                          offset, out->flags);
         return NULL;
@@ -884,11 +918,10 @@ static HSD_PObjDesc *build_pobj(NativeBuild *b, uint32_t offset)
     int result = pointer_offset(b->dat, offset + 20, &target);
     if (result < 0) { b->status = -1; return NULL; }
     if (pobj_type == MV_POBJ_SHAPEANIM) {
-        if (result != 1 || validate_raw_shape_set(b, target) != 0) {
+        if (result != 1 || !(out->u.shape_set = build_shape_set(b, target))) {
             if (!b->status) b->status = -1;
             return NULL;
         }
-        out->u.shape_set = (void *)(uintptr_t) mv_dat_span(b->dat, target, 28);
     } else if (pobj_type == MV_POBJ_ENVELOPE) {
         if (result != 1 ||
             !(out->u.envelope_p = build_envelope_descs(b, target))) {

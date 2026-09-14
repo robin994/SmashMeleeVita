@@ -39,6 +39,23 @@ for path in sorted(Path(args.assets).glob('Gr*.*')):
   assert arm.uc.reg_read(UC_ARM_REG_PC)==arm.stop,'nativeizer timed out'
   assert any('VITA_STAGE_HSD_RAW_NATIVE_PASS' in m for m in messages),'missing success marker'
   after=bytes(arm.uc.mem_read(src,len(raw)))
+  size,nrel,npub,nextn=struct.unpack_from('>4I',raw,4)
+  public_off=32+size+nrel*4
+  strings_off=public_off+(npub+nextn)*8
+  for i in range(npub):
+   target,name_off=struct.unpack_from('>II',raw,public_off+i*8)
+   end=raw.index(b'\0',strings_off+name_off)
+   public_name=raw[strings_off+name_off:end].decode(errors='replace')
+   if not public_name.startswith('dynamicsdata_'):continue
+   root=32+target
+   source,count=struct.unpack_from('>II',raw,root)
+   assert count<=32,f'{public_name}: unreasonable source count {count}'
+   assert struct.unpack_from('<I',after,root+4)[0]==count,f'{public_name}: count not native'
+   for field in (8,12,16):
+    assert struct.unpack_from('<I',after,root+field)[0]==struct.unpack_from('>I',raw,root+field)[0],f'{public_name}: pos not native'
+   for word in range(count*(0x3c//4)):
+    off=32+source+word*4
+    assert struct.unpack_from('<I',after,off)[0]==struct.unpack_from('>I',raw,off)[0],f'{public_name}: dynamics record {word} not native'
   size,nrel=struct.unpack_from('>II',raw,4)
   for i in range(nrel):
    off=32+struct.unpack_from('>I',raw,32+size+4*i)[0]

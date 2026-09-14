@@ -2992,12 +2992,36 @@ void ftColl_8007ABD0(HitCapsule* arg0, u32 arg1, Fighter_GObj* arg2)
     float scaled_dmg;
 
     fp = arg2->user_data;
+#ifdef MELEE_VITA_PLATFORM
+    if (arg1 > 500U) {
+        u32 swapped = ((arg1 & 0x000000FFU) << 24) |
+                      ((arg1 & 0x0000FF00U) << 8) |
+                      ((arg1 & 0x00FF0000U) >> 8) |
+                      ((arg1 & 0xFF000000U) >> 24);
+        if (swapped <= 500U) {
+            OSReport("VITA_THROW_DAMAGE_ENDIAN_FIX raw=%08x corrected=%u\n",
+                     arg1, swapped);
+            arg1 = swapped;
+        }
+    }
+#endif
     dmg = (float) arg1;
     if (fp->x34_scale.y != 1.0F) {
         dmg = ftCo_CalcYScaledKnockback(dmg, fp->x34_scale.y,
                                         Fighter_804D6524->x4);
     }
     scaled_dmg = ftCo_800DEEB8(fp, dmg);
+#ifdef MELEE_VITA_PLATFORM
+    if (scaled_dmg > 500.0F || scaled_dmg < -500.0F) {
+        OSReport("VITA_THROW_DAMAGE_SCALE_INVALID base=%f scaled=%f smash_state=%d frames=%f hold=%f mul=%f\n",
+                 dmg, scaled_dmg, fp->smash_attrs.state,
+                 fp->smash_attrs.x2118_frames, fp->smash_attrs.x211C_holdFrame,
+                 fp->smash_attrs.x2120_damageMul);
+        /* Throw hitboxes in retail data are far below this bound. Keep the
+         * physical test alive while exposing the corrupt smash/action state. */
+        scaled_dmg = dmg;
+    }
+#endif
     arg0->unk_count = (u32) (s32) scaled_dmg;
     arg0->damage = ft_80089228(fp, fp->x2068_attackID,
                                (s32) fp->x206C_attack_instance, scaled_dmg);

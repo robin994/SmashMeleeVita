@@ -13,11 +13,8 @@
 
 #include <string.h>
 
-/* The generated default SIS glyph atlas is absent from this checkout. Retail
- * SIS archives provide their own texture tables; retain neutral fallback
- * storage only for paths that explicitly select the default font. */
-TextGlyphTexture HSD_SisLib_FontAtlas[287] __attribute__((aligned(32)));
-
+/* HSD_SisLib_FontAtlas is generated from the verified retail main.dol by
+ * vita/tools/extract_sis_font.py and linked into the Vita executable. */
 
 void hsd_803AAA48(void)
 {

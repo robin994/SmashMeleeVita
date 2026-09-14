@@ -6,6 +6,13 @@
 #include <dolphin/os.h>
 #include <sysdolphin/baselib/debug.h>
 
+#ifdef MELEE_VITA_PLATFORM
+/* Retail synchronous ARQ waits are interrupt-driven on GameCube. Vita queues
+ * those completions cooperatively, so a blocking caller must explicitly pump
+ * the emulated interrupt boundary or the first fighter FigaTree load deadlocks. */
+extern void mv_gc_sync_yield(void);
+#endif
+
 typedef enum lbArqState {
     LB_ARQ_STATE_FREE = 0,
     LB_ARQ_STATE_PENDING = 1,
@@ -142,8 +149,20 @@ void lbArq_80014BD0(unsigned int source, void* dest, size_t length,
 
     if (rp->callback == NULL) {
         OSRestoreInterrupts(intr);
+#ifdef MELEE_VITA_PLATFORM
+        unsigned vita_wait_loops = 0;
+        while (lbArq_80014ABC(rp) != LB_ARQ_STATE_DONE) {
+            mv_gc_sync_yield();
+            ++vita_wait_loops;
+        }
+        if (vita_wait_loops != 0) {
+            OSReport("VITA_LBARQ_SYNC_WAIT source=%08x dest=%p length=%u loops=%u\n",
+                     source, dest, (unsigned) length, vita_wait_loops);
+        }
+#else
         while (lbArq_80014ABC(rp) != LB_ARQ_STATE_DONE) {
         }
+#endif
         intr = OSDisableInterrupts();
         tail = &global->list[rp->state];
         while (*tail != rp) {

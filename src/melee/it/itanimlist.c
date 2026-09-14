@@ -48,8 +48,14 @@ void it_80278F2C(Item_GObj* item_gobj, CommandInfo* cmd)
     s32 arg6;
     PAD_STACK(4);
 
+#ifdef MELEE_VITA_PLATFORM
+    /* Vita raw-archive nativeization stores the PPC 6-bit opcode in ARM
+     * bitfield order, followed by the original 10-bit effect argument. */
+    arg2 = (*(u32*) cmd->u >> 6) & 0x3FF;
+#else
     arg2 = ((u16*) cmd->u)[0];
     arg2 = arg2 & 0x3FF;
+#endif
     ++cmd->u;
     arg6 = (f32) ((u16*) cmd->u)[1];
     ef_id = ((u16*) cmd->u)[0];
@@ -383,6 +389,14 @@ loop:
     if (Command_Execute(cmd, opcode) != 0) {
         goto loop;
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (opcode < 10 || opcode >= 26) {
+        OSReport("VITA_ITEM_SCRIPT_OPCODE_INVALID kind=%d msid=%d anim=%d opcode=%u cmd=%p\n",
+                 (int) item->kind, (int) item->msid, (int) item->anim_id,
+                 opcode, (void*) cmd->u);
+        HSD_Panic(__FILE__, __LINE__, "item script opcode outside dispatch table");
+    }
+#endif
     opcode -= 10;
     it_803F22A8[opcode](item_gobj, cmd);
     goto loop;

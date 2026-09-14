@@ -3,7 +3,7 @@ export VITASDK
 BUILD_DIR ?= build/vita
 FULL_GAMEPLAY ?= ON
 CMAKE_ARGS ?= -DMELEE_VITA_FULL_GAMEPLAY_SCENE=$(FULL_GAMEPLAY)
-.PHONY: all configure audit asset-check test-env arm-boot-check arm-check pause-raw-check item-hsd-check player-mapping-check figatrack-arm-check fighter-x48-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-raw-check endian-preflight assets
+.PHONY: all configure audit asset-check test-env arm-boot-check arm-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check lbbf-color-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check camera-quake-check stage-raw-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check endian-preflight assets full-assets
 all: configure
 	cmake --build "$(BUILD_DIR)" --parallel
 configure:
@@ -19,13 +19,35 @@ test-env:
 	"$(BUILD_DIR)/test-env/bin/python" -m pip install -r vita/tools/requirements-test.txt
 
 arm-boot-check: test-env
-	"$(BUILD_DIR)/test-env/bin/python" vita/tools/test_boot_arm.py
+	"$(BUILD_DIR)/test-env/bin/python" vita/tools/test_boot_arm.py --elf $(BUILD_DIR)/melee_vita --disc-root orig/GALE01/files
 
 arm-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_arm.py --assets orig/GALE01/files/MnMaAll.usd
 
+async-order-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_async_order_arm.py
+
+.PHONY: hps-stream-check
+hps-stream-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_hps_stream_arm.py
+
+hps-playhead-check:
+	python3 vita/tools/test_hps_playhead_source.py
+
+menu-option-scratch-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_menu_option_scratch_arm.py
+
+sis-font-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_sis_font_arm.py --elf $(BUILD_DIR)/melee_vita --dol orig/GALE01/sys/main.dol
+
+sss-shape-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_sss_shape_arm.py --elf $(BUILD_DIR)/melee_vita --asset orig/GALE01/files/MnSlMap.usd
+
 pause-raw-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_pause_raw.py
+
+training-raw-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_training_raw_arm.py
 
 item-hsd-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_itco_hsd_raw.py
@@ -36,8 +58,20 @@ player-mapping-check: test-env
 figatrack-arm-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_lbanim_figatrack_arm.py
 
+lbarchive-relocate-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_lbarchive_relocate_arm.py
+
+fighter-command-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_fighter_commands_arm.py
+
+lbbf-color-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_lbbf_color_arm.py
+
 fighter-x48-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_fighter_x48_arm.py
+
+fighter-costume-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_fighter_costumes_arm.py
 
 hsd-amnesia-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_hsd_amnesia_arm.py
@@ -57,12 +91,42 @@ stage-light-check: test-env
 stage-map-plit-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_map_plit_arm.py
 
+stage-yaku-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_yaku_scripts_arm.py
+
+stage-quake-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_quake_arm.py
+
+stage-multitex-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_multitex_arm.py
+
+camera-quake-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_camera_quake_layout.py
+
 stage-raw-check: test-env
 	$(BUILD_DIR)/test-env/bin/python vita/tools/test_stage_raw.py --elf $(BUILD_DIR)/melee_vita --assets orig/GALE01/files --output $(BUILD_DIR)/stage-raw-check.json
 
-endian-preflight: pause-raw-check item-hsd-check player-mapping-check figatrack-arm-check fighter-x48-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-raw-check
+gx-fifo-check:
+	python3 vita/tools/test_no_gx_fifo_mmio.py
+
+gx-projection-check:
+	python3 vita/tools/test_vitagl_projection.py
+
+gx-nbt3-check:
+	python3 vita/tools/test_gx_nbt3_capture.py
+
+gx-nbt-arm-check: test-env
+	$(BUILD_DIR)/test-env/bin/python vita/tools/test_gx_nbt_arm.py
+
+endian-preflight: arm-boot-check async-order-check hps-stream-check hps-playhead-check menu-option-scratch-check sis-font-check sss-shape-check pause-raw-check training-raw-check item-hsd-check player-mapping-check figatrack-arm-check lbarchive-relocate-check fighter-command-check fighter-x48-check fighter-costume-check hsd-amnesia-check hsd-release-check ifall-hsd-check scene-sidecar-check stage-light-check stage-map-plit-check stage-yaku-check stage-quake-check camera-quake-check stage-raw-check gx-fifo-check gx-projection-check gx-nbt3-check gx-nbt-arm-check
 	node vita/tools/audit_gameplay_dat.js orig/GALE01/files
 	node vita/tools/audit_figatree_dat.js
 
 assets:
 	python3 vita/tools/prepare_assets.py --output "$(BUILD_DIR)/SmashMeleeVita-menu-assets.zip"
+
+full-assets:
+	python3 vita/tools/prepare_assets.py --full --output "$(BUILD_DIR)/SmashMeleeVita-full-disc-data.zip"
+
+vitagl-multitex-check:
+	python3 vita/tools/test_vitagl_multitex_source.py

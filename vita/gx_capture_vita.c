@@ -2,6 +2,7 @@
 
 #include <dolphin/gx.h>
 #include <dolphin/gx/GXCommandList.h>
+#include <dolphin/os.h>
 #include <math.h>
 #include <string.h>
 
@@ -27,9 +28,15 @@ static MvAttrFormat formats[GX_MAX_VTXFMT][GX_VA_MAX_ATTR];
 static MvGxCaptureCommand commands[MV_CAPTURE_MAX_COMMANDS];
 static MvGxCaptureVertex vertices[MV_CAPTURE_MAX_VERTICES];
 static float pos_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
+static uint8_t pos_mtx_valid[MV_CAPTURE_MATRIX_SLOTS];
 static float nrm_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
 static float tex_mtx[MV_CAPTURE_MATRIX_SLOTS][3][4];
+static uint8_t tex_mtx_valid[MV_CAPTURE_MATRIX_SLOTS];
+static uint32_t tex_mtx_id[MV_CAPTURE_MATRIX_SLOTS];
 static uint32_t current_mtx, cull_mode;
+/* GX_VA_NBT shares the hardware normal VCD/array slot with GX_VA_NRM.
+ * Preserve the API-level NBT semantic while decoding the canonical normal slot. */
+static uint8_t normal_is_nbt;
 static MvGxCaptureStats stats;
 static MvGxMaterialState material_state;
 static float capture_projection[4][4];
@@ -51,6 +58,51 @@ typedef struct {
 } MvImmediateState;
 
 static MvImmediateState immediate;
+static uint32_t decode_error_attr;
+static uint32_t decode_error_reason;
+static uint32_t decode_error_type;
+static uint8_t packet_mismatch_logged;
+
+static int decode_fail(unsigned attr, unsigned reason, GXAttrType type)
+{
+    decode_error_attr = attr;
+    decode_error_reason = reason;
+    decode_error_type = (uint32_t) type;
+    return -1;
+}
+
+static uint32_t active_attr_mask(void)
+{
+    uint32_t mask = 0;
+    for (unsigned attr = GX_VA_PNMTXIDX; attr <= GX_VA_TEX7; ++attr)
+        if (attr_types[attr] != GX_NONE) mask |= 1u << attr;
+    return mask;
+}
+
+static void active_attr_type_packs(uint32_t *lo, uint32_t *hi)
+{
+    uint32_t a = 0, b = 0;
+    for (unsigned attr = GX_VA_PNMTXIDX; attr <= GX_VA_TEX7; ++attr) {
+        uint32_t type = (uint32_t) attr_types[attr] & 3u;
+        if (attr < 16) a |= type << (attr * 2u);
+        else b |= type << ((attr - 16u) * 2u);
+    }
+    if (lo) *lo = a;
+    if (hi) *hi = b;
+}
+
+static void capture_error(uint32_t line, uint32_t arg0, uint32_t arg1, uint32_t arg2)
+{
+    if (!stats.first_error_line) {
+        stats.first_error_line = line;
+        stats.first_error_arg0 = arg0;
+        stats.first_error_arg1 = arg1;
+        stats.first_error_arg2 = arg2;
+    }
+    ++stats.errors;
+}
+
+#define CAPTURE_ERROR(a0, a1, a2) capture_error((uint32_t)__LINE__, (uint32_t)(a0), (uint32_t)(a1), (uint32_t)(a2))
 
 static uint16_t read_be16(const uint8_t *p)
 {
@@ -98,8 +150,8 @@ static size_t element_size(GXAttr attr, const MvAttrFormat *fmt)
     if (!bytes) return 0;
     unsigned components;
     if (attr == GX_VA_POS) components = fmt->count == GX_POS_XYZ ? 3 : 2;
-    else if (attr == GX_VA_NRM || attr == GX_VA_NBT)
-        components = fmt->count == GX_NRM_XYZ ? 3 : 9;
+    else if (attr == GX_VA_NRM)
+        components = (normal_is_nbt || fmt->count != GX_NRM_XYZ) ? 9 : 3;
     else if (attr >= GX_VA_TEX0 && attr <= GX_VA_TEX7)
         components = fmt->count == GX_TEX_ST ? 2 : 1;
     else
@@ -179,6 +231,9 @@ static uint32_t primitive_triangles(uint8_t primitive, uint16_t count)
 static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vtxfmt,
                          MvGxCaptureVertex *out, uint32_t *attr_mask)
 {
+    decode_error_attr = UINT32_MAX;
+    decode_error_reason = 0;
+    decode_error_type = 0;
     memset(out, 0, sizeof(*out));
     out->color0 = 0xffffffffu;
     out->pos_mtx_idx = (uint8_t)current_mtx;
@@ -188,28 +243,47 @@ static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vt
         if (attr_type == GX_NONE) continue;
         const MvAttrFormat *fmt = &formats[vtxfmt][attr_index];
         size_t bytes = element_size(attr, fmt);
-        if (!bytes) return -1;
+        if (!bytes) return decode_fail(attr_index, 1u, attr_type);
         const uint8_t *source = NULL;
         if (attr_type == GX_DIRECT) {
-            if ((size_t)(end - *cursor) < bytes) return -1;
+            if ((size_t)(end - *cursor) < bytes) return decode_fail(attr_index, 2u, attr_type);
             source = *cursor;
             *cursor += bytes;
         } else if (attr_type == GX_INDEX8 || attr_type == GX_INDEX16) {
             size_t index_bytes = attr_type == GX_INDEX8 ? 1u : 2u;
             unsigned index_count = (attr == GX_VA_NRM && fmt->count == GX_NRM_NBT3) ? 3u : 1u;
-            if ((size_t)(end - *cursor) < index_bytes * index_count) return -1;
-            /* NBT3 carries three independent array indices. Preserve the
-             * fail-closed boundary until the command vertex stores and
-             * replays those independently instead of treating them as one. */
-            if (index_count == 3u) return -1;
+            if ((size_t)(end - *cursor) < index_bytes * index_count) return decode_fail(attr_index, 3u, attr_type);
+            if (!arrays[attr_index].base || !arrays[attr_index].stride) return decode_fail(attr_index, 4u, attr_type);
+            if (index_count == 3u) {
+                /* GX_NRM_NBT3 stores three independent indices into the same
+                 * normal array (normal/binormal/tangent). Gameplay fighter
+                 * display lists use this form heavily. Consume and decode
+                 * all three instead of aborting the whole display list. */
+                int scalar = component_size(fmt->type);
+                if (!scalar) return -1;
+                for (unsigned vector = 0; vector < 3u; ++vector) {
+                    const uint8_t *idxp = *cursor + index_bytes * vector;
+                    uint32_t index = index_bytes == 1 ? idxp[0] : read_be16(idxp);
+                    const uint8_t *normal_source = arrays[attr_index].base +
+                        (size_t)index * arrays[attr_index].stride;
+                    for (unsigned component = 0; component < 3u; ++component) {
+                        if (read_scalar(normal_source + scalar * component,
+                                        fmt->type, fmt->frac,
+                                        &out->normal[vector * 3u + component]))
+                            return -1;
+                    }
+                }
+                *cursor += index_bytes * 3u;
+                if (attr_index < 32) { *attr_mask |= 1u << attr_index; out->present |= 1u << attr_index; }
+                continue;
+            }
             uint32_t index = index_bytes == 1 ? (*cursor)[0] : read_be16(*cursor);
-            *cursor += index_bytes * index_count;
-            if (!arrays[attr_index].base || !arrays[attr_index].stride) return -1;
+            *cursor += index_bytes;
             source = arrays[attr_index].base + (size_t)index * arrays[attr_index].stride;
         } else {
-            return -1;
+            return decode_fail(attr_index, 5u, attr_type);
         }
-        if (attr_index < 32) *attr_mask |= 1u << attr_index;
+        if (attr_index < 32) { *attr_mask |= 1u << attr_index; out->present |= 1u << attr_index; }
         if (attr <= GX_VA_TEX7MTXIDX) {
             if (attr == GX_VA_PNMTXIDX) out->pos_mtx_idx = source[0];
             continue;
@@ -220,27 +294,25 @@ static int decode_vertex(const uint8_t **cursor, const uint8_t *end, GXVtxFmt vt
                 read_scalar(source + scalar, fmt->type, fmt->frac, &out->position[1])) return -1;
             if (fmt->count == GX_POS_XYZ &&
                 read_scalar(source + scalar * 2, fmt->type, fmt->frac, &out->position[2])) return -1;
-            out->present |= 1u;
-        } else if (attr == GX_VA_NRM || attr == GX_VA_NBT) {
+        } else if (attr == GX_VA_NRM) {
             int scalar = component_size(fmt->type);
-            unsigned components = fmt->count == GX_NRM_XYZ ? 3u : 9u;
+            unsigned components =
+                (normal_is_nbt || fmt->count != GX_NRM_XYZ) ? 9u : 3u;
             if (!scalar) return -1;
             for (unsigned component = 0; component < components; ++component)
                 if (read_scalar(source + scalar * component, fmt->type, fmt->frac,
                                 &out->normal[component])) return -1;
-            out->present |= 2u;
         } else if (attr == GX_VA_CLR0) {
             if (read_color(source, fmt->type, &out->color0)) return -1;
-            out->present |= 4u;
-        } else if (attr == GX_VA_TEX0) {
+        } else if (attr == GX_VA_TEX0 || attr == GX_VA_TEX1) {
             int scalar = component_size(fmt->type);
-            if (!scalar || read_scalar(source, fmt->type, fmt->frac, &out->tex0[0])) return -1;
+            float *tex = attr == GX_VA_TEX0 ? out->tex0 : out->tex1;
+            if (!scalar || read_scalar(source, fmt->type, fmt->frac, &tex[0])) return -1;
             if (fmt->count == GX_TEX_ST &&
-                read_scalar(source + scalar, fmt->type, fmt->frac, &out->tex0[1])) return -1;
-            out->present |= 8u;
+                read_scalar(source + scalar, fmt->type, fmt->frac, &tex[1])) return -1;
         }
     }
-    return (out->present & 1u) ? 0 : -1;
+    return (out->present & (1u << GX_VA_POS)) ? 0 : -1;
 }
 
 void mv_gx_capture_set_projection(const float matrix[4][4], uint32_t type)
@@ -260,25 +332,43 @@ void mv_gx_capture_set_viewport(float x, float y, float w, float h,
     capture_viewport_valid = w > 0.0f && h > 0.0f;
 }
 
-void mv_gx_capture_reset(void)
+void mv_gx_capture_begin_frame(void)
 {
+    /* A frame boundary clears only the command FIFO. It is not a GX reset:
+     * HSD relies on projection, descriptors, matrices and PE/TEV state
+     * persisting until the game changes them. */
     memset(&stats, 0, sizeof(stats));
     memset(commands, 0, sizeof(commands));
     memset(vertices, 0, sizeof(vertices));
+    memset(&immediate, 0, sizeof(immediate));
+}
+
+void mv_gx_capture_reset_material_state(void)
+{
+    memset(&material_state, 0, sizeof(material_state));
+    material_state.material_rgba = 0xffffffffu;
+}
+
+void mv_gx_capture_reset(void)
+{
+    mv_gx_capture_begin_frame();
     memset(attr_types, 0, sizeof(attr_types));
     memset(arrays, 0, sizeof(arrays));
     memset(formats, 0, sizeof(formats));
     memset(pos_mtx, 0, sizeof(pos_mtx));
+    memset(pos_mtx_valid, 0, sizeof(pos_mtx_valid));
     memset(nrm_mtx, 0, sizeof(nrm_mtx));
     memset(tex_mtx, 0, sizeof(tex_mtx));
-    memset(&material_state, 0, sizeof(material_state));
+    memset(tex_mtx_valid, 0, sizeof(tex_mtx_valid));
+    memset(tex_mtx_id, 0, sizeof(tex_mtx_id));
+    normal_is_nbt = 0;
+    packet_mismatch_logged = 0;
+    mv_gx_capture_reset_material_state();
     memset(capture_projection, 0, sizeof(capture_projection));
     memset(capture_viewport, 0, sizeof(capture_viewport));
     capture_projection_type = 0;
     capture_projection_valid = 0;
     capture_viewport_valid = 0;
-    memset(&immediate, 0, sizeof(immediate));
-    material_state.material_rgba = 0xffffffffu;
     current_mtx = GX_PNMTX0;
     cull_mode = GX_CULL_NONE;
 }
@@ -349,6 +439,37 @@ const MvGxCaptureVertex *mv_gx_capture_vertices(uint32_t *count)
     return vertices;
 }
 
+static uint32_t capture_hash_bytes(uint32_t hash, const void *data, size_t size)
+{
+    const uint8_t *bytes = data;
+    while (size-- != 0) {
+        hash ^= *bytes++;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+uint32_t mv_gx_capture_frame_signature(void)
+{
+    uint32_t hash = 2166136261u;
+    hash = capture_hash_bytes(hash, &stats.commands, sizeof(stats.commands));
+    hash = capture_hash_bytes(hash, &stats.vertices, sizeof(stats.vertices));
+    hash = capture_hash_bytes(hash, commands,
+                              (size_t) stats.commands * sizeof(commands[0]));
+    hash = capture_hash_bytes(hash, vertices,
+                              (size_t) stats.vertices * sizeof(vertices[0]));
+    return hash;
+}
+
+int mv_gx_alpha_compare_vitagl_supported(uint8_t comp0, uint8_t ref0,
+                                         uint8_t op, uint8_t comp1,
+                                         uint8_t ref1)
+{
+    if (comp0 == GX_ALWAYS && comp1 == GX_ALWAYS) return 1;
+    return comp0 == GX_GREATER && ref0 == 0 && op == GX_AOP_OR &&
+           (comp1 == GX_NEVER || (comp1 == GX_GREATER && ref1 == 0));
+}
+
 int mv_gx_material_custom_tev_cpu_bakeable(const MvGxMaterialState *material)
 {
     if (!material || !material->tev_valid) return 1;
@@ -402,6 +523,39 @@ static int uv_mtx_finite(const float m[2][3], uint8_t valid)
     return 1;
 }
 
+int mv_gx_material_multitex_hsd_modulate(const MvGxMaterialState *m)
+{
+    if (!m || m->texture_count != 2 || m->tev_stage_count != 2 ||
+        (m->texgen_valid_mask & 3u) != 3u ||
+        m->texgen_src0 != GX_TG_TEX0 || m->texgen_src1 != GX_TG_TEX1)
+        return 0;
+    if (m->tev_order_coord[0] != GX_TEXCOORD0 ||
+        m->tev_order_coord[1] != GX_TEXCOORD1 ||
+        m->tev_order_map[0] != GX_TEXMAP0 ||
+        m->tev_order_map[1] != GX_TEXMAP1 ||
+        m->tev_order_color[0] != GX_COLOR0A0 ||
+        m->tev_order_color[1] != GX_COLOR0A0)
+        return 0;
+    static const uint8_t color0[4] = {GX_CC_ZERO, GX_CC_RASC, GX_CC_TEXC, GX_CC_ZERO};
+    static const uint8_t color1[4] = {GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXC, GX_CC_ZERO};
+    static const uint8_t alpha1[4] = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA};
+    if (memcmp(m->tev_color_in[0], color0, sizeof(color0)) != 0 ||
+        memcmp(m->tev_color_in[1], color1, sizeof(color1)) != 0 ||
+        memcmp(m->tev_alpha_in[1], alpha1, sizeof(alpha1)) != 0)
+        return 0;
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        const uint8_t *op = m->tev_color_op[stage];
+        if (op[0] != GX_TEV_ADD || op[1] != GX_TB_ZERO ||
+            op[2] != GX_CS_SCALE_1 || op[3] != GX_ENABLE ||
+            op[4] != GX_TEVPREV) return 0;
+    }
+    const uint8_t *aop = m->tev_alpha_op[1];
+    if (aop[0] != GX_TEV_ADD || aop[1] != GX_TB_ZERO ||
+        aop[2] != GX_CS_SCALE_1 || aop[3] != GX_ENABLE ||
+        aop[4] != GX_TEVPREV) return 0;
+    return 1;
+}
+
 int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)
 {
     if (!m || m->texture_count != 2 || !m->image || !m->image1 ||
@@ -409,6 +563,14 @@ int mv_gx_material_multitex_vitagl_supported(const MvGxMaterialState *m)
         return 0;
     if ((m->unsupported & ~MV_GX_MATERIAL_UNSUPPORTED_MULTITEX) != 0)
         return 0;
+    if (mv_gx_material_multitex_hsd_modulate(m)) {
+        if (!uv_mtx_finite(m->uv_mtx, m->uv_mtx_valid) ||
+            !uv_mtx_finite(m->uv_mtx1, m->uv_mtx1_valid)) return 0;
+        if (m->wrap_s > GX_MIRROR || m->wrap_t > GX_MIRROR ||
+            m->wrap_s1 > GX_MIRROR || m->wrap_t1 > GX_MIRROR ||
+            m->mag_filter != GX_LINEAR || m->mag_filter1 != GX_LINEAR) return 0;
+        return 1;
+    }
     if ((m->tobj_flags & 0x0fu) != 0 || (m->tobj1_flags & 0x0fu) != 0)
         return 0;
     if (((m->tobj_flags >> 16) & 0x0fu) != 4u ||
@@ -600,8 +762,10 @@ uint32_t mv_gx_capture_multitex_records(uint32_t *out, uint32_t max_records)
 
 void GXSetArray(GXAttr attr, const void *base_ptr, u8 stride)
 {
+    /* Retail GX aliases NBT arrays to the normal CP array. */
+    if (attr == GX_VA_NBT) attr = GX_VA_NRM;
     if ((unsigned)attr >= GX_VA_MAX_ATTR || !base_ptr || !stride) {
-        ++stats.errors;
+        CAPTURE_ERROR(attr, base_ptr != NULL, stride);
         return;
     }
     arrays[attr].base = base_ptr;
@@ -612,7 +776,28 @@ void GXSetArray(GXAttr attr, const void *base_ptr, u8 stride)
 void GXSetVtxDesc(GXAttr attr, GXAttrType type)
 {
     if ((unsigned)attr >= GX_VA_MAX_ATTR || (unsigned)type > GX_INDEX16) {
-        ++stats.errors;
+        CAPTURE_ERROR(attr, type, 0);
+        return;
+    }
+    /* GX exposes NRM and NBT as API names for one hardware VCD field. */
+    if (attr == GX_VA_NBT) {
+        if (type != GX_NONE) {
+            attr_types[GX_VA_NRM] = type;
+            normal_is_nbt = 1;
+        } else if (normal_is_nbt) {
+            attr_types[GX_VA_NRM] = GX_NONE;
+            normal_is_nbt = 0;
+        }
+        attr_types[GX_VA_NBT] = GX_NONE;
+        return;
+    }
+    if (attr == GX_VA_NRM) {
+        if (type != GX_NONE) {
+            attr_types[GX_VA_NRM] = type;
+            normal_is_nbt = 0;
+        } else if (!normal_is_nbt) {
+            attr_types[GX_VA_NRM] = GX_NONE;
+        }
         return;
     }
     attr_types[attr] = type;
@@ -621,13 +806,16 @@ void GXSetVtxDesc(GXAttr attr, GXAttrType type)
 void GXClearVtxDesc(void)
 {
     memset(attr_types, 0, sizeof(attr_types));
+    normal_is_nbt = 0;
 }
 
 void GXSetVtxAttrFmt(GXVtxFmt vtxfmt, GXAttr attr, GXCompCnt count,
                      GXCompType type, u8 frac)
 {
+    /* GX_VA_NBT shares VAT normal-format state with GX_VA_NRM. */
+    if (attr == GX_VA_NBT) attr = GX_VA_NRM;
     if ((unsigned)vtxfmt >= GX_MAX_VTXFMT || (unsigned)attr >= GX_VA_MAX_ATTR) {
-        ++stats.errors;
+        CAPTURE_ERROR(vtxfmt, attr, type);
         return;
     }
     MvAttrFormat *fmt = &formats[vtxfmt][attr];
@@ -685,10 +873,12 @@ static int matrix_slot(u32 id)
 static void capture_apply_vertex_matrices(MvGxCaptureCommand *command, uint32_t first, uint16_t count)
 {
     if (!(command->attr_mask & (1u << GX_VA_PNMTXIDX))) return;
+    command->pos_mtx_valid = 1;
     for (uint16_t i = 0; i < count; ++i) {
         MvGxCaptureVertex *vertex = &vertices[first + i];
         int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
-        if (vertex_slot < 0) { ++stats.errors; return; }
+        if (vertex_slot < 0) { CAPTURE_ERROR(vertex->pos_mtx_idx, first + i, count); return; }
+        if (!pos_mtx_valid[vertex_slot]) command->pos_mtx_valid = 0;
         float x = vertex->position[0], y = vertex->position[1], z = vertex->position[2];
         vertex->position[0] = pos_mtx[vertex_slot][0][0] * x + pos_mtx[vertex_slot][0][1] * y + pos_mtx[vertex_slot][0][2] * z + pos_mtx[vertex_slot][0][3];
         vertex->position[1] = pos_mtx[vertex_slot][1][0] * x + pos_mtx[vertex_slot][1][1] * y + pos_mtx[vertex_slot][1][2] * z + pos_mtx[vertex_slot][1][3];
@@ -716,13 +906,47 @@ static void immediate_write(const uint8_t *bytes, size_t count)
 {
     if (!immediate.active || stats.errors) return;
     while (count--) {
-        if (immediate.buffered_bytes >= immediate.vertex_bytes || immediate.buffered_bytes >= sizeof(immediate.buffer)) { ++stats.errors; immediate.active = 0; return; }
+        if (immediate.buffered_bytes >= immediate.vertex_bytes || immediate.buffered_bytes >= sizeof(immediate.buffer)) { CAPTURE_ERROR(immediate.buffered_bytes, immediate.vertex_bytes, sizeof(immediate.buffer)); immediate.active = 0; return; }
         immediate.buffer[immediate.buffered_bytes++] = *bytes++;
         if (immediate.buffered_bytes == immediate.vertex_bytes) {
             const uint8_t *cursor = immediate.buffer;
             const uint8_t *end = cursor + immediate.vertex_bytes;
             MvGxCaptureCommand *command = &commands[stats.commands];
-            if (immediate.emitted_vertices >= immediate.expected_vertices || decode_vertex(&cursor, end, (GXVtxFmt)immediate.vtxfmt, &vertices[stats.vertices + immediate.emitted_vertices], &command->attr_mask) || cursor != end) { ++stats.errors; immediate.active = 0; return; }
+            if (immediate.emitted_vertices >= immediate.expected_vertices) {
+                CAPTURE_ERROR(immediate.emitted_vertices, immediate.expected_vertices, 1);
+                immediate.active = 0;
+                return;
+            }
+            int decode_result = decode_vertex(&cursor, end,
+                                               (GXVtxFmt) immediate.vtxfmt,
+                                               &vertices[stats.vertices + immediate.emitted_vertices],
+                                               &command->attr_mask);
+            if (decode_result != 0 || cursor != end) {
+                uint32_t consumed = (uint32_t) (cursor - immediate.buffer);
+                if (decode_result == 0 && cursor != end) {
+                    uint32_t types_lo = 0, types_hi = 0;
+                    active_attr_type_packs(&types_lo, &types_hi);
+                    if (!packet_mismatch_logged) {
+                        OSReport("VITA_GX_PACKET_MISMATCH command=%u primitive=%u vtxfmt=%u nverts=%u emitted=%u consumed=%u expected=%u active=%08x types_lo=%08x types_hi=%08x current_mtx=%u normal_is_nbt=%u\n",
+                                 stats.commands, immediate.primitive, immediate.vtxfmt,
+                                 immediate.expected_vertices, immediate.emitted_vertices,
+                                 consumed, immediate.vertex_bytes, active_attr_mask(),
+                                 types_lo, types_hi, current_mtx, normal_is_nbt);
+                        packet_mismatch_logged = 1;
+                    }
+                    CAPTURE_ERROR(0xfeu, active_attr_mask(),
+                                  ((consumed & 0xffffu) << 16) | immediate.vertex_bytes);
+                } else {
+                    uint32_t packed = ((decode_error_type & 0xffu) << 24) |
+                                      (((uint32_t) immediate.vtxfmt & 0xffu) << 16) |
+                                      ((consumed & 0xffu) << 8) |
+                                      (immediate.vertex_bytes & 0xffu);
+                    CAPTURE_ERROR(decode_error_reason ? decode_error_reason : 0xffu,
+                                  decode_error_attr, packed);
+                }
+                immediate.active = 0;
+                return;
+            }
             ++immediate.emitted_vertices;
             immediate.buffered_bytes = 0;
             if (immediate.emitted_vertices == immediate.expected_vertices) immediate_finish();
@@ -734,14 +958,14 @@ void GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts)
 {
     uint32_t triangles = primitive_triangles((uint8_t)type, nverts);
     size_t bytes = immediate_vertex_bytes(vtxfmt);
-    if (immediate.active || !nverts || !bytes || bytes > sizeof(immediate.buffer) || triangles == UINT32_MAX || stats.commands >= MV_CAPTURE_MAX_COMMANDS || stats.vertices + nverts > MV_CAPTURE_MAX_VERTICES) { ++stats.errors; immediate.active = 0; return; }
+    if (immediate.active || !nverts || !bytes || bytes > sizeof(immediate.buffer) || triangles == UINT32_MAX || stats.commands >= MV_CAPTURE_MAX_COMMANDS || stats.vertices + nverts > MV_CAPTURE_MAX_VERTICES) { CAPTURE_ERROR(type, vtxfmt, nverts); immediate.active = 0; return; }
     MvGxCaptureCommand *command = &commands[stats.commands];
     memset(command, 0, sizeof(*command));
     command->first_vertex = stats.vertices; command->vertex_count = nverts; command->triangle_count = triangles;
     command->primitive = (uint8_t)type; command->vtxfmt = (uint8_t)vtxfmt; command->current_mtx = current_mtx; command->cull_mode = cull_mode; command->material = material_state;
     capture_snapshot_camera(command);
     int slot = matrix_slot(current_mtx);
-    if (slot >= 0) memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx));
+    if (slot >= 0) { memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx)); command->pos_mtx_valid = pos_mtx_valid[slot]; }
     memset(&immediate, 0, sizeof(immediate));
     immediate.active = 1; immediate.primitive = (uint8_t)type; immediate.vtxfmt = (uint8_t)vtxfmt; immediate.expected_vertices = nverts; immediate.vertex_bytes = (uint16_t)bytes;
 }
@@ -759,15 +983,16 @@ void GXVitaWrite_f32(f32 x) { uint32_t bits; memcpy(&bits, &x, sizeof(bits)); wr
 void GXLoadPosMtxImm(f32 mtx[3][4], u32 id)
 {
     int slot = matrix_slot(id);
-    if (!mtx || slot < 0) { ++stats.errors; return; }
+    if (!mtx || slot < 0) { CAPTURE_ERROR(id, slot, mtx != NULL); return; }
     memcpy(pos_mtx[slot], mtx, sizeof(pos_mtx[slot]));
+    pos_mtx_valid[slot] = 1;
     ++stats.pos_mtx_loads;
 }
 
 void GXLoadNrmMtxImm(f32 mtx[3][4], u32 id)
 {
     int slot = matrix_slot(id);
-    if (!mtx || slot < 0) { ++stats.errors; return; }
+    if (!mtx || slot < 0) { CAPTURE_ERROR(id, slot, mtx != NULL); return; }
     memcpy(nrm_mtx[slot], mtx, sizeof(nrm_mtx[slot]));
     ++stats.nrm_mtx_loads;
 }
@@ -778,17 +1003,36 @@ void GXLoadTexMtxImm(f32 mtx[][4], u32 id, GXTexMtxType type)
      * matrix payload is enough for the next TEV/texgen stage; slot selection is
      * intentionally bounded instead of pretending to implement GX XF memory. */
     unsigned slot = ((unsigned)id / 3u) % MV_CAPTURE_MATRIX_SLOTS;
-    if (!mtx) { ++stats.errors; return; }
+    if (!mtx) { CAPTURE_ERROR(id, type, 0); return; }
     memset(tex_mtx[slot], 0, sizeof(tex_mtx[slot]));
     if (type == GX_MTX2x4)
         memcpy(tex_mtx[slot], mtx, sizeof(float) * 2u * 4u);
     else if (type == GX_MTX3x4)
         memcpy(tex_mtx[slot], mtx, sizeof(tex_mtx[slot]));
     else {
-        ++stats.errors;
+        CAPTURE_ERROR(id, type, slot);
         return;
     }
+    tex_mtx_valid[slot] = 1;
+    tex_mtx_id[slot] = id;
     ++stats.tex_mtx_loads;
+}
+
+int mv_gx_capture_get_tex_mtx(uint32_t id, float out[2][3])
+{
+    if (!out) return -1;
+    unsigned slot = ((unsigned)id / 3u) % MV_CAPTURE_MATRIX_SLOTS;
+    if (!tex_mtx_valid[slot] || tex_mtx_id[slot] != id) return -1;
+    out[0][0] = tex_mtx[slot][0][0];
+    out[0][1] = tex_mtx[slot][0][1];
+    out[0][2] = tex_mtx[slot][0][3];
+    out[1][0] = tex_mtx[slot][1][0];
+    out[1][1] = tex_mtx[slot][1][1];
+    out[1][2] = tex_mtx[slot][1][3];
+    for (unsigned r = 0; r < 2; ++r)
+        for (unsigned c = 0; c < 3; ++c)
+            if (!isfinite(out[r][c])) return -1;
+    return 0;
 }
 
 void GXSetCullMode(GXCullMode mode)
@@ -799,7 +1043,7 @@ void GXSetCullMode(GXCullMode mode)
 
 void GXCallDisplayList(void *list, u32 nbytes)
 {
-    if (!list || !nbytes) { ++stats.errors; return; }
+    if (!list || !nbytes) { CAPTURE_ERROR(nbytes, list != NULL, 0); return; }
     ++stats.display_lists;
     const uint8_t *cursor = list;
     const uint8_t *end = cursor + nbytes;
@@ -809,7 +1053,7 @@ void GXCallDisplayList(void *list, u32 nbytes)
         uint8_t primitive = opcode & GX_OPCODE_MASK;
         GXVtxFmt vtxfmt = (GXVtxFmt)(opcode & GX_VAT_MASK);
         if ((unsigned)vtxfmt >= GX_MAX_VTXFMT || (size_t)(end - cursor) < 2) {
-            ++stats.errors;
+            CAPTURE_ERROR(opcode, vtxfmt, (uint32_t)(end - cursor));
             return;
         }
         uint16_t count = read_be16(cursor);
@@ -817,7 +1061,7 @@ void GXCallDisplayList(void *list, u32 nbytes)
         uint32_t triangles = primitive_triangles(primitive, count);
         if (triangles == UINT32_MAX || stats.commands >= MV_CAPTURE_MAX_COMMANDS ||
             stats.vertices + count > MV_CAPTURE_MAX_VERTICES) {
-            ++stats.errors;
+            CAPTURE_ERROR(primitive, count, stats.commands);
             return;
         }
         MvGxCaptureCommand *command = &commands[stats.commands];
@@ -832,22 +1076,28 @@ void GXCallDisplayList(void *list, u32 nbytes)
         command->material = material_state;
         capture_snapshot_camera(command);
         int slot = matrix_slot(current_mtx);
-        if (slot >= 0) memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx));
+        if (slot >= 0) { memcpy(command->pos_mtx, pos_mtx[slot], sizeof(command->pos_mtx)); command->pos_mtx_valid = pos_mtx_valid[slot]; }
         for (uint16_t i = 0; i < count; ++i) {
             if (decode_vertex(&cursor, end, vtxfmt, &vertices[stats.vertices + i],
                               &command->attr_mask)) {
-                ++stats.errors;
+                uint32_t packed = ((decode_error_type & 0xffu) << 24) |
+                                  (((uint32_t) vtxfmt & 0xffu) << 16) |
+                                  (command->attr_mask & 0xffffu);
+                CAPTURE_ERROR(decode_error_reason ? decode_error_reason : 0xffu,
+                              decode_error_attr, packed);
                 return;
             }
         }
         if (command->attr_mask & (1u << GX_VA_PNMTXIDX)) {
+            command->pos_mtx_valid = 1;
             for (uint16_t i = 0; i < count; ++i) {
                 MvGxCaptureVertex *vertex = &vertices[stats.vertices + i];
                 int vertex_slot = matrix_slot(vertex->pos_mtx_idx);
                 if (vertex_slot < 0) {
-                    ++stats.errors;
+                    CAPTURE_ERROR(vertex->pos_mtx_idx, i, count);
                     return;
                 }
+                if (!pos_mtx_valid[vertex_slot]) command->pos_mtx_valid = 0;
                 float x = vertex->position[0];
                 float y = vertex->position[1];
                 float z = vertex->position[2];
@@ -876,4 +1126,3 @@ void GXCallDisplayList(void *list, u32 nbytes)
             ++stats.line_point_commands;
     }
 }
-

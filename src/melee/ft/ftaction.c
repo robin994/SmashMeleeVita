@@ -582,7 +582,19 @@ void ftAction_80071B50(Fighter_GObj* gobj, CommandInfo* cmd)
     s32 behavior;
 
     fp = GET_FIGHTER(gobj);
+#ifdef MELEE_VITA_PLATFORM
+    /* Opcode 55 reuses the sound handler with its own first-word schema.
+     * Preserve the PPC reinterpretation: sound behavior is raw bits 25..18,
+     * which span unk_fx_0.x0_b6_7 and the high six bits of x1_b0_7. */
+    if (((*(u32*) cmd->u) & 0x3FU) == 55U) {
+        behavior = (cmd->u->unk_fx_0.x0_b6_7 << 6) |
+                   (cmd->u->unk_fx_0.x1_b0_7 >> 2);
+    } else {
+        behavior = cmd->u->sound_effect_0.behavior;
+    }
+#else
     behavior = cmd->u->sound_effect_0.behavior;
+#endif
     NEXT_CMD(cmd);
 
     switch (behavior) {
@@ -1223,7 +1235,14 @@ void ftAction_80072E4C(Fighter_GObj* gobj, CommandInfo* cmd)
     }
 
     if (gfx_id == -1) {
+#ifdef MELEE_VITA_PLATFORM
+        /* PPC reads bytes 2..3 as a big-endian u16.  The nativeized command
+         * stores those byte fields independently in ARM bitfield order. */
+        gfx_id = ((u32) cmd->u->unk_fx_0.x2_b0_7 << 8) |
+                 cmd->u->unk_fx_0.x3_b0_7;
+#else
         gfx_id = ((u16*) cmd->u)[1];
+#endif
     }
     offset.z = 0.0f;
     range.z = 0.0f;

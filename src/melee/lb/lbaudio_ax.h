@@ -77,6 +77,7 @@ void lbAudioAx_8002702C(u32 flags, u64 mask);
 void lbAudioAx_80027168(void);
 #ifdef MELEE_VITA_PLATFORM
 void lbAudioAx_VitaSfxStateTrace(const char* tag);
+int lbAudioAx_VitaWaitForLoadsBounded(unsigned max_pumps);
 #endif
 void lbAudioAx_80027648(void);
 void lbAudioAx_8002785C(void);

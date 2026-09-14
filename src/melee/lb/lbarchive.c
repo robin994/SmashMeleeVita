@@ -14,6 +14,7 @@ extern void mv_boot_archive_prepare(HSD_Archive*, const char*);
 #endif
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "lbdvd.h"
@@ -292,14 +293,28 @@ bool lbArchive_800171CC(HSD_Archive** dst, const char* filename, void* symbols,
     return preloaded;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+static u32 lbArchive_be32(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u32) p[0] << 24 | (u32) p[1] << 16 | (u32) p[2] << 8 | p[3];
+}
+#endif
+
 static inline void Locate(HSD_Archive* archive, intptr_t base_addr)
 {
     u32 i;
     u32* ptr;
 
     for (i = 0; i < archive->header.nb_reloc; i++) {
+#ifdef MELEE_VITA_PLATFORM
+        u32 field = lbArchive_be32(&archive->reloc_info[i].offset);
+        ptr = (u32*) (archive->data + field);
+        *ptr += (u32) base_addr;
+#else
         ptr = (u32*) archive->reloc_info[i].offset;
         *(intptr_t*) (archive->data + (u32) ptr) += base_addr;
+#endif
     }
 }
 
@@ -313,7 +328,22 @@ int lbArchiveRelocate(HSD_Archive* archive, u8* src, size_t file_size,
     }
     memset(archive, 0, sizeof(HSD_Archive));
     archive->flags |= 1;
+#ifdef MELEE_VITA_PLATFORM
+    if (src == NULL || file_size < sizeof(HSD_ArchiveHeader)) {
+        return -1;
+    }
+    archive->header.file_size = lbArchive_be32(src + 0x00);
+    archive->header.data_size = lbArchive_be32(src + 0x04);
+    archive->header.nb_reloc = lbArchive_be32(src + 0x08);
+    archive->header.nb_public = lbArchive_be32(src + 0x0C);
+    archive->header.nb_extern = lbArchive_be32(src + 0x10);
+    memcpy(archive->header.version, src + 0x14,
+           sizeof(archive->header.version));
+    archive->header.pad[0] = lbArchive_be32(src + 0x18);
+    archive->header.pad[1] = lbArchive_be32(src + 0x1C);
+#else
     memcpy(archive, src, sizeof(HSD_ArchiveHeader));
+#endif
 
     if (archive->header.file_size != file_size) {
         OSReport("lbArchiveRelocate: byte-order mismatch! "
@@ -321,6 +351,22 @@ int lbArchiveRelocate(HSD_Archive* archive, u8* src, size_t file_size,
                  archive->header.file_size, file_size);
         return -1;
     }
+
+#ifdef MELEE_VITA_PLATFORM
+    {
+        uint64_t metadata_end = sizeof(HSD_ArchiveHeader);
+        metadata_end += archive->header.data_size;
+        metadata_end += (uint64_t) archive->header.nb_reloc *
+                        sizeof(HSD_ArchiveRelocationInfo);
+        metadata_end += (uint64_t) archive->header.nb_public *
+                        sizeof(HSD_ArchivePublicInfo);
+        metadata_end += (uint64_t) archive->header.nb_extern *
+                        sizeof(HSD_ArchiveExternInfo);
+        if (metadata_end > file_size) {
+            return -1;
+        }
+    }
+#endif
 
     file_offset = sizeof(HSD_ArchiveHeader);
     if (archive->header.data_size != 0) {

@@ -11,6 +11,12 @@
 #include <dolphin/ar.h>
 #include <dolphin/os.h>
 
+#ifdef MELEE_VITA_PLATFORM
+/* Vita's DVD/ARAM completion model is cooperative rather than interrupt-driven. */
+void mv_gc_async_pump(void);
+unsigned mv_gc_async_pending(void);
+#endif
+
 /* 389334 */ static int HSD_Synth_80389334(int sfx_id, u8 vol, u8 vol2, u8 pan,
                                            int priority, int itd_flag,
                                            float pitch1, float pitch2,
@@ -62,6 +68,23 @@ static void vita_sfx_store_u16(void* ptr, u16 value)
 static void vita_sfx_store_u32(void* ptr, u32 value)
 {
     memcpy(ptr, &value, sizeof(value));
+}
+
+void HSD_SynthVitaNormalizeStreamBlockHeader(void* block)
+{
+    u8* raw = block;
+    int i;
+
+    /* Every HPS block header is stored in GameCube byte order. The first
+     * header and all later ring-buffer headers must be normalized exactly
+     * once before original HSD consumes x0/x4/x8 on little-endian ARM. */
+    vita_sfx_store_u32(raw + 0x00, vita_sfx_be32(raw + 0x00));
+    vita_sfx_store_u32(raw + 0x04, vita_sfx_be32(raw + 0x04));
+    vita_sfx_store_u32(raw + 0x08, vita_sfx_be32(raw + 0x08));
+    for (i = 0; i < 10; ++i) {
+        vita_sfx_store_u16(raw + 0x0C + i * 2,
+                           vita_sfx_be16(raw + 0x0C + i * 2));
+    }
 }
 
 static void vita_sfx_convert_voice(u8* voice, u32 aram_base)
@@ -613,6 +636,33 @@ static AXPBMIX lbl_80407FB4 = { 0 };
 
 static AXPBSRC HSD_Synth_80407FD8 = { 1, 0, 0, { 0, 0, 0, 0 } };
 
+/* PPC stores the 16.16 SRC ratio by aliasing ratioHi/ratioLo as a u32.
+ * That relies on the GameCube's big-endian layout: 1.0 (0x00010000) becomes
+ * ratioHi=1, ratioLo=0.  The same aliasing on little-endian ARM reverses the
+ * halves and makes 1.0 look like 1/65536 to the Vita mixer. */
+static inline void HSD_SynthSetSrcRatioFixed(AXPBSRC* src, u32 fixed)
+{
+#ifdef MELEE_VITA_PLATFORM
+    src->ratioHi = (u16) (fixed >> 16);
+    src->ratioLo = (u16) fixed;
+#else
+    *(u32*) &src->ratioHi = fixed;
+#endif
+}
+
+/* AX stores DSP addresses as semantic high/low halfwords. A PPC u32 alias
+ * reconstructs them only on big-endian hardware; on little-endian ARM it
+ * reverses the halves and makes the HPS ring see false 128 KiB slot jumps. */
+static inline u32 HSD_SynthVoiceCurrentAddr(const AXVPB* voice)
+{
+#ifdef MELEE_VITA_PLATFORM
+    return ((u32) voice->pb.addr.currentAddressHi << 16) |
+           (u32) voice->pb.addr.currentAddressLo;
+#else
+    return *(const u32*) &voice->pb.addr.currentAddressHi;
+#endif
+}
+
 int HSD_Synth_80389334(int sfx_id, u8 vol, u8 vol2, u8 pan, int priority,
                        int itd_flag, float pitch1, float pitch2,
                        float mix_main, float mix_auxA, float mix_auxB)
@@ -697,9 +747,11 @@ int HSD_Synth_80389334(int sfx_id, u8 vol, u8 vol2, u8 pan, int priority,
             while (voice_idx < sfx_entry->unk8) {
                 AXSetVoicePriority(voices[voice_idx], priority);
                 AXSetVoiceVe(voices[voice_idx], &ve);
-                *(u32*) &HSD_Synth_80407FD8.ratioHi =
-                    (65536.0F *
-                     (sfx_node->x18[1] * (sfx_node->x14 * sfx_node->x18[0])));
+                HSD_SynthSetSrcRatioFixed(
+                    &HSD_Synth_80407FD8,
+                    (u32) (65536.0F *
+                           (sfx_node->x18[1] *
+                            (sfx_node->x14 * sfx_node->x18[0]))));
                 AXSetVoiceSrc(voices[voice_idx], &HSD_Synth_80407FD8);
                 AXSetVoiceAddr(voices[voice_idx], &SFX_VOICE(voice_idx)->x10);
                 AXSetVoiceAdpcm(voices[voice_idx], &SFX_VOICE(voice_idx)->x20);
@@ -807,9 +859,7 @@ static inline void stopRange(size_t lo, size_t hi)
     for (i = 0; i < 0x40; i++) {
         struct HSD_SynthSFXNode* node = &hsd_SynthSFXNodes[i];
         if (hsd_SynthSFXNodes[i].x0 > 0) {
-            addr = *(size_t*) &hsd_SynthSFXNodes[i]
-                        .voice[0]
-                        ->pb.addr.currentAddressHi;
+            addr = HSD_SynthVoiceCurrentAddr(node->voice[0]);
             if (addr >= lo && addr < hi) {
                 HSD_SynthSFXStopNode(&hsd_SynthSFXNodes[i]);
             }
@@ -1275,6 +1325,21 @@ void HSD_SynthResetStreamCounters(int result, int length, void* buf, bool b)
 
 void HSD_Synth_8038AD74(u32 offset, uintptr_t src)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* This callback runs after the NEXT 0x20-byte HPS block header has been
+     * DMA'd into the ring slot. The original GameCube consumes it natively as
+     * big-endian; Vita must normalize it before x0 is used for the payload and
+     * before x8 is later used as the following file offset. Without this, an
+     * on-disc 00 02 00 C0 becomes 0xC0000200 and permanently wedges DevCom. */
+    HSD_SynthVitaNormalizeStreamBlockHeader(
+        &lbl_804C4540[HSD_Synth_804D7768]);
+    OSReport("HPS_BLOCK_HEADER_NEXT chunk=%u end=%u next=%08x payload=%08lx slot=%u\n",
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x0,
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x4,
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x8,
+             (unsigned long) src,
+             (unsigned) HSD_Synth_804D7768);
+#endif
     HSD_DevComRequest(HSD_Synth_804D7764, src,
                       HSD_Synth_804D7780 + (HSD_Synth_804D7768 << 16),
                       lbl_804C4540[HSD_Synth_804D7768].x0, 0x23, 0,
@@ -1324,8 +1389,25 @@ void HSD_Synth_8038ADD0(void)
     if (node->flags & 8) {
         return;
     }
-    pos = (*(u32*) ((u8*) node->voice[0] + 0x1B2) - HSD_Synth_804D7780 * 2) >>
-          0x11;
+    {
+        const u32 current = HSD_SynthVoiceCurrentAddr(node->voice[0]);
+        const u32 base = HSD_Synth_804D7780 * 2;
+        if (current < base) {
+#ifdef MELEE_VITA_PLATFORM
+            OSReport("VITA_HPS_PLAYHEAD_INVALID current=%08x base=%08x reason=below_base\n",
+                     current, base);
+#endif
+            return;
+        }
+        pos = (current - base) >> 0x11;
+        if (pos >= 3) {
+#ifdef MELEE_VITA_PLATFORM
+            OSReport("VITA_HPS_PLAYHEAD_INVALID current=%08x base=%08x pos=%u reason=slot_range\n",
+                     current, base, (unsigned) pos);
+#endif
+            return;
+        }
+    }
     if (pos != HSD_Synth_804D7774) {
         HSD_Synth_804D7774 = pos;
         for (i = 0; i < node->voice_count; i++) {
@@ -1386,11 +1468,12 @@ void HSD_Synth_8038B120(void)
         for (i = 0; i < node->voice_count; i++) {
             AXSetVoiceVe(node->voice[i], &ve);
             if (node->flags & 4) {
-                *(u32*) &HSD_Synth_80407FD8.ratioHi = 0;
+                HSD_SynthSetSrcRatioFixed(&HSD_Synth_80407FD8, 0);
             } else {
-                *(u32*) &HSD_Synth_80407FD8.ratioHi =
+                HSD_SynthSetSrcRatioFixed(
+                    &HSD_Synth_80407FD8,
                     (u32) (65536.0F *
-                           (node->x14 * node->x18[0] * node->x18[1]));
+                           (node->x14 * node->x18[0] * node->x18[1])));
             }
             AXSetVoiceSrc(node->voice[i], &HSD_Synth_80407FD8);
             AXSetVoiceCurrentAddr(
@@ -1426,28 +1509,13 @@ void HSD_Synth_8038B120(void)
 void HSD_SynthPStreamFirstHakoHeaderCallback(void)
 {
 #ifdef MELEE_VITA_PLATFORM
-    /* HPS stream headers are stored in GameCube byte order. The 0x20-byte
-     * block is read directly into this ring entry, so normalize it before the
-     * original stream code consumes the chunk size/offset and ADPCM loop
-     * state on little-endian ARM. */
-    {
-        u8* raw = (u8*) &lbl_804C4540[HSD_Synth_804D7768];
-        u32* words = (u32*) raw;
-        u16* halves = (u16*) (raw + 0x0C);
-        int i;
-
-        words[0] = __builtin_bswap32(words[0]);
-        words[1] = __builtin_bswap32(words[1]);
-        words[2] = __builtin_bswap32(words[2]);
-        for (i = 0; i < 10; ++i) {
-            halves[i] = __builtin_bswap16(halves[i]);
-        }
-        OSReport("HPS_BLOCK_HEADER chunk=%u end=%u next=%08x slot=%u\n",
-                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x0,
-                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x4,
-                 (unsigned) lbl_804C4540[HSD_Synth_804D7768].x8,
-                 (unsigned) HSD_Synth_804D7768);
-    }
+    HSD_SynthVitaNormalizeStreamBlockHeader(
+        &lbl_804C4540[HSD_Synth_804D7768]);
+    OSReport("HPS_BLOCK_HEADER chunk=%u end=%u next=%08x slot=%u\n",
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x0,
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x4,
+             (unsigned) lbl_804C4540[HSD_Synth_804D7768].x8,
+             (unsigned) HSD_Synth_804D7768);
 #endif
     HSD_DevComRequest(HSD_Synth_804D7764, 0xA0,
                       HSD_Synth_804D7780 + (HSD_Synth_804D7768 << 16),
@@ -1500,8 +1568,8 @@ void HSD_SynthPStreamHeaderCallback(int arg0, int arg1, void* arg2,
                 adpcm_words[j] = ((u16) channel[j * 2] << 8) |
                                  (u16) channel[j * 2 + 1];
             }
-            *(u32*) &HSD_Synth_80407FD8.ratioHi =
-                (u32) (65536.0f * node->x14);
+            HSD_SynthSetSrcRatioFixed(
+                &HSD_Synth_80407FD8, (u32) (65536.0f * node->x14));
             AXSetVoiceAddr(node->voice[i], &addr);
             AXSetVoiceAdpcm(node->voice[i], &adpcm);
         }
@@ -1513,7 +1581,8 @@ void HSD_SynthPStreamHeaderCallback(int arg0, int arg1, void* arg2,
         }
         node->x14 = 0.00003125f * (f32) entry[2];
         for (i = 0; i < node->voice_count; i++) {
-            *(u32*) &HSD_Synth_80407FD8.ratioHi = (u32) (65536.0f * node->x14);
+            HSD_SynthSetSrcRatioFixed(
+                &HSD_Synth_80407FD8, (u32) (65536.0f * node->x14));
             AXSetVoiceAddr(node->voice[i], (AXPBADDR*) &entry[i * 14 + 4]);
             AXSetVoiceAdpcm(node->voice[i], (AXPBADPCM*) &entry[i * 14 + 8]);
         }
@@ -1568,8 +1637,32 @@ int HSD_Synth_8038B5AC(int entrynum, u8 vol, u8 vol2, int channel)
 
     PAD_STACK(8);
 
+#ifdef MELEE_VITA_PLATFORM
+    {
+        unsigned pumps = 0;
+        /* Retail spins here while GameCube DVD interrupts continue in parallel.
+         * Vita must explicitly advance deferred DVD/ARAM completions or this
+         * becomes a main-thread deadlock with no exception/coredump. */
+        while (HSD_Synth_804D7778 != 0 && pumps < 2048) {
+            if (mv_gc_async_pending() == 0) {
+                break;
+            }
+            mv_gc_async_pump();
+            ++pumps;
+        }
+        if (HSD_Synth_804D7778 != 0) {
+            OSReport("HPS_STREAM_BUSY_RECOVER pumps=%u pending_async=%u action=clear_stale\n",
+                     pumps, mv_gc_async_pending());
+            HSD_Synth_804D7778 = 0;
+        } else if (pumps != 0) {
+            OSReport("HPS_STREAM_BUSY_DRAIN pumps=%u pending_async=%u\n",
+                     pumps, mv_gc_async_pending());
+        }
+    }
+#else
     do {
     } while (HSD_Synth_804D7778 != 0);
+#endif
 
     HSD_Synth_804D7778 = 1;
     enabled = OSDisableInterrupts();

@@ -1,4 +1,6 @@
 #include "render_vita.h"
+#include "audio_boot_vita.h"
+#include "gc_runtime_vita.h"
 static int initialized;
 static int compiler_configured;
 int mv_render_init(void)
@@ -45,4 +47,15 @@ void mv_render_begin(void)
     glDepthMask(GL_TRUE);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
 }
-void mv_render_present(void) { vglSwapBuffers(GL_FALSE); }
+void mv_render_present(void)
+{
+    /* Native title/menu/CSS loops do not pass through VIWaitForRetrace().
+     * Advance one host-side async device boundary and the time-gated AX control
+     * engine here.  Retail gameplay may hit both this and VIWaitForRetrace;
+     * AX is elapsed-time gated, while an extra async completion is harmless
+     * and mirrors independent DVD/ARAM interrupt progress on GameCube. */
+    mv_gc_async_pump();
+    mv_gc_alarm_pump();
+    mv_ax_vblank_pump();
+    vglSwapBuffers(GL_FALSE);
+}

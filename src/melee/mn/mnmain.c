@@ -53,6 +53,18 @@
 
 #ifdef MELEE_VITA_PLATFORM
 #include "menu_boot_vita.h"
+
+/* The matching PPC source has several small scratch arrays whose original
+ * stack placement tolerates menu counts larger than their apparent C bounds.
+ * That is not portable to ARM: Settings has 6 entries and SPECIAL has 10.
+ * Give Vita an explicit bound large enough for every mn_803EB6B0 menu so a
+ * menu transition cannot overwrite callee-saved registers. */
+#define MN_VITA_OPTION_SCRATCH_CAPACITY 12
+
+int mn_VitaOptionScratchCapacity(void)
+{
+    return MN_VITA_OPTION_SCRATCH_CAPACITY;
+}
 #endif
 #define MN_SUBMENU_THINK(fn) (fn)
 /* 22C068 */ static void mn_8022C068(HSD_LObj*, int, int);
@@ -765,15 +777,6 @@ static inline u8 mn_80229A04_dontinline(MenuKind kind, int selection)
 /// @brief creates the description text for the hovered selection
 static void mn_80229A7C(MainMenuData* data, MenuKind menu_kind, int selection)
 {
-#ifdef MELEE_VITA_PLATFORM
-    /* The visible main-menu labels are HSD geometry in MnMaAll.  SIS is only
-     * used for the lower description line; keep it out of the first native
-     * menu island until the text renderer is ported to vitaGL. */
-    (void) data;
-    (void) menu_kind;
-    (void) selection;
-    return;
-#else
     HSD_Text* temp_r3;
     HSD_Text* text;
     u16* sis_idx;
@@ -791,7 +794,6 @@ static void mn_80229A7C(MainMenuData* data, MenuKind menu_kind, int selection)
         text->font_size.y = 0.0521f;
         HSD_SisLib_803A6368(text, sis_idx[selection]);
     }
-#endif
 }
 
 static inline void mn_80229A7C_dontinline(void* arg0, int arg1, int arg2)
@@ -1034,7 +1036,11 @@ void mn_8022A440(HSD_GObj* gp, HSD_JObj* root, MainMenuSelection selection)
 void mn_8022A5D0(HSD_GObj* gp, MainMenuSelection selection)
 {
     u8 _[8];
+#ifdef MELEE_VITA_PLATFORM
+    HSD_JObj* spA0[MN_VITA_OPTION_SCRATCH_CAPACITY];
+#else
     HSD_JObj* spA0[7];
+#endif
     HSD_JObj* sp84[7];
     HSD_JObj* sp80;
     Vec3 sp74;
@@ -1059,6 +1065,10 @@ void mn_8022A5D0(HSD_GObj* gp, MainMenuSelection selection)
     // var_r5 = &spA0[0];
     data = gp->user_data;
     option_count = mn_803EB6B0[data->menu_kind].selection_count;
+#ifdef MELEE_VITA_PLATFORM
+    HSD_ASSERTREPORT(0xC01, option_count <= (int) ARRAY_SIZE(spA0),
+                     "Vita main-menu option scratch overflow\n");
+#endif
 
     for (i = 0; i < option_count; i++) {
         temp_r3 = data->tree[var_r4[i]];
@@ -1220,7 +1230,11 @@ void fn_8022AFEC(HSD_GObj* gp)
     u8 state;
     u8 option_count;
     u8 pad[0x20];
+#ifdef MELEE_VITA_PLATFORM
+    HSD_JObj* sp20[MN_VITA_OPTION_SCRATCH_CAPACITY];
+#else
     HSD_JObj* sp20[4];
+#endif
     PAD_STACK(18);
 
     var_r26 = 0;
@@ -1308,6 +1322,10 @@ void fn_8022AFEC(HSD_GObj* gp)
         }
         data2 = HSD_GObjGetUserData(gp);
         option_count = mn_803EB6B0[data2->menu_kind].selection_count & 0xFF;
+#ifdef MELEE_VITA_PLATFORM
+        HSD_ASSERTREPORT(0xC02, option_count <= (int) ARRAY_SIZE(sp20),
+                         "Vita main-menu think scratch overflow\n");
+#endif
         {
             int i;
             for (i = 0; i < option_count; i++) {
@@ -1370,9 +1388,9 @@ void fn_8022AFEC(HSD_GObj* gp)
             mn_80229A7C_dontinline(final_data, final_data->menu_kind,
                                    hovered_selection);
         }
-#ifndef MELEE_VITA_PLATFORM
-        final_data->description->hidden = 0;
-#endif
+        if (final_data->description != NULL) {
+            final_data->description->hidden = 0;
+        }
         break;
     }
     if (var_r26 != 0) {

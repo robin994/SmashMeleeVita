@@ -5,6 +5,19 @@ endif()
 project(SmashMeleeVita C)
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 set(CMAKE_C_STANDARD 11)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(MELEE_SIS_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/sis_font_atlas.c")
+add_custom_command(
+  OUTPUT "${MELEE_SIS_FONT_SOURCE}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
+          --dol "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01/sys/main.dol"
+          --output "${MELEE_SIS_FONT_SOURCE}"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_sis_font.py"
+          "${CMAKE_CURRENT_SOURCE_DIR}/../orig/GALE01/sys/main.dol"
+  COMMENT "Extracting original Melee SIS glyph atlas"
+  VERBATIM)
+set_source_files_properties("${MELEE_SIS_FONT_SOURCE}" PROPERTIES GENERATED TRUE)
 option(MELEE_VITA_FULL_GAMEPLAY_SCENE
   "Link and enter the complete retail GS_VS/GS_TRAINING runtime frontier" ON)
 option(MELEE_VITA_SKIP_CLASSIC_INTRO
@@ -17,7 +30,7 @@ add_library(melee_assets STATIC hsd_data.c hsd_anim.c hsd_scene.c hsd_matanim.c 
 target_include_directories(melee_assets PRIVATE ../src ../extern/dolphin/include)
 target_compile_options(melee_assets PRIVATE -Wall -Wextra -Werror -O2 -fno-short-enums)
 add_library(melee_hsd_runtime STATIC
-  hsd_runtime_platform.c hsd_runtime_probe.c hsd_anim_native.c hsd_matanim_native.c gx_capture_vita.c gx_state_vita.c mtx_vita.c
+  hsd_runtime_platform.c hsd_runtime_probe.c hsd_anim_native.c hsd_matanim_native.c hsd_shapeanim_native.c gx_capture_vita.c gx_state_vita.c mtx_vita.c
   ../extern/dolphin/src/dolphin/mtx/mtx44.c
   ../src/sysdolphin/baselib/wobj.c
   ../src/sysdolphin/baselib/spline.c
@@ -66,7 +79,8 @@ target_compile_definitions(melee_hsd_runtime PRIVATE MELEE_VITA_PLATFORM=1 MELEE
 target_compile_options(melee_hsd_runtime PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
 
 add_library(melee_game_boot STATIC
-  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c game_boot_support_vita.c gmopening_state_vita.c scene_archive_vita.c stage_archive_vita.c gameplay_archive_vita.c
+  ${MELEE_SIS_FONT_SOURCE}
+  gc_runtime_vita.c gx_boot_vita.c audio_boot_vita.c ax_vita.c game_boot_support_vita.c gmopening_state_vita.c scene_archive_vita.c stage_archive_vita.c gameplay_archive_vita.c fighter_command_native.c item_state_native.c
   ../src/melee/gm/gmmain.c
   ../src/melee/gm/gm_1A3F.c
   ../src/melee/gm/gm_1A36.c
@@ -189,6 +203,7 @@ add_library(melee_game_boot STATIC
   ../src/sysdolphin/baselib/hsd_3A76.c
   ../src/sysdolphin/baselib/axdriver.c
   ../src/sysdolphin/baselib/synth.c
+  ../src/sysdolphin/baselib/devcom.c
   ../src/sysdolphin/baselib/sislib.c
   ../src/sysdolphin/baselib/hsd_3B5C.c)
 if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
@@ -231,7 +246,7 @@ if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
     ../src/sysdolphin/baselib/fog.c)
 endif()
 target_include_directories(melee_game_boot PRIVATE . ../src ../extern/dolphin/include)
-target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_BOOT_PROBE=1 MELEE_VITA_SYNC_DVD=1 MELEE_VITA_AUDIO_BOOT_PROBE=1)
+target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_BOOT_PROBE=1 MELEE_VITA_AUDIO_BOOT_PROBE=1)
 if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
   include(${CMAKE_CURRENT_SOURCE_DIR}/full_gameplay_sources.cmake)
   target_compile_definitions(melee_game_boot PRIVATE MELEE_VITA_FULL_GAMEPLAY_SCENE=1)
@@ -242,22 +257,25 @@ endif()
 target_compile_options(melee_game_boot PRIVATE -O2 -ffunction-sections -fdata-sections -fno-short-enums)
 
 set(MELEE_RENDER_SOURCES gx_replay_vitagl.c render_vitagl.c)
-add_executable(melee_vita main.c mode_route_vita.c pad_vita.c mth_player_vita.c thp_jpeg.c title_boot_vita.c menu_boot_vita.c css_assets_vita.c sss_assets_vita.c onep_boot_vita.c frame_telemetry_vita.c ${MELEE_RENDER_SOURCES} $<TARGET_OBJECTS:melee_portable>)
+add_executable(melee_vita main.c mode_route_vita.c pad_vita.c mth_player_vita.c thp_jpeg.c title_boot_vita.c menu_boot_vita.c css_assets_vita.c sss_assets_vita.c onep_boot_vita.c frame_telemetry_vita.c retail_runtime_vita.c ${MELEE_RENDER_SOURCES} $<TARGET_OBJECTS:melee_portable>)
 target_include_directories(melee_vita PRIVATE ../src ../extern/dolphin/include)
 target_compile_definitions(melee_vita PRIVATE MELEE_VITA_PLATFORM=1 MELEE_VITA_INIT_PROBE=1 MELEE_VITAGL=1)
 if(MELEE_VITA_FULL_GAMEPLAY_SCENE)
   target_compile_definitions(melee_vita PRIVATE MELEE_VITA_FULL_GAMEPLAY_SCENE=1)
 endif()
 target_compile_options(melee_vita PRIVATE -Wall -Wextra -Werror -Wno-array-parameter -O2 -fno-short-enums)
-target_link_options(melee_vita PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/melee_vita.map" -Wl,--gc-sections -Wl,--wrap=__assert)
+target_link_options(melee_vita PRIVATE "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/melee_vita.map" -Wl,--gc-sections -Wl,--wrap=__assert -Wl,--undefined=mv_hsd_shared_skin_lazy_probe -Wl,--undefined=mv_devcom_reentrant_probe_begin -Wl,--undefined=mv_devcom_reentrant_probe_state -Wl,--undefined=mn_VitaOptionScratchCapacity)
 target_link_libraries(melee_vita melee_assets melee_game_boot melee_hsd_runtime turbojpeg SceGxm_stub SceDisplay_stub SceCtrl_stub
-  SceSysmodule_stub ScePgf_stub SceCommonDialog_stub SceAppMgr_stub SceTouch_stub m)
+  SceSysmodule_stub ScePgf_stub SceCommonDialog_stub SceAppMgr_stub SceTouch_stub
+  SceAudio_stub SceKernelThreadMgr_stub m)
 target_link_libraries(melee_vita vitaGL vitashark SceShaccCgExt SceShaccCg_stub
   SceKernelDmacMgr_stub ScePower_stub mathneon taihen_stub stdc++
   SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceSysmodule_stub SceAppMgr_stub)
 vita_create_self(eboot.bin melee_vita UNSAFE)
+# Request Vita extended user-memory mode (ATTRIBUTE2 is a DWORD SFO field).
+set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(SmashMeleeVita-assets.vpk SMEL00001 eboot.bin
-  VERSION 00.66 NAME "Melee Vita Runtime"
+  VERSION 01.07 NAME "Melee Vita Runtime"
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/pic0.png sce_sys/pic0.png
   FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

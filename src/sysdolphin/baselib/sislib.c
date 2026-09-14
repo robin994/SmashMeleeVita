@@ -341,6 +341,12 @@ HSD_Text* HSD_SisLib_803A5ACC(int font_idx, s32 context_id, f32 pos_x,
     text->x4C = 0;
     text->render_callback = 0;
     text->font_idx = font_idx;
+#ifdef MELEE_VITA_PLATFORM
+    text->vita_camera = cam_entry != NULL ?
+                            (cam_entry->vita_parent_camera != NULL ?
+                                 cam_entry->vita_parent_camera : cam_entry->x4) :
+                            NULL;
+#endif
     return text;
 }
 
@@ -540,6 +546,9 @@ int HSD_SisLib_803A611C(int font_idx, HSD_GObj* parent_gobj, u16 class_id,
     entry->xF = gx_prio;
     entry->xA = font_idx;
     entry->x0 = NULL;
+#ifdef MELEE_VITA_PLATFORM
+    entry->vita_parent_camera = parent_gobj;
+#endif
     if (parent_gobj != NULL) {
         entry->x4 = NULL;
     } else {

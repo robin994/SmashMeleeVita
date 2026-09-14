@@ -1,6 +1,7 @@
 #include "displayfunc.h"
 
 #include <string.h>
+#include <math.h>
 
 #include "cobj.h"
 #include "dobj.h"
@@ -215,6 +216,18 @@ static void mkRBillBoardMtx(HSD_JObj* jobj, MtxPtr src, MtxPtr dst)
     MTXConcat(rot, scl, dst);
 }
 
+#ifdef MELEE_VITA_PLATFORM
+static int vita_display_mtx_finite(MtxPtr m)
+{
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            if (!isfinite(m[row][col])) return 0;
+        }
+    }
+    return 1;
+}
+#endif
+
 void HSD_JObjMakePositionMtx(HSD_JObj* jobj, Mtx vmtx, Mtx pmtx)
 {
     Mtx mtx;
@@ -240,6 +253,29 @@ void HSD_JObjMakePositionMtx(HSD_JObj* jobj, Mtx vmtx, Mtx pmtx)
     } else {
         MTXConcat(vmtx, jobj->mtx, pmtx);
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (!vita_display_mtx_finite(pmtx)) {
+        static int logged_invalid_pmtx;
+        if (!logged_invalid_pmtx) {
+            logged_invalid_pmtx = 1;
+            OSReport("VITA_JOBJ_PMTX_INVALID flags=%08x view_finite=%d world_finite=%d rotate=%f,%f,%f scale=%f,%f,%f translate=%f,%f,%f\n",
+                     jobj->flags, vita_display_mtx_finite(vmtx),
+                     vita_display_mtx_finite(jobj->mtx), jobj->rotate.x,
+                     jobj->rotate.y, jobj->rotate.z, jobj->scale.x,
+                     jobj->scale.y, jobj->scale.z, jobj->translate.x,
+                     jobj->translate.y, jobj->translate.z);
+            OSReport("VITA_JOBJ_VIEW m=%f,%f,%f,%f;%f,%f,%f,%f;%f,%f,%f,%f\n",
+                     vmtx[0][0], vmtx[0][1], vmtx[0][2], vmtx[0][3],
+                     vmtx[1][0], vmtx[1][1], vmtx[1][2], vmtx[1][3],
+                     vmtx[2][0], vmtx[2][1], vmtx[2][2], vmtx[2][3]);
+            OSReport("VITA_JOBJ_WORLD m=%f,%f,%f,%f;%f,%f,%f,%f;%f,%f,%f,%f\n",
+                     jobj->mtx[0][0], jobj->mtx[0][1], jobj->mtx[0][2],
+                     jobj->mtx[0][3], jobj->mtx[1][0], jobj->mtx[1][1],
+                     jobj->mtx[1][2], jobj->mtx[1][3], jobj->mtx[2][0],
+                     jobj->mtx[2][1], jobj->mtx[2][2], jobj->mtx[2][3]);
+        }
+    }
+#endif
 }
 
 HSD_JObj* HSD_JObjFindSkeleton(HSD_JObj* jobj)

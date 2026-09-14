@@ -145,9 +145,21 @@ void lbFile_80016580(const char* basename, void* dst, size_t* size,
 
 void lbFile_8001668C(const char* basename, void* dst, size_t* size)
 {
+#ifdef MELEE_VITA_PLATFORM
+    char* filename = lbFileGetFullName(basename);
+    int entry_num = DVDConvertPathToEntrynum(filename);
+    DVDFileInfo info;
+    HSD_ASSERTREPORT(0x126, entry_num != -1, "file isn't exist %s = %d\n", filename, entry_num);
+    HSD_ASSERTREPORT(0x127, DVDFastOpen(entry_num, &info), "cannot open %s\n", filename);
+    *size = info.length;
+    s32 result = DVDReadPrio(&info, dst, ROUND_UP_32(*size), 0, 2);
+    DVDClose(&info);
+    HSD_ASSERTREPORT(0x128, result >= 0, "sync DVD read failed %s = %d\n", filename, result);
+#else
     cancel = false;
     lbFile_80016580(basename, dst, size, lbFile_8001615C, NULL);
     waitForDisc();
+#endif
 }
 
 static void lbFile_80016760_inline(int heap_id, const char* basename,
@@ -155,8 +167,21 @@ static void lbFile_80016760_inline(int heap_id, const char* basename,
 {
     *size = lbFileGetSize(basename);
     *dst = lbHeap_80015BD0(heap_id, ROUND_UP_32(*size));
+#ifdef MELEE_VITA_PLATFORM
+    /* This API is synchronous to its callers. GameCube completes the DevCom
+     * request from DVD interrupts while waitForDisc() spins; Vita defers those
+     * callbacks cooperatively, so a blocking main-thread wait can starve its
+     * own completion. Reuse the already validated direct synchronous DVD path
+     * used by lbFile_8001668C instead of emulating an interrupt-driven wait. */
+    OSReport("VITA_LBFILE_SYNC_BEGIN file=%s heap=%d bytes=%u\n", basename,
+             heap_id, (unsigned) *size);
+    lbFile_8001668C(basename, *dst, size);
+    OSReport("VITA_LBFILE_SYNC_PASS file=%s heap=%d bytes=%u\n", basename,
+             heap_id, (unsigned) *size);
+#else
     lbFile_80016580(basename, *dst, size, lbFile_8001615C, NULL);
     waitForDisc();
+#endif
 }
 
 void lbFile_80016760(const char* basename, void** dst, size_t* size)

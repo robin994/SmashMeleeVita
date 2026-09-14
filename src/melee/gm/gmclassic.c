@@ -4,6 +4,9 @@
 #include "gmmain_lib.h"
 #include "gmregcommon.h"
 #include <melee/gr/ground.h>
+#ifdef MELEE_VITA_PLATFORM
+#include <dolphin/os.h>
+#endif
 #include <melee/gr/stage.h>
 #include <melee/lb/lbaudio_ax.h>
 #include <melee/lb/lbdvd.h>
@@ -620,6 +623,40 @@ static gmClassicMatchupData gm_804D4320 = { { 0x052, { 0x21, 0x21, 0x21 }, 0 },
 static gmClassicMatchupData gm_804D4328 = { { 0x053, { 0x21, 0x21, 0x21 }, 0 },
                                             { 0, 0 } };
 
+#ifdef MELEE_VITA_PLATFORM
+static gmClassicMatchup* gmClassic_VitaFallbackMatchup(gmClassicMatchup* pool)
+{
+    int target = gmMainLib_8015CDC8()->c_kind;
+    gmClassicMatchup* entry;
+    for (entry = pool; entry->x00 != 0x148; ++entry) {
+        int i;
+        if (gm_80164430(entry->x00) == 0)
+            continue;
+        for (i = 0; i < 3; ++i) {
+            int ckind = entry->x02[i];
+            if (ckind != ChKind_None && ckind != target &&
+                gm_IsCKindUnlocked(ckind))
+            {
+                return entry;
+            }
+        }
+    }
+    /* All retail Classic pools are non-empty. If unlock filtering is more
+     * restrictive than expected on Vita, prefer the pool's first retail
+     * entry over the original intentional infinite loop. */
+    return pool->x00 != 0x148 ? pool : NULL;
+}
+
+static gmClassicMatchup* gmClassic_VitaRequireMatchup(gmClassicMatchup* pool,
+                                                       const char* name)
+{
+    gmClassicMatchup* result = gmClassic_VitaFallbackMatchup(pool);
+    OSReport("VITA_CLASSIC_MATCHUP_FALLBACK pool=%s result=%p stage=%u\n",
+             name, result, result != NULL ? (unsigned) result->x00 : 0xffffu);
+    return result;
+}
+#endif
+
 static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
 {
 #ifdef MELEE_VITA_PLATFORM
@@ -641,8 +678,15 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
             if (result != NULL) {
                 ptr->xC = result;
             } else {
+#ifdef MELEE_VITA_PLATFORM
+                result = gmClassic_VitaRequireMatchup(matchups->x2B0, "x2B0");
+                HSD_ASSERTREPORT(0x2D0, result != NULL,
+                                 "Vita Classic matchup pool is empty\n");
+                ptr->xC = result;
+#else
                 for (;;) {
                 }
+#endif
             }
         }
     }
@@ -655,8 +699,15 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
             if (result != NULL) {
                 ptr->xC = result;
             } else {
+#ifdef MELEE_VITA_PLATFORM
+                result = gmClassic_VitaRequireMatchup(matchups->x26C, "x26C");
+                HSD_ASSERTREPORT(0x2D0, result != NULL,
+                                 "Vita Classic matchup pool is empty\n");
+                ptr->xC = result;
+#else
                 for (;;) {
                 }
+#endif
             }
         }
     }
@@ -669,8 +720,15 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
             if (result != NULL) {
                 ptr->xC = result;
             } else {
+#ifdef MELEE_VITA_PLATFORM
+                result = gmClassic_VitaRequireMatchup(matchups->x1B8, "x1B8");
+                HSD_ASSERTREPORT(0x2D0, result != NULL,
+                                 "Vita Classic matchup pool is empty\n");
+                ptr->xC = result;
+#else
                 for (;;) {
                 }
+#endif
             }
         }
     }
@@ -683,8 +741,15 @@ static gm_803DDEC8Struct* gmClassic_801B2D54(gm_803DDEC8Struct* arg0)
             if (result != NULL) {
                 ptr->xC = result;
             } else {
+#ifdef MELEE_VITA_PLATFORM
+                result = gmClassic_VitaRequireMatchup(matchups->x0CC, "x0CC");
+                HSD_ASSERTREPORT(0x2D0, result != NULL,
+                                 "Vita Classic matchup pool is empty\n");
+                ptr->xC = result;
+#else
                 for (;;) {
                 }
+#endif
             }
         }
     }

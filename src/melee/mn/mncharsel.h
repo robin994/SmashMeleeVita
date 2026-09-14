@@ -28,5 +28,9 @@
 /* 26688C */ void mnCharSel_Scene_OnEnter(void*);
 /* 2669F4 */ void mnCharSel_Scene_OnFrame(void);
 /* 266D70 */ void mnCharSel_Scene_OnExit(void*);
+#ifdef MELEE_VITA_PLATFORM
+u32 mnCharSel_VitaDebugState(void);
+int mnCharSel_VitaTryStart(void);
+#endif
 
 #endif

@@ -6,7 +6,7 @@ import struct
 from arm_harness import ArmHarness
 from arm_component import boot_component
 from unicorn import UC_HOOK_CODE
-from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC
+from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3
 
 ASSETS = Path("orig/GALE01/files")
 ARTICLE_MASKS = {
@@ -116,6 +116,11 @@ arm.heap_end += extra_heap
 
 
 def silent(machine, _address, _size, _data):
+    message = arm.string(machine.reg_read(UC_ARM_REG_R0)).decode(errors="replace")
+    if "VITA_ITEM_STATE_RAW_INVALID" in message:
+        file_s = arm.string(machine.reg_read(UC_ARM_REG_R1)).decode(errors="replace")
+        detail_s = arm.string(machine.reg_read(UC_ARM_REG_R2)).decode(errors="replace")
+        print(f"ITEM_STATE_INVALID file={file_s} detail={detail_s} off=0x{machine.reg_read(UC_ARM_REG_R3):08x}", flush=True)
     machine.reg_write(UC_ARM_REG_PC, machine.reg_read(UC_ARM_REG_LR))
 
 
@@ -144,6 +149,7 @@ for filename in CASES:
     name_bytes = filename.encode("ascii") + b"\0"
     name = arm.alloc(len(name_bytes))
     arm.uc.mem_write(name, name_bytes)
+    print(f"CHECK {filename} {root_name}", flush=True)
     arm.call("mv_gameplay_archive_prepare_raw", src, len(raw), name)
 
     for joint in roots:

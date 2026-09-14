@@ -14,6 +14,7 @@
 #include <melee/lb/lbdvd.h>
 #include <melee/lb/lblanguage.h>
 #include <melee/lb/types.h>
+#include <dolphin/os.h>
 #include <sysdolphin/baselib/controller.h>
 #include <sysdolphin/baselib/fog.h>
 #include <sysdolphin/baselib/gobj.h>
@@ -27,6 +28,7 @@
 #include <sysdolphin/baselib/memory.h>
 #include <sysdolphin/baselib/random.h>
 #ifdef MELEE_VITA_PLATFORM
+#include "gc_runtime_vita.h"
 #include "sss_assets_vita.h"
 #endif
 
@@ -474,6 +476,9 @@ void mnStageSel_Scene_OnEnter(void* arg0)
 #endif
         MenMain_cam = temp_r3->unk0;
         mnStageSel_804D6C98 = &temp_r3->x10;
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_TABLE_PASS\n");
+#endif
         mnStageSel_804D6CAF = 0;
         mnStageSel_804D6CA0 = 0;
         mnStageSel_804D6CAC = 0;
@@ -492,6 +497,9 @@ void mnStageSel_Scene_OnEnter(void* arg0)
 #endif
             HSD_GObj_SetupProc(gobj, mn_8022BA1C, 5);
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_CAMERA_PASS\n");
+#endif
 
 #ifndef MELEE_VITA_PLATFORM
         {
@@ -527,6 +535,9 @@ void mnStageSel_Scene_OnEnter(void* arg0)
                 HSD_JObjAnimAll(jobj2);
             }
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_MENU_PASS\n");
+#endif
 
         {
             HSD_JObj* temp_r22_4;
@@ -534,14 +545,24 @@ void mnStageSel_Scene_OnEnter(void* arg0)
             HSD_JObjReqAnimAll(temp_r22_4, 0.0F);
             HSD_JObjAnimAll(temp_r22_4);
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_BACKGROUND_PASS\n");
+#endif
 
         make_icon_root(spDC);
 
         for (i = 0; i < 0x12; i++) {
             spDC[i + 1] = spDC[i]->next;
+#ifdef MELEE_VITA_PLATFORM
+            HSD_ASSERTREPORT(0x1C8, spDC[i + 1] != NULL,
+                             "Vita SSS anchor chain shorter than retail layout\n");
+#endif
             HSD_JObjReqAnimAll(spDC[i + 1], 0.0F);
             HSD_JObjAnimAll(spDC[i + 1]);
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_ANCHORS_PASS count=19\n");
+#endif
 
         for (i = 0; i < 0x1D; i++) {
             mnStageSel_803F06D0[i].x8 =
@@ -589,6 +610,9 @@ void mnStageSel_Scene_OnEnter(void* arg0)
             HSD_ForeachAnim(jobj, JOBJ_TYPE, TOBJ_MASK, HSD_AObjStopAnim,
                             AOBJ_ARG_AOV, 0, 0);
         }
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_STAGE_ICONS_PASS count=22\n");
+#endif
 
         for (i = 0xB; i <= 0xF; i++) {
             HSD_JObj* jobj;
@@ -768,7 +792,15 @@ void mnStageSel_Scene_OnEnter(void* arg0)
             HSD_JObjSetTranslateX(jobj, 100.0F);
         }
 
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_AUDIO_BEGIN pending_async=%u\n",
+                 mv_gc_async_pending());
+#endif
         lbAudioAx_80023F28(gmMainLib_8015ECB0());
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("GAME_SSS_ONENTER_AUDIO_PASS pending_async=%u\n",
+                 mv_gc_async_pending());
+#endif
     }
 }
 

@@ -19,7 +19,15 @@ class ArmHarness:
                 base = address & ~4095
                 self.uc.mem_map(base, (address + size - base + 4095) & ~4095)
                 self.uc.mem_write(address, segment.data())
-            self.symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            self.symbols = {}
+            for symbol in elf.get_section_by_name('.symtab').iter_symbols():
+                name = symbol.name
+                value = symbol['st_value']
+                # GNU/Vita ELFs can contain both a concrete definition and a
+                # later undefined reference with the same name. Never let the
+                # zero-valued reference hide the executable definition.
+                if value or name not in self.symbols:
+                    self.symbols[name] = value
             self.symbol_ranges = sorted((value & ~1, name) for name, value in self.symbols.items() if value)
         self.stop, self.stack, self.heap = 0x01000000, 0x02000000, 0x06000000
         # The Vita bring-up now models the GameCube's separate 16 MiB ARAM in

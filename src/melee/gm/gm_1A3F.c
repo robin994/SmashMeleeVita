@@ -135,11 +135,24 @@ void gm_801A4014(GameMode* mode)
     sm = &state_machine;
     state = findState(mode->states);
     sm->routing.curr_state_id = state->id;
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    OSReport("VITA_RETAIL_STATE_BEGIN mode=%u state=%u scene=%u preload=%u\n",
+             (unsigned)sm->routing.curr_mode, (unsigned)state->id,
+             (unsigned)state->info.scene_kind, (unsigned)state->preload);
+#endif
 
     preloadState(state);
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    OSReport("VITA_RETAIL_STATE_PRELOAD_PASS state=%u scene=%u\n",
+             (unsigned)state->id, (unsigned)state->info.scene_kind);
+#endif
     if (state->on_enter != NULL) {
         state->on_enter(state);
     }
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    OSReport("VITA_RETAIL_STATE_ONENTER_PASS state=%u scene=%u\n",
+             (unsigned)state->id, (unsigned)state->info.scene_kind);
+#endif
     info = &state->info;
     scene =
         (GameScene*) ((uintptr_t) gm_FindGameSceneHandler(info->scene_kind) |
@@ -163,9 +176,21 @@ void gm_801A4014(GameMode* mode)
 #endif
     {
         if (scene->on_enter != NULL) {
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+            OSReport("VITA_RETAIL_SCENE_ONENTER_BEGIN state=%u scene=%u\n",
+                     (unsigned)state->id, (unsigned)info->scene_kind);
+#endif
             scene->on_enter(info->enter_data);
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+            OSReport("VITA_RETAIL_SCENE_ONENTER_PASS state=%u scene=%u\n",
+                     (unsigned)state->id, (unsigned)info->scene_kind);
+#endif
         }
         gm_801A4D34(scene->on_frame, info);
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+        OSReport("VITA_RETAIL_SCENE_LOOP_EXIT state=%u scene=%u\n",
+                 (unsigned)state->id, (unsigned)info->scene_kind);
+#endif
         if (!gmMainLib_8046B0F0.resetting && scene->on_exit != NULL) {
             scene->on_exit(info->exit_data);
         }
@@ -377,6 +402,18 @@ int mv_gm_vita_continue_mode(int mode_kind)
     if (!gmMainLib_8046B0F0.resetting && mode->on_unload != NULL)
         mode->on_unload();
     return sm->routing.pending_mode;
+}
+
+int mv_gm_vita_run_mode(int mode_kind)
+{
+    GameMode* mode;
+    if (mode_kind < 0 || mode_kind >= GM_COUNT)
+        return GM_COUNT;
+    mode = findMode((u8) mode_kind);
+    if (mode == NULL)
+        return GM_COUNT;
+    mv_gm_vita_enter_mode(mode_kind);
+    return runGameMode((u8) mode_kind);
 }
 #endif
 

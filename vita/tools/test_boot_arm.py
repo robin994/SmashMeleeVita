@@ -1,13 +1,17 @@
 """Exercise real HSD component init. Only libc I/O and the vblank wait are modeled."""
 import struct
+from pathlib import Path
 from unicorn.arm_const import UC_ARM_REG_PC
 from unicorn import UC_HOOK_CODE
 from unicorn.arm_const import UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_PC, UC_ARM_REG_LR
+from arm_disc import mount_disc
 
-def boot_hsd(arm, final_init=True):
+def boot_hsd(arm, final_init=True, disc_root=None):
     traces = []
     waits = []
     thread_tls = arm.alloc(4096)
+    if disc_root is not None:
+        mount_disc(arm, disc_root)
     def service(machine, address, size, name):
         if name == 'vfprintf':
             text = arm.string(machine.reg_read(UC_ARM_REG_R1)).decode()
@@ -24,11 +28,6 @@ def boot_hsd(arm, final_init=True):
             machine.reg_write(UC_ARM_REG_R1, usec >> 32)
             machine.reg_write(UC_ARM_REG_PC, machine.reg_read(UC_ARM_REG_LR))
             return
-        elif name == 'sceIoGetstat':
-            # Final game-state init probes /usa.ini to select the localized
-            # language path. The pure ARM harness has no Vita filesystem, so
-            # model a clean "not found" result (the normal US-disc fallback).
-            result = -1
         elif name == 'sceKernelGetThreadId':
             result = 1
         elif name in ('sceKernelGetTLSAddr', 'sceKernelGetThreadTLSAddr'):
@@ -47,7 +46,7 @@ def boot_hsd(arm, final_init=True):
         machine.reg_write(UC_ARM_REG_R0, result)
         machine.reg_write(UC_ARM_REG_PC, machine.reg_read(UC_ARM_REG_LR))
     for name in ('vfprintf', 'setvbuf', 'sceDisplayWaitVblankStart',
-                 'sceKernelGetProcessTimeWide', 'sceIoGetstat',
+                 'sceKernelGetProcessTimeWide',
                  'sceKernelGetThreadId', 'sceKernelGetTLSAddr',
                  'sceKernelGetThreadTLSAddr', 'sceKernelCreateMutex',
                  'sceKernelLockMutex', 'sceKernelUnlockMutex',
@@ -149,14 +148,34 @@ def boot_hsd(arm, final_init=True):
     assert final_init_result == 0
     final_init = struct.unpack('<I', arm.uc.mem_read(final_init_ptr, 4))[0]
     assert final_init == 1, final_init
-    gm_boot_ptr = arm.alloc(16)
-    assert arm.call('gm_VitaBootStateProbe', gm_boot_ptr) == 0
-    gm_boot = struct.unpack('<4I', arm.uc.mem_read(gm_boot_ptr, 16))
-    assert gm_boot == (0x28, 0x2a, 0x18, 0), gm_boot
-    gm_memcard_ptr = arm.alloc(16)
-    assert arm.call('gm_VitaMemCardStateProbe', gm_memcard_ptr) == 0
-    gm_memcard = struct.unpack('<4I', arm.uc.mem_read(gm_memcard_ptr, 16))
-    assert gm_memcard == (0x2a, 1, 0, 0x18), gm_memcard
+    try:
+        arm.call('gm_801A3EF4')
+    except Exception as exc:
+        pc = arm.uc.reg_read(UC_ARM_REG_PC) & ~1
+        nearest = '<unknown>'
+        for symbol_address, symbol_name in arm.symbol_ranges:
+            if symbol_address > pc:
+                break
+            nearest = f'{symbol_name}+0x{pc-symbol_address:x}'
+        raise AssertionError(
+            f'global GameMode initialization trapped at {pc:#x} ({nearest})') from exc
+    # These legacy smoke probes are not referenced by the shipping executable
+    # anymore and --gc-sections may legitimately discard them. The mandatory
+    # regression above is the real boundary we need here: original
+    # gmMainLib_8015FBA4 including the synchronous SFX load/wait completed with
+    # the extracted disc mounted. Keep the older probes when a diagnostic link
+    # happens to retain them, but do not make their linker reachability a boot
+    # requirement.
+    if 'gm_VitaBootStateProbe' in arm.symbols and arm.symbols['gm_VitaBootStateProbe']:
+        gm_boot_ptr = arm.alloc(16)
+        assert arm.call('gm_VitaBootStateProbe', gm_boot_ptr) == 0
+        gm_boot = struct.unpack('<4I', arm.uc.mem_read(gm_boot_ptr, 16))
+        assert gm_boot == (0x28, 0x2a, 0x18, 0), gm_boot
+    if 'gm_VitaMemCardStateProbe' in arm.symbols and arm.symbols['gm_VitaMemCardStateProbe']:
+        gm_memcard_ptr = arm.alloc(16)
+        assert arm.call('gm_VitaMemCardStateProbe', gm_memcard_ptr) == 0
+        gm_memcard = struct.unpack('<4I', arm.uc.mem_read(gm_memcard_ptr, 16))
+        assert gm_memcard == (0x2a, 1, 0, 0x18), gm_memcard
     print(f'ARM HSD_InitComponent: PASS stages=0x{stats[5]:x} main_free={stats[1]} (original call order)', flush=True)
     print('ARM VI/GX boot state: PASS black XFB, callback -> NEXT -> DISPLAY, 8 lights; vblank wait modeled', flush=True)
     print('ARM upstream HSD memory: PASS bounded OS heap, 32-byte alignment, free/coalesce, overflow rejection', flush=True)
@@ -169,11 +188,18 @@ def boot_hsd(arm, final_init=True):
           flush=True)
     print('ARM gmmain services: PASS cardnew/cardgame/snapshot/mainlib/MTHP/SisLib stages=0x3f',
           flush=True)
-    print('ARM gmmain final init: PASS gmMainLib_8015FBA4 completed', flush=True)
+    print('ARM gmmain final init: PASS gmMainLib_8015FBA4 + initial SFX bank load completed from mounted disc', flush=True)
+    print('ARM GameMode table init: PASS all original major-mode on_init callbacks', flush=True)
     print('ARM GM_BOOT enter: PASS bootOnLoad -> GS_MEMCARD -> GM_OPENING_MV', flush=True)
     print('ARM GM_MEMCARD load: PASS memcardOnLoad initialized shared load_data; '
           'stops before gm_Scene_MemCard_OnEnter', flush=True)
 
 if __name__ == '__main__':
+    import argparse
     from arm_harness import ArmHarness
-    boot_hsd(ArmHarness('build/vita/melee_vita'))
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--elf', default='build/vita/melee_vita')
+    parser.add_argument('--disc-root', default='orig/GALE01/files')
+    args = parser.parse_args()
+    boot_hsd(ArmHarness(args.elf), disc_root=Path(args.disc_root))

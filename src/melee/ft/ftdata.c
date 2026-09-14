@@ -1694,7 +1694,16 @@ void ftData_80085A14(FighterKind kind)
     PAD_STACK(4);
 
     if (ftData_Table_Unk0[kind].data == NULL) {
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_FIGHTER_FIGATREE_BEGIN kind=%d file=%s motions=%u\n",
+                 (int) kind, ftData_803C23E4[kind],
+                 (unsigned) ftData_Table_Unk0[kind].count);
+#endif
         lbFile_800168A0(1, ftData_803C23E4[kind], &sp18, &sp10);
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_FIGHTER_FIGATREE_FILE_PASS kind=%d file=%s bytes=%u\n",
+                 (int) kind, ftData_803C23E4[kind], (unsigned) sp10);
+#endif
         a_head = sp18;
         HSD_ASSERT(0x974, a_head);
         for (i = 0; i < (u32) ftData_Table_Unk0[kind].count; i++) {
@@ -1709,6 +1718,11 @@ void ftData_80085A14(FighterKind kind)
             }
         }
         ftData_Table_Unk0[kind].data = a_head;
+#ifdef MELEE_VITA_PLATFORM
+        OSReport("VITA_FIGHTER_FIGATREE_PASS kind=%d file=%s motions=%u data=%p\n",
+                 (int) kind, ftData_803C23E4[kind],
+                 (unsigned) ftData_Table_Unk0[kind].count, a_head);
+#endif
     }
 }
 

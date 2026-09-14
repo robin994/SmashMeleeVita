@@ -19,6 +19,7 @@
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@
 #define MV_GC_ARENA_BYTES   (20u * 1024u * 1024u)
 #define MV_GC_TIMER_HZ      40500000ull
 #define MV_DVD_MAX_ENTRIES  512u
+#define MV_DVD_ASYNC_MAX    64u
 #define MV_OS_HEAP_MAX      8
 #define MV_OS_HEAP_ALIGN    32u
 
@@ -82,7 +84,6 @@ typedef struct {
 
 static MvDvdEntry dvd_entries[MV_DVD_MAX_ENTRIES];
 static unsigned dvd_entry_count;
-static int devcom_request_id = 4;
 static DVDDiskID current_disk_id = {
     .gameName = {'G', 'A', 'L', 'E'},
     .company = {'0', '1'},
@@ -91,6 +92,18 @@ static DVDDiskID current_disk_id = {
     .streaming = 0,
     .streamingBufSize = 0,
 };
+
+typedef struct {
+    DVDFileInfo *file_info;
+    DVDCallback callback;
+    s32 result;
+} MvDvdAsyncPending;
+
+static MvDvdAsyncPending dvd_pending[MV_DVD_ASYNC_MAX];
+static unsigned dvd_pending_head;
+static unsigned dvd_pending_tail;
+static unsigned dvd_pending_count;
+static int gc_async_pumping;
 
 static uintptr_t align_up(uintptr_t value, uint32_t align)
 {
@@ -364,11 +377,9 @@ void VIInit(void)
     vi_ready = 1;
 }
 
-void VIWaitForRetrace(void)
+unsigned mv_gc_alarm_pump(void)
 {
-    if (!vi_ready) VIInit();
-    sceDisplayWaitVblankStart();
-    mv_vi_tick();
+    unsigned fired = 0;
     OSTime now = OSGetTime();
     for (OSAlarm *alarm = alarm_head; alarm != NULL;) {
         OSAlarm *next = alarm->next;
@@ -382,9 +393,33 @@ void VIWaitForRetrace(void)
                 OSCancelAlarm(alarm);
             }
             handler(alarm, NULL);
+            ++fired;
         }
         alarm = next;
     }
+    return fired;
+}
+
+void mv_gc_sync_yield(void)
+{
+    /* GameCube interrupt-driven synchronous waits continue to receive DVD,
+     * ARQ and OSAlarm callbacks while the main thread is polling. On Vita all
+     * of those callbacks are cooperative, so yield a real millisecond before
+     * servicing them. This is intentionally only used at blocking retail I/O
+     * boundaries, never from the normal frame loop. */
+    sceKernelDelayThread(1000);
+    mv_gc_alarm_pump();
+    mv_gc_async_pump();
+}
+
+void VIWaitForRetrace(void)
+{
+    if (!vi_ready) VIInit();
+    sceDisplayWaitVblankStart();
+    mv_vi_tick();
+    mv_gc_async_pump();
+    mv_ax_vblank_pump();
+    mv_gc_alarm_pump();
 }
 
 void DVDInit(void)
@@ -543,9 +578,78 @@ long DVDReadPrio(DVDFileInfo *fileInfo, void *addr, long length, long offset,
 BOOL DVDReadAsyncPrio(DVDFileInfo *fileInfo, void *addr, s32 length, s32 offset,
                       DVDCallback callback, s32 prio)
 {
+    if (!fileInfo || !addr || length < 0 || offset < 0) {
+        return 0;
+    }
+
+    /* Never silently strand an upstream DevCom/preload request in BUSY if the
+     * host completion queue briefly fills. */
+    if (dvd_pending_count >= MV_DVD_ASYNC_MAX && !gc_async_pumping)
+        mv_gc_async_pump();
+    if (dvd_pending_count >= MV_DVD_ASYNC_MAX) {
+        OSReport("DVD_ASYNC_QUEUE_FULL pending=%u max=%u\n", dvd_pending_count, MV_DVD_ASYNC_MAX);
+        return 0;
+    }
+
     long result = DVDReadPrio(fileInfo, addr, length, offset, prio);
-    if (callback) callback((s32)result, fileInfo);
-    return result >= 0 ? 1 : 0;
+    MvDvdAsyncPending *pending = &dvd_pending[dvd_pending_tail];
+    pending->file_info = fileInfo;
+    pending->callback = callback;
+    pending->result = (s32)result;
+    dvd_pending_tail = (dvd_pending_tail + 1u) % MV_DVD_ASYNC_MAX;
+    ++dvd_pending_count;
+
+    /* The host-side bytes are ready, but the guest command remains busy until
+     * a later VI/DVD pump dispatches its callback. This is the ordering relied
+     * on by HSD_DevCom and the original Melee preload loops. */
+    fileInfo->callback = callback;
+    fileInfo->cb.state = DVD_STATE_BUSY;
+    return 1;
+}
+
+static void mv_dvd_async_pump_one(void)
+{
+    if (!dvd_pending_count) return;
+    MvDvdAsyncPending pending = dvd_pending[dvd_pending_head];
+    memset(&dvd_pending[dvd_pending_head], 0,
+           sizeof(dvd_pending[dvd_pending_head]));
+    dvd_pending_head = (dvd_pending_head + 1u) % MV_DVD_ASYNC_MAX;
+    --dvd_pending_count;
+
+    if (pending.file_info) {
+        pending.file_info->cb.state = pending.result < 0
+                                          ? DVD_STATE_FATAL_ERROR
+                                          : DVD_STATE_END;
+    }
+    if (pending.callback)
+        pending.callback(pending.result, pending.file_info);
+}
+
+
+void mv_gc_async_pump(void)
+{
+    if (gc_async_pumping) return;
+    gc_async_pumping = 1;
+
+    /* Snapshot the queues before dispatch. A callback may submit the next leg
+     * of a DevCom transfer; that new leg intentionally waits for the following
+     * pump instead of collapsing recursively into the current call stack. */
+    unsigned had_arq = mv_arq_async_pending();
+    unsigned had_dvd = dvd_pending_count;
+    if (had_arq) mv_arq_async_pump();
+    if (had_dvd) mv_dvd_async_pump_one();
+
+    gc_async_pumping = 0;
+}
+
+unsigned mv_gc_async_pending(void)
+{
+    /* A completion remains logically active until its callback returns.  The
+     * queue entry itself is removed before dispatch so nested GameCube code can
+     * enqueue the next leg, but reporting zero here during the callback makes
+     * DevCom mistake the currently executing IRQ for a stale DVD latch. */
+    return dvd_pending_count + mv_arq_async_pending() +
+           (gc_async_pumping ? 1u : 0u);
 }
 
 long DVDGetFileInfoStatus(DVDFileInfo *fileInfo)
@@ -555,8 +659,14 @@ long DVDGetFileInfoStatus(DVDFileInfo *fileInfo)
 
 long DVDGetDriveStatus(void)
 {
-    /* All Vita file-backed DVD operations complete synchronously. */
-    return dvd_ready ? DVD_STATE_END : DVD_STATE_FATAL_ERROR;
+    if (!dvd_ready) return DVD_STATE_FATAL_ERROR;
+    long state = dvd_pending_count ? DVD_STATE_BUSY : DVD_STATE_END;
+    /* A GameCube scheduling boundary advances device interrupts globally, not
+     * just the DVD queue. DevCom SFX loads alternate DVD and ARQ legs; if the
+     * DVD leg finishes and leaves only ARQ pending, refusing to pump here
+     * deadlocks HSD_SynthSFXWaitForLoadCompletion during gmMain final init. */
+    if (mv_gc_async_pending()) mv_gc_async_pump();
+    return state;
 }
 
 void CARDInit(void)
@@ -781,148 +891,8 @@ void lb_800192A8(void (*cb)(void))
 }
 #endif
 
-bool HSD_DevComIsBusy(int idx)
-{
-    (void)idx;
-    return false;
-}
-
-int HSD_DevComCancelEx(int dcReq, u32 flags, HSD_DevComCallback cb, void *args)
-{
-    (void)dcReq;
-    (void)flags;
-    (void)cb;
-    (void)args;
-    /* All requests in this adapter finish inside HSD_DevComRequest(), so there
-     * is no outstanding queue entry left to cancel. Upstream also returns 0
-     * when the requested id is no longer present. */
-    return 0;
-}
-
-int HSD_DevComRequest(int file, uintptr_t src, uintptr_t dest, size_t size,
-                      int type, int pri, HSD_DevComCallback callback, void *args)
-{
-    static u8 relay[0x4000] __attribute__((aligned(32)));
-    static ARQRequest relay_request;
-    (void)pri;
-    int req = devcom_request_id;
-    devcom_request_id += 4;
-    if (type == 3) {
-        if (mv_aram_clear((uint32_t)dest, (uint32_t)size) != 0) {
-            if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-            return -1;
-        }
-        if (callback) callback(req, (int)(intptr_t)args, NULL, false);
-        return req;
-    }
-    if (type != 0x21 && type != 0x22 && type != 0x23) {
-        OSReport("DEVCOM_FAIL reason=type file=%d src=%08lx dest=%08lx size=%u "
-                 "type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned long)dest,
-                 (unsigned)size, type, pri);
-        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-        return -1;
-    }
-    if ((type != 0x22 && !dest) || !size) {
-        OSReport("DEVCOM_FAIL reason=zero file=%d src=%08lx dest=%08lx size=%u "
-                 "type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned long)dest,
-                 (unsigned)size, type, pri);
-        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-        return -1;
-    }
-    if ((src & 31u) || (type != 0x22 && (dest & 31u)) || (size & 31u)) {
-        OSReport("DEVCOM_FAIL reason=alignment file=%d src=%08lx dest=%08lx "
-                 "size=%u type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned long)dest,
-                 (unsigned)size, type, pri);
-        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-        return -1;
-    }
-    if (type == 0x22 && size > sizeof(relay)) {
-        OSReport("DEVCOM_FAIL reason=sbuf_size file=%d src=%08lx size=%u max=%u "
-                 "type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned)size,
-                 (unsigned)sizeof(relay), type, pri);
-        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-        return -1;
-    }
-
-    DVDFileInfo info;
-    if (!DVDFastOpen(file, &info)) {
-        OSReport("DEVCOM_FAIL reason=fastopen file=%d src=%08lx dest=%08lx "
-                 "size=%u type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned long)dest,
-                 (unsigned)size, type, pri);
-        if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-        return -1;
-    }
-
-    if (type == 0x21) {
-        if (DVDReadPrio(&info, (void *)dest, (long)size, (long)src, 2) < 0) {
-            DVDClose(&info);
-            MvDvdEntry *entry = dvd_entry_by_id(file);
-            OSReport("DEVCOM_FAIL reason=dvdread file=%d path=%s src=%08lx "
-                     "dest=%08lx size=%u type=%02x pri=%d\n",
-                     file, entry ? entry->path : "?", (unsigned long)src,
-                     (unsigned long)dest, (unsigned)size, type, pri);
-            if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-            return -1;
-        }
-    } else if (type == 0x22) {
-        /* DEVCOMDEST_SBUF: GameCube reads into one of DevCom's internal
-         * relay buffers and passes that buffer to the completion callback.
-         * A destination address of zero is therefore intentional. */
-        if (!callback) {
-            DVDClose(&info);
-            OSReport("DEVCOM_FAIL reason=sbuf_callback file=%d src=%08lx size=%u "
-                     "type=%02x pri=%d\n",
-                     file, (unsigned long)src, (unsigned)size, type, pri);
-            return -1;
-        }
-        if (DVDReadPrio(&info, relay, (long)size, (long)src, 2) < 0) {
-            DVDClose(&info);
-            MvDvdEntry *entry = dvd_entry_by_id(file);
-            OSReport("DEVCOM_FAIL reason=dvdread_sbuf file=%d path=%s src=%08lx "
-                     "size=%u type=%02x pri=%d\n",
-                     file, entry ? entry->path : "?", (unsigned long)src,
-                     (unsigned)size, type, pri);
-            callback(req, (int)(intptr_t)args, NULL, true);
-            return -1;
-        }
-        DVDClose(&info);
-        OSReport("DEVCOM_SBUF_PASS file=%d src=%08lx size=%u type=%02x pri=%d\n",
-                 file, (unsigned long)src, (unsigned)size, type, pri);
-        callback(req, (int)(intptr_t)args, relay, false);
-        return req;
-    } else {
-        /* Type 0x23 is DVD -> relay RAM -> ARAM on GameCube. ARAM addresses
-           are offsets and must never be treated as CPU pointers on Vita. */
-        size_t done = 0;
-        while (done < size) {
-            size_t chunk = size - done;
-            if (chunk > sizeof(relay)) chunk = sizeof(relay);
-            if (DVDReadPrio(&info, relay, (long)chunk, (long)(src + done), 2) < 0) {
-                DVDClose(&info);
-                MvDvdEntry *entry = dvd_entry_by_id(file);
-                OSReport("DEVCOM_FAIL reason=dvdread_aram file=%d path=%s "
-                         "src=%08lx dest=%08lx size=%u done=%u type=%02x pri=%d\n",
-                         file, entry ? entry->path : "?",
-                         (unsigned long)src, (unsigned long)dest,
-                         (unsigned)size, (unsigned)done, type, pri);
-                if (callback) callback(req, (int)(intptr_t)args, NULL, true);
-                return -1;
-            }
-            ARQPostRequest(&relay_request, 0, ARQ_TYPE_MRAM_TO_ARAM,
-                           ARQ_PRIORITY_LOW, (u32)(uintptr_t)relay,
-                           (u32)(dest + done), (u32)chunk, NULL);
-            done += chunk;
-        }
-    }
-    DVDClose(&info);
-    if (callback) callback(req, (int)(intptr_t)args, NULL, false);
-    return req;
-}
+/* HSD_DevCom is provided by the original sysdolphin/devcom.c. Vita only
+ * adapts the asynchronous DVD/ARQ completion boundary below that layer. */
 
 u32 OSGetSoundMode(void)
 {

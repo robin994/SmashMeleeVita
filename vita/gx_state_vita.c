@@ -184,7 +184,16 @@ void GXSetDstAlpha(GXBool e, u8 a) { MvGxMaterialState *m=mv_gx_capture_material
 void GXSetAlphaCompare(GXCompare c0,u8 r0,GXAlphaOp op,GXCompare c1,u8 r1) { MvGxMaterialState *m=mv_gx_capture_material_state(); m->pe_alpha_comp0=c0; m->pe_alpha_ref0=r0; m->pe_alpha_op=op; m->pe_alpha_comp1=c1; m->pe_alpha_ref1=r1; m->pe_custom=1; }
 
 void GXSetNumTexGens(u8 n) { num_tex_gens=n; }
-void GXSetNumTevStages(u8 n) { num_tev_stages=n; }
+void GXSetNumTevStages(u8 n)
+{
+    num_tev_stages=n;
+    MvGxMaterialState *m=mv_gx_capture_material_state();
+    m->tev_stage_count=n;
+    if (n != 1) {
+        m->simple_tev_color_c0=0;
+        m->simple_tev_alpha_texa_a0=0;
+    }
+}
 void GXSetNumChans(u8 n) { num_channels=n; }
 void GXSetNumIndStages(u8 n) { num_ind_stages=n; if(n) mv_gx_capture_material_state()->unsupported |= MV_GX_MATERIAL_UNSUPPORTED_BUMP; }
 void GXSetLineWidth(u8 w, GXTexOffset o) { (void)o; line_width=w; }
@@ -202,30 +211,61 @@ void GXSetTevColorS10(GXTevRegID id, GXColorS10 c)
 { GXColor v={clamp_s10(c.r),clamp_s10(c.g),clamp_s10(c.b),clamp_s10(c.a)}; GXSetTevColor(id,v); }
 void GXSetTevKColor(GXTevKColorID id, GXColor c) { konst_regs[(unsigned)id & 3u]=c; }
 void GXSetTevOrder(GXTevStageID st,GXTexCoordID coord,GXTexMapID map,GXChannelID color)
-{ (void)st;(void)coord;(void)color; if(map != GX_TEXMAP_NULL && mv_gx_capture_material_state()->texture_count < (u8)((unsigned)map+1u)) mv_gx_capture_material_state()->texture_count=(u8)((unsigned)map+1u); }
+{
+    MvGxMaterialState *m=mv_gx_capture_material_state();
+    unsigned stage=(unsigned)st;
+    if(stage<4u) { m->tev_order_coord[stage]=(uint8_t)coord; m->tev_order_map[stage]=(uint8_t)map; m->tev_order_color[stage]=(uint8_t)color; }
+    if(map != GX_TEXMAP_NULL && m->texture_count < (u8)((unsigned)map+1u)) m->texture_count=(u8)((unsigned)map+1u);
+}
 void GXSetTevOp(GXTevStageID id,GXTevMode mode) { (void)id;(void)mode; }
 void GXSetTevColorIn(GXTevStageID s,GXTevColorArg a,GXTevColorArg b,GXTevColorArg c,GXTevColorArg d)
 {
     MvGxMaterialState *m=mv_gx_capture_material_state();
-    if(s==GX_TEVSTAGE0 && a==GX_CC_ZERO && b==GX_CC_ZERO && c==GX_CC_ZERO && d==GX_CC_C0)
-        m->tobj_flags=(m->tobj_flags & ~(0x0fu<<16)) | (4u<<16);
+    unsigned stage=(unsigned)s;
+    if(stage<4u) { m->tev_color_in[stage][0]=(uint8_t)a; m->tev_color_in[stage][1]=(uint8_t)b; m->tev_color_in[stage][2]=(uint8_t)c; m->tev_color_in[stage][3]=(uint8_t)d; }
+    if (s == GX_TEVSTAGE0) {
+        m->simple_tev_color_c0 =
+            a==GX_CC_ZERO && b==GX_CC_ZERO && c==GX_CC_ZERO && d==GX_CC_C0;
+        if (m->simple_tev_color_c0)
+            m->tobj_flags=(m->tobj_flags & ~(0x0fu<<16)) | (4u<<16);
+    } else {
+        m->simple_tev_color_c0 = 0;
+    }
 }
 void GXSetTevAlphaIn(GXTevStageID s,GXTevAlphaArg a,GXTevAlphaArg b,GXTevAlphaArg c,GXTevAlphaArg d)
 {
     MvGxMaterialState *m=mv_gx_capture_material_state();
-    if(s==GX_TEVSTAGE0 && a==GX_CA_ZERO && b==GX_CA_TEXA && c==GX_CA_A0 && d==GX_CA_ZERO)
-        m->tobj_flags=(m->tobj_flags & ~(0x0fu<<20)) | (3u<<20);
+    unsigned stage=(unsigned)s;
+    if(stage<4u) { m->tev_alpha_in[stage][0]=(uint8_t)a; m->tev_alpha_in[stage][1]=(uint8_t)b; m->tev_alpha_in[stage][2]=(uint8_t)c; m->tev_alpha_in[stage][3]=(uint8_t)d; }
+    if (s == GX_TEVSTAGE0) {
+        m->simple_tev_alpha_texa_a0 =
+            a==GX_CA_ZERO && b==GX_CA_TEXA && c==GX_CA_A0 && d==GX_CA_ZERO;
+        if (m->simple_tev_alpha_texa_a0)
+            m->tobj_flags=(m->tobj_flags & ~(0x0fu<<20)) | (3u<<20);
+    } else {
+        m->simple_tev_alpha_texa_a0 = 0;
+    }
 }
 
-void GXSetTevColorOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { (void)s;(void)o;(void)b;(void)sc;(void)cl;(void)r; }
-void GXSetTevAlphaOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { (void)s;(void)o;(void)b;(void)sc;(void)cl;(void)r; }
+void GXSetTevColorOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { MvGxMaterialState *m=mv_gx_capture_material_state(); unsigned st=(unsigned)s; if(st<4u){m->tev_color_op[st][0]=(uint8_t)o;m->tev_color_op[st][1]=(uint8_t)b;m->tev_color_op[st][2]=(uint8_t)sc;m->tev_color_op[st][3]=(uint8_t)cl;m->tev_color_op[st][4]=(uint8_t)r;} }
+void GXSetTevAlphaOp(GXTevStageID s,GXTevOp o,GXTevBias b,GXTevScale sc,GXBool cl,GXTevRegID r) { MvGxMaterialState *m=mv_gx_capture_material_state(); unsigned st=(unsigned)s; if(st<4u){m->tev_alpha_op[st][0]=(uint8_t)o;m->tev_alpha_op[st][1]=(uint8_t)b;m->tev_alpha_op[st][2]=(uint8_t)sc;m->tev_alpha_op[st][3]=(uint8_t)cl;m->tev_alpha_op[st][4]=(uint8_t)r;} }
 void GXSetTevKColorSel(GXTevStageID s,GXTevKColorSel v) { (void)s;(void)v; }
 void GXSetTevKAlphaSel(GXTevStageID s,GXTevKAlphaSel v) { (void)s;(void)v; }
 void GXSetTevSwapMode(GXTevStageID s,GXTevSwapSel r,GXTevSwapSel t) { (void)s;(void)r;(void)t; }
 void GXSetTevClampMode(int a,int b) { (void)a;(void)b; }
 
 void GXSetTexCoordGen2(GXTexCoordID d,GXTexGenType f,GXTexGenSrc s,u32 m,GXBool n,u32 p)
-{ (void)d;(void)f;(void)s;(void)p; if(n || (m!=GX_IDENTITY && m!=GX_TEXMTX0 && m!=GX_TEXMTX1 && m!=GX_TEXMTX2 && m!=GX_TEXMTX3 && m!=GX_TEXMTX4 && m!=GX_TEXMTX5 && m!=GX_TEXMTX6 && m!=GX_TEXMTX7 && m!=GX_TEXMTX8 && m!=GX_TEXMTX9)) mv_gx_capture_material_state()->unsupported |= MV_GX_MATERIAL_UNSUPPORTED_TEXCOORD; }
+{
+    (void)f; MvGxMaterialState *state=mv_gx_capture_material_state();
+    if(d==GX_TEXCOORD0){
+        state->texgen_src0=(uint8_t)s;state->texgen_valid_mask|=1u;state->uv_mtx_valid=0;
+        if(p!=GX_PTIDENTITY && mv_gx_capture_get_tex_mtx(p,state->uv_mtx)==0) state->uv_mtx_valid=1;
+    } else if(d==GX_TEXCOORD1){
+        state->texgen_src1=(uint8_t)s;state->texgen_valid_mask|=2u;state->uv_mtx1_valid=0;
+        if(p!=GX_PTIDENTITY && mv_gx_capture_get_tex_mtx(p,state->uv_mtx1)==0) state->uv_mtx1_valid=1;
+    }
+    if(n || (m!=GX_IDENTITY && m!=GX_TEXMTX0 && m!=GX_TEXMTX1 && m!=GX_TEXMTX2 && m!=GX_TEXMTX3 && m!=GX_TEXMTX4 && m!=GX_TEXMTX5 && m!=GX_TEXMTX6 && m!=GX_TEXMTX7 && m!=GX_TEXMTX8 && m!=GX_TEXMTX9)) state->unsupported |= MV_GX_MATERIAL_UNSUPPORTED_TEXCOORD;
+}
 
 void GXSetTevDirect(GXTevStageID s) { (void)s; }
 void GXSetTevIndirect(GXTevStageID a,GXIndTexStageID b,GXIndTexFormat c,GXIndTexBiasSel d,GXIndTexMtxID e,GXIndTexWrap f,GXIndTexWrap g,GXBool h,GXBool i,GXIndTexAlphaSel j)

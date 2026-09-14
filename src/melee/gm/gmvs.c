@@ -2000,13 +2000,33 @@ void fn_8016E730(StartMeleeData* arg0)
     lbRefract_800222A4();
     lb_8000FCDC();
     efLib_Init();
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=effects_common_begin\n");
+#endif
     efAsync_LoadSync(0);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=effects_common_pass\n");
+#endif
     efAsync_LoadSync(0x1F);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=effects_menu_pass\n");
+#endif
     Player_80036DD8();
     ftCo_800C06C0();
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=player_core_pass\n");
+#endif
     mpColl_80041C78();
     Ground_801C0378(0x40);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=stage_load_begin stkind=%d\n",
+             (int)arg0->rules.stkind);
+#endif
     Stage_802251E8(arg0->rules.stkind, NULL);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=stage_load_pass stkind=%d\n",
+             (int)arg0->rules.stkind);
+#endif
 
     r30 = &controller;
 
@@ -2014,13 +2034,22 @@ void fn_8016E730(StartMeleeData* arg0)
     Item_80266F70();
     Item_80266FCC();
     it_8026D018();
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=item_pass\n");
+#endif
     lbAudioAx_8002785C();
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=audio_pass\n");
+#endif
     Stage_8022524C();
     Camera_80030730(Ground_801C20D0());
     fn_8016E2BC();
     Stage_80225298();
     Ground_EnableMatchCamera();
     Camera_8002F3AC();
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=stage_camera_pass\n");
+#endif
     fn_801A1134();
     sfx_setupCrowdSFX();
     if (controller.start.on_unpause_override != NULL) {
@@ -2040,6 +2069,10 @@ void fn_8016E730(StartMeleeData* arg0)
     if (!arg0->rules.x1_4) {
         Stage_80225074(fn_8016E5C0(arg0));
     }
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_GS_MATCH_INIT phase=complete stkind=%d\n",
+             (int)arg0->rules.stkind);
+#endif
 }
 
 void gm_Scene_Vs_OnEnter(void* arg0)

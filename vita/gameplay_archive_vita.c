@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "hsd_data.h"
+#include "fighter_command_native.h"
+#include "item_state_native.h"
 
 extern void mv_hsd_joint_graph_prepare_raw(void* bytes, size_t size,
                                            uint32_t root_offset,
@@ -335,6 +337,41 @@ static void gp_color_convert_script(GpColorCommandContext* ctx, uint32_t off,
     }
 }
 
+static void lbbf_convert_color_commands(MvDat* dat, uint32_t root,
+                                        const char* filename)
+{
+    /* LbBf.dat exports a 16-entry Fighter_804D653C_t table.  Each entry is
+     * { relocated ColorOverlay script pointer, u8 priority, padding }.  The
+     * pointer words belong to HSD_ArchiveParse and the priority is byte-sized;
+     * only the reachable packed command words need endian/bitfield repair. */
+    const uint32_t entry_count = 16;
+    if (gp_target_span(dat, root) != entry_count * 8u)
+        gp_fail("LbBf", "ColorOverlay table span", root);
+
+    GpColorCommandContext ctx = { 0 };
+    ctx.dat = dat;
+    ctx.seen_cap = 1024;
+    ctx.seen = calloc(ctx.seen_cap, sizeof(*ctx.seen));
+    if (ctx.seen == NULL) gp_fail("LbBf", "ColorOverlay seen allocation", root);
+
+    unsigned scripts = 0;
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        uint32_t script = 0;
+        int r = gp_pointer(dat, root + i * 8u, &script,
+                           "LbBf", "ColorOverlay script");
+        if (r == 1) {
+            ++scripts;
+            gp_color_convert_script(&ctx, script, 0);
+        }
+    }
+
+    OSReport("VITA_LBBF_COLOR_COMMAND_NATIVE_PASS file=%s scripts=%u commands=%u op10=%u op11=%u op12=%u op18=%u op19=%u\n",
+             filename != NULL ? filename : "?", scripts,
+             (unsigned) ctx.seen_count, ctx.histogram[10], ctx.histogram[11],
+             ctx.histogram[12], ctx.histogram[18], ctx.histogram[19]);
+    free(ctx.seen);
+}
+
 static void plco_convert_color_commands(MvDat* dat, uint32_t p6, uint32_t p7)
 {
     if (gp_target_span(dat, p6) != 0x3d8 || gp_target_span(dat, p7) != 0x30)
@@ -508,7 +545,8 @@ static int fighter_ext_skip_word(const char* root, uint32_t off)
 
 static void fighter_convert_motion(MvDat* dat, uint32_t off, size_t count,
                                    uint32_t max_size, const char* root,
-                                   const char* detail)
+                                   const char* detail, uint32_t* script_roots,
+                                   size_t* script_root_count)
 {
     if (count > 2048 || mv_dat_span(dat, off, count * 0x18) == NULL) {
         gp_fail(root, detail, off);
@@ -517,7 +555,12 @@ static void fighter_convert_motion(MvDat* dat, uint32_t off, size_t count,
         uint32_t base = off + (uint32_t) i * 0x18;
         uint32_t ignored;
         (void) gp_pointer(dat, base + 0x00, &ignored, root, detail);
-        (void) gp_pointer(dat, base + 0x0C, &ignored, root, detail);
+        uint32_t script = 0;
+        int script_r = gp_pointer(dat, base + 0x0C, &script, root, detail);
+        if (script_r == 1) {
+            (void) gp_mark_unique(script_roots, script_root_count, 4096, script,
+                                  root, "fighter command root overflow");
+        }
         uint32_t payload_size = mv_be32(gp_span(dat, base + 0x08, 4, root,
                                                 detail));
         if (payload_size > max_size) {
@@ -821,16 +864,28 @@ static void fighter_convert(MvDat* dat, const char* root_name,
     if (t[5] <= t[3] || ((t[5] - t[3]) % 0x18) != 0) {
         gp_fail(root_name, "main motion table extent", t[3]);
     }
+    uint32_t command_roots[4096] = { 0 };
+    size_t command_root_count = 0;
+    MvFighterCommandRawResult fighter_cmds = { 0 };
+
     size_t main_motion_count = (t[5] - t[3]) / 0x18;
     fighter_convert_motion(dat, t[3], main_motion_count, 0x8000, root_name,
-                           "main motion table");
+                           "main motion table", command_roots,
+                           &command_root_count);
 
     size_t demo_span = gp_target_span(dat, t[5]);
     if (demo_span == 0 || (demo_span % 0x18) != 0) {
         gp_fail(root_name, "demo motion table extent", t[5]);
     }
     fighter_convert_motion(dat, t[5], demo_span / 0x18, 0xB000, root_name,
-                           "demo motion table");
+                           "demo motion table", command_roots,
+                           &command_root_count);
+
+    if (command_root_count != 0) {
+        mv_fighter_command_scripts_prepare_raw(
+            (void*) (uintptr_t) dat->file, dat->file_size, command_roots,
+            command_root_count, &fighter_cmds, root_name);
+    }
 
     if (r[7] == 1) {
         size_t span = gp_target_span(dat, t[7]);
@@ -906,10 +961,11 @@ static void fighter_convert(MvDat* dat, const char* root_name,
      * (which would corrupt Link/Yoshi/Samus/etc. special entries). */
     fighter_convert_x48(dat, root_name, r[18], t[18], filename);
 
-    OSReport("VITA_FIGHTER_DATA_NATIVE_PASS file=%s root=%s motions=%u demos=%u ext=%u\n",
+    OSReport("VITA_FIGHTER_DATA_NATIVE_PASS file=%s root=%s motions=%u demos=%u ext=%u cmd_roots=%u cmd_words=%u\n",
              filename != NULL ? filename : "?", root_name,
              (unsigned) main_motion_count, (unsigned) (demo_span / 0x18),
-             (unsigned) ext_size);
+             (unsigned) ext_size, fighter_cmds.root_count,
+             fighter_cmds.command_count);
 }
 
 static void plco_convert(MvDat* dat, uint32_t root, const char* filename)
@@ -1199,7 +1255,9 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
                                  uint32_t* seen_dynamics, size_t* dynamics_count,
                                  uint32_t* seen_sources, size_t* source_count,
                                  uint32_t* joint_roots,
-                                 size_t* joint_root_count)
+                                 size_t* joint_root_count,
+                                 uint32_t* state_tables,
+                                 size_t* state_table_count)
 {
     uint32_t field[6] = { 0 };
     int present[6] = { 0 };
@@ -1221,6 +1279,10 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
     {
         itco_convert_hurtboxes(dat, field[2]);
     }
+    if (present[3] == 1) {
+        (void) gp_mark_unique(state_tables, state_table_count, 256, field[3],
+                              "ItCo", "item state table set overflow");
+    }
     if (present[4] == 1 &&
         gp_mark_unique(seen_models, model_count, 128, field[4], "ItCo",
                        "model set overflow"))
@@ -1233,6 +1295,64 @@ static void itco_convert_article(MvDat* dat, uint32_t off,
     {
         itco_convert_dynamics(dat, field[5], seen_sources, source_count, 32);
     }
+}
+
+static float itco_read_be_float(MvDat* dat, uint32_t off, const char* detail)
+{
+    uint32_t bits = mv_be32(gp_span(dat, off, 4, "ItCo", detail));
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+/* It_Kind_Foods (common-item table index 18) uses a bespoke packed special
+ * attribute array. Entry 0.x0 is the food count; for each food entry x4 is a
+ * relocation-managed HSD_Joint*, x8 is the heal amount and xC is the X
+ * placement offset. The Y offset for entry i lives in entry i+1.x0, so the
+ * array deliberately has one trailing scalar after the last pointer-bearing
+ * record. Never word-swap the x4 fields: HSD_ArchiveParse owns relocation. */
+static void itco_convert_food_special(MvDat* dat, uint32_t article,
+                                      uint32_t* joint_roots,
+                                      size_t* joint_root_count)
+{
+    uint32_t attrs = 0;
+    if (gp_pointer(dat, article + 4, &attrs, "ItCo",
+                   "Food specialAttributes") != 1)
+    {
+        gp_fail("ItCo", "Food specialAttributes missing", article + 4);
+    }
+
+    uint32_t count = mv_be32(gp_span(dat, attrs, 4, "ItCo", "Food count"));
+    if (count == 0 || count > 64) {
+        OSReport("VITA_ITCO_FOOD_INVALID attrs=%08x count=%u\n", attrs, count);
+        gp_fail("ItCo", "Food count", attrs);
+    }
+    (void) gp_span(dat, attrs, ((size_t) count + 1u) * 0x10u, "ItCo",
+                   "Food specialAttributes span");
+
+    gp_swap32(dat, attrs, "ItCo", "Food count");
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t rec = attrs + i * 0x10u;
+        uint32_t joint = 0;
+        if (gp_pointer(dat, rec + 4, &joint, "ItCo", "Food model joint") != 1) {
+            gp_fail("ItCo", "Food model joint missing", rec + 4);
+        }
+        (void) gp_mark_unique(joint_roots, joint_root_count, 128, joint,
+                              "ItCo", "Food HSD root set overflow");
+        int32_t heal = (int32_t) mv_be32(
+            gp_span(dat, rec + 8, 4, "ItCo", "Food heal"));
+        float xoff = itco_read_be_float(dat, rec + 0x0C, "Food x offset");
+        float yoff = itco_read_be_float(dat, rec + 0x10, "Food y offset");
+        if (heal < 0 || heal > 1000 || !isfinite(xoff) || !isfinite(yoff)) {
+            OSReport("VITA_ITCO_FOOD_INVALID attrs=%08x index=%u heal=%d x=%f y=%f\n",
+                     attrs, i, heal, xoff, yoff);
+            gp_fail("ItCo", "Food scalar", rec);
+        }
+        gp_swap32(dat, rec + 8, "ItCo", "Food heal");
+        gp_swap32(dat, rec + 0x0C, "ItCo", "Food x offset");
+        gp_swap32(dat, rec + 0x10, "ItCo", "Food y offset");
+    }
+    OSReport("VITA_ITCO_FOOD_NATIVE_PASS attrs=%08x count=%u\n", attrs, count);
 }
 
 typedef struct FighterItemArticleSchema {
@@ -1303,11 +1423,15 @@ static void fighter_convert_x48(MvDat* dat, const char* root_name,
     uint32_t seen_dynamics[16] = { 0 };
     uint32_t seen_sources[32] = { 0 };
     uint32_t joint_roots[128] = { 0 };
-    uint32_t anim_roots[32] = { 0 };
-    uint32_t matanim_roots[16] = { 0 };
+    uint32_t anim_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t matanim_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t shape_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t state_tables[256] = { 0 };
+    MvItemStateRawResult item_states = { 0 };
     size_t article_count = 0, attr_count = 0, hurt_count = 0;
     size_t model_count = 0, dynamics_count = 0, source_count = 0;
     size_t joint_root_count = 0, anim_root_count = 0, matanim_root_count = 0;
+    size_t shape_root_count = 0, state_table_count = 0;
 
     if (mask != 0) {
         uint32_t highest = 0;
@@ -1330,9 +1454,29 @@ static void fighter_convert_x48(MvDat* dat, const char* root_name,
                                      &model_count, seen_dynamics,
                                      &dynamics_count, seen_sources,
                                      &source_count, joint_roots,
-                                     &joint_root_count);
+                                     &joint_root_count, state_tables,
+                                     &state_table_count);
             }
         }
+    }
+
+    if (state_table_count != 0) {
+        mv_item_state_tables_prepare_raw((void*) (uintptr_t) dat->file,
+                                         dat->file_size, state_tables,
+                                         state_table_count, &item_states,
+                                         root_name);
+        for (size_t i = 0; i < item_states.anim_count; ++i)
+            (void) gp_mark_unique(anim_roots, &anim_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP, item_states.anim_roots[i],
+                                  root_name, "x48 state anim root overflow");
+        for (size_t i = 0; i < item_states.matanim_count; ++i)
+            (void) gp_mark_unique(matanim_roots, &matanim_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP, item_states.matanim_roots[i],
+                                  root_name, "x48 state matanim root overflow");
+        for (size_t i = 0; i < item_states.shape_count; ++i)
+            (void) gp_mark_unique(shape_roots, &shape_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP, item_states.shape_roots[i],
+                                  root_name, "x48 state shape root overflow");
     }
 
     /* Direct HSD entries in the same x48 table, identified from their actual
@@ -1371,9 +1515,9 @@ static void fighter_convert_x48(MvDat* dat, const char* root_name,
         }
         (void) gp_mark_unique(joint_roots, &joint_root_count, 128, joint,
                               root_name, "x48 HSD joint set overflow");
-        (void) gp_mark_unique(anim_roots, &anim_root_count, 32, anim,
+        (void) gp_mark_unique(anim_roots, &anim_root_count, MV_ITEM_STATE_ROOT_CAP, anim,
                               root_name, "x48 anim set overflow");
-        (void) gp_mark_unique(matanim_roots, &matanim_root_count, 16, matanim,
+        (void) gp_mark_unique(matanim_roots, &matanim_root_count, MV_ITEM_STATE_ROOT_CAP, matanim,
                               root_name, "x48 matanim set overflow");
         size_t anim_span = gp_target_span(dat, anim_table);
         if (anim_span == 0 || anim_span > 0x40 || (anim_span & 3) != 0) {
@@ -1385,28 +1529,31 @@ static void fighter_convert_x48(MvDat* dat, const char* root_name,
                                 &anim_root, root_name,
                                 "Samus accessory anim table entry");
             if (ar == 1) {
-                (void) gp_mark_unique(anim_roots, &anim_root_count, 32,
+                (void) gp_mark_unique(anim_roots, &anim_root_count, MV_ITEM_STATE_ROOT_CAP,
                                       anim_root, root_name,
                                       "x48 anim set overflow");
             }
         }
     }
 
-    if (joint_root_count != 0 || anim_root_count != 0 || matanim_root_count != 0) {
+    if (joint_root_count != 0 || anim_root_count != 0 || matanim_root_count != 0 ||
+        shape_root_count != 0) {
         mv_hsd_graph_set_prepare_raw(
             (void*) (uintptr_t) dat->file, dat->file_size,
             joint_roots, joint_root_count,
             anim_roots, anim_root_count,
             matanim_roots, matanim_root_count,
-            NULL, 0, filename, "ftData.x48_items");
+            shape_roots, shape_root_count, filename, "ftData.x48_items");
     }
 
-    OSReport("VITA_FIGHTER_X48_NATIVE_PASS file=%s root=%s articles=%u attrs=%u hurts=%u models=%u joint_roots=%u anim_roots=%u matanim_roots=%u dynamics=%u\n",
+    OSReport("VITA_FIGHTER_X48_NATIVE_PASS file=%s root=%s articles=%u attrs=%u hurts=%u models=%u joint_roots=%u anim_roots=%u matanim_roots=%u shape_roots=%u state_tables=%u state_descs=%u item_cmds=%u dynamics=%u\n",
              filename != NULL ? filename : "?", root_name,
              (unsigned) article_count, (unsigned) attr_count,
              (unsigned) hurt_count, (unsigned) model_count,
              (unsigned) joint_root_count, (unsigned) anim_root_count,
-             (unsigned) matanim_root_count, (unsigned) dynamics_count);
+             (unsigned) matanim_root_count, (unsigned) shape_root_count,
+             item_states.table_count, item_states.desc_count,
+             item_states.command_count, (unsigned) dynamics_count);
 }
 
 static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
@@ -1432,9 +1579,11 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
     uint32_t seen_dynamics[16] = { 0 };
     uint32_t seen_sources[32] = { 0 };
     uint32_t joint_roots[128] = { 0 };
+    uint32_t state_tables[256] = { 0 };
+    MvItemStateRawResult item_states = { 0 };
     size_t article_count = 0, attr_count = 0, hurt_count = 0;
     size_t model_count = 0, dynamics_count = 0, source_count = 0;
-    size_t joint_root_count = 0;
+    size_t joint_root_count = 0, state_table_count = 0;
     for (uint32_t table = 0; table < 3; ++table) {
         uint32_t root_index = table + 1;
         if (present[root_index] != 1) {
@@ -1447,6 +1596,10 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
             uint32_t article = 0;
             int ar = gp_pointer(dat, p[root_index] + i * 4, &article, "ItCo",
                                 "Article table entry");
+            if (ar == 1 && table == 0 && i == 18) {
+                itco_convert_food_special(dat, article, joint_roots,
+                                          &joint_root_count);
+            }
             if (ar == 1 &&
                 gp_mark_unique(seen_articles, &article_count, 128, article,
                                "ItCo", "Article set overflow"))
@@ -1456,23 +1609,39 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
                                      &model_count, seen_dynamics,
                                      &dynamics_count, seen_sources,
                                      &source_count, joint_roots,
-                                     &joint_root_count);
+                                     &joint_root_count, state_tables,
+                                     &state_table_count);
             }
         }
     }
-    if (joint_root_count != 0) {
+    if (state_table_count != 0) {
+        mv_item_state_tables_prepare_raw((void*) (uintptr_t) dat->file,
+                                         dat->file_size, state_tables,
+                                         state_table_count, &item_states,
+                                         filename != NULL ? filename : "ItCo");
+    }
+    if (joint_root_count != 0 || item_states.anim_count != 0 ||
+        item_states.matanim_count != 0 || item_states.shape_count != 0)
+    {
         mv_hsd_graph_set_prepare_raw(
             (void*) (uintptr_t) dat->file, dat->file_size,
-            joint_roots, joint_root_count, NULL, 0, NULL, 0, NULL, 0,
-            filename, "ItCo.ItemModelDesc");
+            joint_roots, joint_root_count,
+            item_states.anim_roots, item_states.anim_count,
+            item_states.matanim_roots, item_states.matanim_count,
+            item_states.shape_roots, item_states.shape_count,
+            filename, "ItCo.ItemState+Model");
     }
     if (present[4] == 1)
         gp_swap_words(dat, p[4], 0x1C, "ItCo", "item global scalar table");
-    OSReport("VITA_ITCO_NATIVE_PASS file=%s root=%08x articles=%u attrs=%u hurts=%u models=%u model_joints=%u dynamics=%u sources=%u\n",
+    OSReport("VITA_ITCO_NATIVE_PASS file=%s root=%08x articles=%u attrs=%u hurts=%u models=%u model_joints=%u state_tables=%u state_descs=%u item_cmds=%u anim_roots=%u matanim_roots=%u shape_roots=%u dynamics=%u sources=%u\n",
              filename != NULL ? filename : "?", root,
              (unsigned) article_count, (unsigned) attr_count,
              (unsigned) hurt_count, (unsigned) model_count,
-             (unsigned) joint_root_count,
+             (unsigned) joint_root_count, item_states.table_count,
+             item_states.desc_count, item_states.command_count,
+             (unsigned) item_states.anim_count,
+             (unsigned) item_states.matanim_count,
+             (unsigned) item_states.shape_count,
              (unsigned) dynamics_count, (unsigned) source_count);
 }
 
@@ -1594,6 +1763,12 @@ void mv_gameplay_archive_prepare_raw(void* bytes, size_t size,
     r = gp_find_public(&dat, "itPublicData", NULL, &name, &root);
     if (r > 0) {
         itco_convert(&dat, root, filename);
+        mv_dat_close(&dat);
+        return;
+    }
+    r = gp_find_public(&dat, "lbBgFlashColAnimData", NULL, &name, &root);
+    if (r > 0) {
+        lbbf_convert_color_commands(&dat, root, filename);
     }
     mv_dat_close(&dat);
 }

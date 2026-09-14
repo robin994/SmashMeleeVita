@@ -41,4 +41,8 @@ int mv_hsd_archive_probe(void *bytes, size_t size, const char *public_name,
                          MvHsdArchiveStats *stats);
 
 struct HSD_JObj;
+struct HSD_Joint;
 int mv_hsd_gx_capture_runtime(struct HSD_JObj *root, int reset, int visibility, MvGxCaptureStats *capture);
+/* Regression helper for retail POBJ_SKIN references whose Joint descriptor has
+ * not yet been inserted into the HSD ID table. */
+int mv_hsd_shared_skin_lazy_probe(struct HSD_Joint *joint);

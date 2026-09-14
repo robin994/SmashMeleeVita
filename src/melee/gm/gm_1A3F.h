@@ -19,6 +19,7 @@
 /* 1A4510 */ void gm_801A4510(void);
 #ifdef MELEE_VITA_PLATFORM
 int mv_gm_vita_continue_mode(int mode_kind);
+int mv_gm_vita_run_mode(int mode_kind);
 #endif
 
 #endif

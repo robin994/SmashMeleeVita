@@ -31,6 +31,24 @@ static f32 (*normal_buffer)[3] = NULL;
 static u32 vertex_buffer_size = 0;
 static u32 normal_buffer_size = 0;
 
+#ifdef MELEE_VITA_PLATFORM
+static inline u16 shape_read_be16(const void* ptr)
+{
+    const u8* p = ptr;
+    return (u16) (((u16) p[0] << 8) | p[1]);
+}
+
+static inline f32 shape_read_be_f32(const void* ptr)
+{
+    const u8* p = ptr;
+    u32 bits = ((u32) p[0] << 24) | ((u32) p[1] << 16) |
+               ((u32) p[2] << 8) | p[3];
+    f32 value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+#endif
+
 static HSD_VtxDescList* prev_vtxdesclist_array = NULL;
 static HSD_VtxDescList* prev_vtxdesc = NULL;
 
@@ -432,10 +450,26 @@ void HSD_PObjResolveRefs(HSD_PObj* pobj, HSD_PObjDesc* pdesc)
         if (pdesc->u.joint != NULL) {
             pobj->u.jobj = HSD_IDGetData((u32) pdesc->u.joint, NULL);
             if (pobj->u.jobj == NULL) {
-                OSReport("VITA_POBJ_SHARED_SKIN_RESOLVE_FAIL desc=%p joint_desc=%p\n",
+                /* Some retail DAT graphs (Great Bay light-animation helpers
+                 * are the first hardware example) reference a valid nativeized
+                 * Joint that is not part of the structural root currently being
+                 * loaded, so its descriptor identity is not in the HSD ID table
+                 * yet. HSD_AObjLoadDesc already handles the same retail pattern
+                 * by lazily loading obj_id when lookup misses. Mirror that policy
+                 * for load-only shared skins instead of treating load order as
+                 * corruption. HSD_JObjLoadJoint registers the descriptor identity
+                 * before this PObj retains the resulting JObj. */
+                OSReport("VITA_POBJ_SHARED_SKIN_LAZY_BEGIN desc=%p joint_desc=%p\n",
                          pdesc, pdesc->u.joint);
-                HSD_Panic(__FILE__, __LINE__,
-                          "load-only shared-skin JObj missing from ID table\n");
+                pobj->u.jobj = HSD_JObjLoadJoint(pdesc->u.joint);
+                if (pobj->u.jobj == NULL) {
+                    OSReport("VITA_POBJ_SHARED_SKIN_RESOLVE_FAIL desc=%p joint_desc=%p\n",
+                             pdesc, pdesc->u.joint);
+                    HSD_Panic(__FILE__, __LINE__,
+                              "load-only shared-skin JObj lazy load failed\n");
+                }
+                OSReport("VITA_POBJ_SHARED_SKIN_LAZY_PASS desc=%p joint_desc=%p joint=%p\n",
+                         pdesc, pdesc->u.joint, pobj->u.jobj);
             }
             HSD_JObjRefThis(pobj->u.jobj);
             OSReport("VITA_POBJ_SHARED_SKIN_RESOLVE_PASS desc=%p joint_desc=%p joint=%p\n",
@@ -598,18 +632,32 @@ static inline void decode_s8_xyz(void* src_base, f32 dst[3], int scale)
 
 static inline void decode_u16_xyz(void* src_base, f32 dst[3], int scale)
 {
+#ifdef MELEE_VITA_PLATFORM
+    u8* src = src_base;
+    dst[0] = (f32) shape_read_be16(src + 0) / scale;
+    dst[1] = (f32) shape_read_be16(src + 2) / scale;
+    dst[2] = (f32) shape_read_be16(src + 4) / scale;
+#else
     u16* src = src_base;
     dst[0] = (f32) src[0] / scale;
     dst[1] = (f32) src[1] / scale;
     dst[2] = (f32) src[2] / scale;
+#endif
 }
 
 static inline void decode_s16_xyz(void* src_base, f32 dst[3], int scale)
 {
+#ifdef MELEE_VITA_PLATFORM
+    u8* src = src_base;
+    dst[0] = (f32) (s16) shape_read_be16(src + 0) / scale;
+    dst[1] = (f32) (s16) shape_read_be16(src + 2) / scale;
+    dst[2] = (f32) (s16) shape_read_be16(src + 4) / scale;
+#else
     s16* src = src_base;
     dst[0] = (f32) src[0] / scale;
     dst[1] = (f32) src[1] / scale;
     dst[2] = (f32) src[2] / scale;
+#endif
 }
 
 static void get_shape_vertex_xyz(HSD_ShapeSet* shape_set, int shape_id,
@@ -631,7 +679,14 @@ static void get_shape_vertex_xyz(HSD_ShapeSet* shape_set, int shape_id,
                idx * shape_set->vertex_desc->stride;
 
     if (shape_set->vertex_desc->comp_type == GX_F32) {
+#ifdef MELEE_VITA_PLATFORM
+        const u8* src = src_base;
+        dst[0] = shape_read_be_f32(src + 0);
+        dst[1] = shape_read_be_f32(src + 4);
+        dst[2] = shape_read_be_f32(src + 8);
+#else
         memcpy(dst, src_base, sizeof(f32[3]));
+#endif
     } else {
         int decimal_point = 1 << shape_set->vertex_desc->frac;
         switch (shape_set->vertex_desc->comp_type) {
@@ -676,7 +731,14 @@ static void get_shape_normal_xyz(HSD_ShapeSet* shape_set, int shape_id,
                idx * shape_set->normal_desc->stride;
 
     if (shape_set->normal_desc->comp_type == GX_F32) {
+#ifdef MELEE_VITA_PLATFORM
+        const u8* src = src_base;
+        dst[0] = shape_read_be_f32(src + 0);
+        dst[1] = shape_read_be_f32(src + 4);
+        dst[2] = shape_read_be_f32(src + 8);
+#else
         memcpy(dst, src_base, sizeof(f32[3]));
+#endif
     } else {
         int decimal_point = 1 << shape_set->normal_desc->frac;
         switch (shape_set->normal_desc->comp_type) {
@@ -721,7 +783,14 @@ static void get_shape_nbt_xyz(HSD_ShapeSet* shape_set, int shape_id,
                idx * shape_set->normal_desc->stride;
 
     if (shape_set->normal_desc->comp_type == GX_F32) {
+#ifdef MELEE_VITA_PLATFORM
+        const u8* src = src_base;
+        for (i = 0; i < 9; i++) {
+            dst[i] = shape_read_be_f32(src + i * 4);
+        }
+#else
         memcpy(dst, src_base, sizeof(f32[9]));
+#endif
     } else {
         int decimal_point = 1 << shape_set->normal_desc->frac;
         switch (shape_set->normal_desc->comp_type) {
@@ -736,14 +805,29 @@ static void get_shape_nbt_xyz(HSD_ShapeSet* shape_set, int shape_id,
             }
             break;
         case GX_U16:
+#ifdef MELEE_VITA_PLATFORM
+            for (i = 0; i < 9; i++) {
+                dst[i] = (f32) shape_read_be16((u8*) src_base + i * 2) /
+                         decimal_point;
+            }
+#else
             for (i = 0; i < 9; i++) {
                 dst[i] = (float) ((u16*) src_base)[i] / decimal_point;
             }
+#endif
             break;
         case GX_S16:
+#ifdef MELEE_VITA_PLATFORM
+            for (i = 0; i < 9; i++) {
+                dst[i] = (f32) (s16) shape_read_be16(
+                             (u8*) src_base + i * 2) /
+                         decimal_point;
+            }
+#else
             for (i = 0; i < 9; i++) {
                 dst[i] = (float) ((s16*) src_base)[i] / decimal_point;
             }
+#endif
             break;
         default:
             HSD_Panic(__FILE__, 1261, "unexpected normal type.");
@@ -1305,6 +1389,25 @@ int HSD_PObjCaptureRigid(HSD_PObj* pobj, Mtx pmtx)
 int HSD_PObjCaptureVita(HSD_PObj* pobj, HSD_JObj* owner, Mtx pmtx)
 {
     if (pobj == NULL || owner == NULL || pmtx == NULL) return -1;
+    if (pobj_type(pobj) == POBJ_SHAPEANIM) {
+        if (pobj->u.shape_set == NULL) return -1;
+        switch (pobj->flags & (POBJ_CULLFRONT | POBJ_CULLBACK)) {
+        case 0: GXSetCullMode(GX_CULL_NONE); break;
+        case POBJ_CULLFRONT: GXSetCullMode(GX_CULL_FRONT); break;
+        case POBJ_CULLBACK: GXSetCullMode(GX_CULL_BACK); break;
+        case POBJ_CULLFRONT | POBJ_CULLBACK: return 0;
+        }
+        /* Shape animation uses the same rigid model matrix as retail
+         * PObjSetupMtx(), but expands its animated vertex/normal arrays to
+         * direct GX vertices before capture.  Reuse the upstream endian-safe
+         * interpolator rather than treating ShapeAnim as an unsupported union. */
+        GXSetCurrentMtx(GX_PNMTX0);
+        GXLoadPosMtxImm(pmtx, GX_PNMTX0);
+        setupShapeAnimArrayDesc(pobj->verts);
+        setupShapeAnimVtxDesc(pobj);
+        drawShapeAnim(pobj);
+        return 0;
+    }
     if (pobj_type(pobj) == POBJ_SKIN) {
         if (pobj->u.jobj == NULL)
             return HSD_PObjCaptureRigid(pobj, pmtx);

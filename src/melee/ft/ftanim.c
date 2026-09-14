@@ -1023,14 +1023,31 @@ void ftAnim_80070308(Fighter_GObj* fighter_gobj)
 {
     Fighter* fp = GET_FIGHTER(fighter_gobj);
     HSD_JObj* jobj = GET_JOBJ(fighter_gobj);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_ANIM_BEGIN kind=%d root=%p matanim=%p\n",
+             (int) fp->kind, (void*) jobj,
+             (void*) CostumeListsForeachCharacter[fp->kind]
+                         .costume_list[fp->x619_costume_id]
+                         .x4);
+#endif
 
     HSD_JObjAddAnimAll(jobj, NULL,
                        CostumeListsForeachCharacter[fp->kind]
                            .costume_list[fp->x619_costume_id]
                            .x4,
                        NULL);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_ANIM_STAGE kind=%d stage=add_anim_pass\n", (int) fp->kind);
+#endif
     HSD_JObjReqAnimAll(jobj, 0.0F);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_ANIM_STAGE kind=%d stage=req_anim_pass\n", (int) fp->kind);
+#endif
     ftAnim_80070200(fp, &fp->ft_data->x8->x8, &fp->tobj_list, &fp->dobj_list);
+#ifdef MELEE_VITA_PLATFORM
+    OSReport("VITA_FIGHTER_ANIM_PASS kind=%d tobjs=%u\n",
+             (int) fp->kind, (unsigned) fp->tobj_list.n_costume_tobjs);
+#endif
 }
 
 extern struct {

@@ -2,6 +2,7 @@
 #include "title_boot_vita.h"
 
 #include "asset_file.h"
+#include "gc_runtime_vita.h"
 #include "gx_capture_vita.h"
 #include "gx_replay_vita.h"
 #include "hsd_anim_native.h"
@@ -482,6 +483,7 @@ static int capture_live_menu(MvGxReplay *replay, MvGxCaptureStats *stats,
     }
 
     if (!roots) return -91;
+    const uint32_t sis_first_command = stats->commands;
     int sis_count = HSD_SisLib_VitaCaptureAll();
     if (mv_gx_capture_stats(stats)) return -92;
     if (initialize) {
@@ -490,6 +492,27 @@ static int capture_live_menu(MvGxReplay *replay, MvGxCaptureStats *stats,
             return -5;
         replay->relaxed_from_command = background_commands;
         if (menu_log) {
+            if (sis_count > 0 && stats->commands > sis_first_command) {
+                uint32_t command_count = 0;
+                const MvGxCaptureCommand *commands = mv_gx_capture_commands(&command_count);
+                const MvGxCaptureCommand *first = sis_first_command < command_count ? &commands[sis_first_command] : NULL;
+                if (first) {
+                    fprintf(menu_log,
+                            "GAME_MENU_SIS_CAPTURE first=%u count=%u tex=%u format=%u "
+                            "size=%ux%u rgba=%08x unsupported=%08x simple_c0=%u "
+                            "simple_texa_a0=%u projection=%u viewport=%u blend=%u z=%u "
+                            "alpha=%u/%u\n",
+                            sis_first_command, stats->commands - sis_first_command,
+                            (unsigned)first->material.texture_count, (unsigned)first->material.format,
+                            (unsigned)first->material.width, (unsigned)first->material.height,
+                            (unsigned)first->material.material_rgba, (unsigned)first->material.unsupported,
+                            (unsigned)first->material.simple_tev_color_c0,
+                            (unsigned)first->material.simple_tev_alpha_texa_a0,
+                            (unsigned)first->projection_valid, (unsigned)first->viewport_valid,
+                            (unsigned)first->material.pe_blend_type, (unsigned)first->material.pe_z_enable,
+                            (unsigned)first->material.pe_alpha_comp0, (unsigned)first->material.pe_alpha_comp1);
+                }
+            }
             fprintf(menu_log,
                     "GAME_MENU_DYNAMIC_CAPTURE_PASS roots=%u dynamic=%u sis=%d "
                     "commands=%u triangles=%u\n",
@@ -583,9 +606,10 @@ int mv_main_menu_run(FILE *log)
     if (log) {
         fprintf(log,
                 "GAME_MENU_ORIGINAL_ENTER_PASS commands=%u triangles=%u "
-                "selection=%u source=mnMain_Scene_OnEnter\n",
+                "selection=%u capture_sig=%08x source=mnMain_Scene_OnEnter\n",
                 capture.commands, capture.triangles,
-                (unsigned)mn_804A04F0.hovered_selection);
+                (unsigned)mn_804A04F0.hovered_selection,
+                (unsigned)mv_gx_capture_frame_signature());
         fflush(log);
     }
 
@@ -594,6 +618,8 @@ int mv_main_menu_run(FILE *log)
     unsigned frames = 0;
     unsigned last_selection = mn_804A04F0.hovered_selection;
     unsigned last_menu = mn_804A04F0.cur_menu;
+    uint32_t initial_capture_sig = mv_gx_capture_frame_signature();
+    uint32_t last_sample_sig = initial_capture_sig;
     if (log) {
         fprintf(log, "GAME_MENU_NODE_ENTER menu=%u selection=%u\n", last_menu, last_selection);
         fflush(log);
@@ -661,12 +687,18 @@ int mv_main_menu_run(FILE *log)
         ++frames;
 
         if (log && (frames == 1 || frames == 60 || frames == 180)) {
+            uint32_t capture_sig = mv_gx_capture_frame_signature();
             fprintf(log,
                     "GAME_MENU_LIVE_PASS frame=%u commands=%u triangles=%u "
-                    "selection=%u matanim=native renderer=" MV_RENDER_NAME "\n",
+                    "selection=%u capture_sig=%08x changed_initial=%u "
+                    "changed_sample=%u matanim=native renderer=" MV_RENDER_NAME "\n",
                     frames, capture.commands, capture.triangles,
-                    (unsigned)mn_804A04F0.hovered_selection);
+                    (unsigned)mn_804A04F0.hovered_selection,
+                    (unsigned)capture_sig,
+                    (unsigned)(capture_sig != initial_capture_sig),
+                    (unsigned)(capture_sig != last_sample_sig));
             fflush(log);
+            last_sample_sig = capture_sig;
         }
 
         if (mn_804A04F0.hovered_selection != last_selection) {
@@ -689,6 +721,16 @@ int mv_main_menu_run(FILE *log)
 
     mv_frame_telemetry_flush(&timing, 1);
     lbAudioAx_VitaSfxStateTrace("MENU_EXIT");
+
+    if (mv_scene_vita_done()) {
+        /* The native menu bypasses the gm scene scheduler that normally stops
+         * the outgoing HPS stream before the next scene tears down its heaps. */
+        lbAudioAx_800236DC();
+        if (log) {
+            fprintf(log, "GAME_MENU_AUDIO_STREAM_STOP pending_async=%u destination=scene_transition\n", mv_gc_async_pending());
+            fflush(log);
+        }
+    }
 
     if (log) {
         fprintf(log,

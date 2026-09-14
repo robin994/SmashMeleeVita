@@ -5,10 +5,12 @@
 #include "css_assets_vita.h"
 #include "sss_assets_vita.h"
 #include "frame_telemetry_vita.h"
+#include "gc_runtime_vita.h"
 #include "gx_capture_vita.h"
 #include "gx_replay_vita.h"
 #include "hsd_runtime_probe.h"
 #include "render_vita.h"
+#include "retail_runtime_vita.h"
 #include "title_boot_vita.h"
 
 #include <melee/gm/forward.h>
@@ -69,8 +71,10 @@ static int capture_live_sss(MvGxReplay *replay, MvGxCaptureStats *stats,
         if (r) return -3;
             if (log) {
             fprintf(log,
-                    "GAME_SSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u renderer=%s\n",
-                    roots, sis_count, stats->commands, stats->triangles, MV_RENDER_NAME);
+                    "GAME_SSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u "
+                    "capture_sig=%08x renderer=%s\n",
+                    roots, sis_count, stats->commands, stats->triangles,
+                    (unsigned)mv_gx_capture_frame_signature(), MV_RENDER_NAME);
             fflush(log);
         }
     } else {
@@ -179,7 +183,10 @@ static int run_route_sss(FILE *log, const MvModeRoute *route, int mode)
     mv_sss_vita_set_log(NULL);
 
     if (result) return result;
-    return sss->start_game ? 0 : 1;
+    /* The original SSS state-exit callback encodes both directions in the
+     * GameMode state machine: start_game advances to the match; Back sets the
+     * next state to CSS. In both cases the state machine must keep running. */
+    return 0;
 }
 
 static int capture_live_css(MvGxReplay *replay, MvGxCaptureStats *stats,
@@ -207,7 +214,7 @@ static int capture_live_css(MvGxReplay *replay, MvGxCaptureStats *stats,
         int r = mv_gx_replay_init_relaxed_from(replay, camera, log, 0);
         if (r) return -3;
         replay->relaxed_from_command = 0;
-        if (log) { fprintf(log, "GAME_CSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u renderer=%s\n", roots, sis_count, stats->commands, stats->triangles, MV_RENDER_NAME); fflush(log); }
+        if (log) { fprintf(log, "GAME_CSS_CAPTURE_INIT_PASS roots=%u sis=%d commands=%u triangles=%u capture_sig=%08x renderer=%s\n", roots, sis_count, stats->commands, stats->triangles, (unsigned)mv_gx_capture_frame_signature(), MV_RENDER_NAME); fflush(log); }
     } else replay->relaxed_from_command = 0;
     return 0;
 }
@@ -215,23 +222,68 @@ static int capture_live_css(MvGxReplay *replay, MvGxCaptureStats *stats,
 int mv_onep_mode_run(FILE *log, int mode)
 {
     const MvModeRoute *route = mv_mode_vita_route(mode);
-    if (mode != GM_CLASSIC && mode != GM_ADVENTURE && !route) return -1;
     if (mv_render_init() < 0) return -2;
     mv_gm_vita_enter_mode(mode);
 
-    if (log) { fprintf(log, "GAME_1P_ROUTE_BEGIN mode=%s(%d) target=CSS->STAGE_MATCH\n", mode == GM_CLASSIC ? "CLASSIC" : "ADVENTURE", mode); fflush(log); }
-
-    lbDvd_80018CF4(lbDvdPreload_3);
-    /* gm_801A4BD4 loads LbRb.dat after the scene heap has been rebuilt.
-     * Do the same here: heap 0 is invalid before lbDvd_80018CF4(). */
-    lb_80014534();
+    const char *mode_name = route ? route->name :
+                            mode == GM_CLASSIC ? "GM_CLASSIC" :
+                            mode == GM_ADVENTURE ? "GM_ADVENTURE" :
+                            "GM_RETAIL";
     if (log) {
-        fprintf(log, "RUMBLE_DATA_INIT_PASS scene=1P source=lb_013B.c asset=LbRb.dat symbol=lbRumbleData\n");
+        fprintf(log, "GAME_MODE_ROUTE_BEGIN mode=%s(%d) target=%s\n",
+                mode_name, mode,
+                (mode == GM_CLASSIC || mode == GM_ADVENTURE || route) ?
+                    "CSS->STAGE_MATCH" : "original_GameMode_table");
         fflush(log);
     }
+
+    /* Finish already-issued DVD/ARAM completions from the outgoing menu after
+     * its HPS stream has been stopped. */
+    unsigned transition_pumps = 0;
+    while (mv_gc_async_pending() && transition_pumps < 256u) {
+        mv_gc_async_pump();
+        ++transition_pumps;
+    }
+
+#ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
+    if (mode != GM_CLASSIC && mode != GM_ADVENTURE && !route) {
+        if (log) {
+            fprintf(log,
+                    "GAME_MODE_RETAIL_DISPATCH mode=%d source=gm_GetAllGameModes+runGameMode\n",
+                    mode);
+            fflush(log);
+        }
+        if (mv_retail_runtime_begin(log) != 0)
+            return -7;
+        int next_mode = mv_gm_vita_run_mode(mode);
+        mv_retail_runtime_end();
+        if (next_mode < 0 || next_mode >= GM_COUNT)
+            return -6;
+        return next_mode;
+    }
+#endif
+    if (log) {
+        fprintf(log, "GAME_1P_PRELOAD_BEGIN pending_async=%u drained=%u preload=%d\n",
+                mv_gc_async_pending(), transition_pumps, lbDvdPreload_3);
+        fflush(log);
+    }
+    lbDvd_80018CF4(lbDvdPreload_3);
+    if (log) {
+        fprintf(log, "GAME_1P_PRELOAD_PASS pending_async=%u preload=%d\n",
+                mv_gc_async_pending(), lbDvdPreload_3);
+        fflush(log);
+    }
+    if (log) { fprintf(log, "GAME_1P_BOOTSTRAP stage=sis_begin\n"); fflush(log); }
     mv_scene_vita_sis_init(0x2400);
+    if (log) { fprintf(log, "GAME_1P_BOOTSTRAP stage=objects_begin\n"); fflush(log); }
     mv_scene_vita_objects_init();
+    if (log) { fprintf(log, "GAME_1P_BOOTSTRAP stage=controller_begin\n"); fflush(log); }
     gm_801A3E88();
+    if (log) { fprintf(log, "GAME_1P_BOOTSTRAP stage=audio_scene_begin\n"); fflush(log); }
+    lbAudioAx_8002835C();
+    if (log) { fprintf(log, "GAME_1P_BOOTSTRAP stage=rumble_begin\n"); fflush(log); }
+    lb_80014534();
+    if (log) { fprintf(log, "RUMBLE_DATA_INIT_PASS scene=1P source=lb_013B.c asset=LbRb.dat symbol=lbRumbleData\n"); fflush(log); }
     mv_scene_vita_reset();
     mv_css_vita_set_log(log);
 
@@ -246,18 +298,29 @@ int mv_onep_mode_run(FILE *log, int mode)
     lbAudioAx_VitaSfxStateTrace("1P_BEGIN");
 
     if (route) {
+#ifndef MELEE_VITA_FULL_GAMEPLAY_SCENE
         static unsigned char initialized[GM_COUNT];
-        if (!initialized[mode]) { route->init(); initialized[mode] = 1; }
+        if (!initialized[mode]) {
+            if (log) { fprintf(log, "GAME_1P_MODE_INIT_BEGIN mode=%d\n", mode); fflush(log); }
+            route->init(); initialized[mode] = 1;
+            if (log) { fprintf(log, "GAME_1P_MODE_INIT_PASS mode=%d\n", mode); fflush(log); }
+        }
+#endif
+        if (log) { fprintf(log, "GAME_1P_MODE_LOAD_BEGIN mode=%d\n", mode); fflush(log); }
         route->load();
+        if (log) { fprintf(log, "GAME_1P_MODE_LOAD_PASS mode=%d\n", mode); fflush(log); }
+        if (log) { fprintf(log, "GAME_1P_CSS_STATE_ENTER_BEGIN mode=%d\n", mode); fflush(log); }
         route->css_enter(&css_state);
+        if (log) { fprintf(log, "GAME_1P_CSS_STATE_ENTER_PASS mode=%d\n", mode); fflush(log); }
     } else if (mode == GM_CLASSIC) {
-        gm_Mode_Classic_OnInit();
+        if (log) { fprintf(log, "GAME_1P_MODE_LOAD_BEGIN mode=%d\n", mode); fflush(log); }
         gm_Mode_Classic_OnLoad();
+        if (log) { fprintf(log, "GAME_1P_MODE_LOAD_PASS mode=%d\n", mode); fflush(log); }
+        if (log) { fprintf(log, "GAME_1P_CSS_STATE_ENTER_BEGIN mode=%d\n", mode); fflush(log); }
         gmClassic_801B3DD8(&css_state);
+        if (log) { fprintf(log, "GAME_1P_CSS_STATE_ENTER_PASS mode=%d\n", mode); fflush(log); }
     } else {
-        gm_Mode_Adventure_OnInit();
-        gm_Mode_Adventure_OnLoad();
-        gm_801B42E8(&css_state);
+        gm_Mode_Adventure_OnLoad(); gm_801B42E8(&css_state);
     }
     lbAudioAx_VitaSfxStateTrace("1P_AFTER_MODE_ONLOAD");
 
@@ -272,7 +335,9 @@ int mv_onep_mode_run(FILE *log, int mode)
                 plinklow_gobjs ? (void *)plinklow_gobjs[3] : NULL);
         fflush(log);
     }
+    if (log) { fprintf(log, "GAME_CSS_SCENE_ONENTER_BEGIN mode=%d\n", mode); fflush(log); }
     mnCharSel_Scene_OnEnter(css);
+    if (log) { fprintf(log, "GAME_CSS_SCENE_ONENTER_PASS mode=%d\n", mode); fflush(log); }
     const MvCamera *camera = mv_css_vita_camera();
     if (!camera) { mv_render_fini(); mv_css_vita_release(); return -3; }
 
@@ -281,8 +346,13 @@ int mv_onep_mode_run(FILE *log, int mode)
     int result = capture_live_css(&replay, &capture, camera, log, 1);
     if (result) { mv_render_fini(); mv_css_vita_release(); return -20 + result; }
 
-    MvFrameTelemetry timing; mv_frame_telemetry_init(&timing, log, mode == GM_CLASSIC ? "CLASSIC_CSS" : "ADVENTURE_CSS");
+    MvFrameTelemetry timing;
+    mv_frame_telemetry_init(&timing, log,
+                            mode == GM_CLASSIC ? "CLASSIC_CSS" :
+                            mode == GM_ADVENTURE ? "ADVENTURE_CSS" :
+                            route ? route->name : "RETAIL_CSS");
     unsigned frames = 0;
+    unsigned css_raw_prev = 0;
     while (!mv_scene_vita_done()) {
         uint64_t frame0 = mv_frame_time_us();
         HSD_PadRenewStatus();
@@ -305,16 +375,59 @@ int mv_onep_mode_run(FILE *log, int mode)
         mv_frame_telemetry_record(&timing, present1 - frame0, cap1 - cap0, replay1 - replay0, present1 - replay1);
         mv_frame_telemetry_flush(&timing, 0);
         SceCtrlData pad = {0};
-        if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0 && (pad.buttons & (SCE_CTRL_SELECT | SCE_CTRL_START)) == (SCE_CTRL_SELECT | SCE_CTRL_START)) { result = -99; break; }
+        if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0) {
+            unsigned raw_pressed = pad.buttons & ~css_raw_prev;
+            css_raw_prev = pad.buttons;
+            if ((pad.buttons & (SCE_CTRL_SELECT | SCE_CTRL_START)) ==
+                (SCE_CTRL_SELECT | SCE_CTRL_START))
+            {
+                result = -99;
+                break;
+            }
+            if ((raw_pressed & SCE_CTRL_START) &&
+                !(pad.buttons & SCE_CTRL_SELECT))
+            {
+                u32 before = mnCharSel_VitaDebugState();
+                u32 hsd_button = HSD_PadCopyStatus[0].button;
+                u32 hsd_trigger = HSD_PadCopyStatus[0].trigger;
+                int accepted = mnCharSel_VitaTryStart();
+                u32 after = mnCharSel_VitaDebugState();
+                if (log) {
+                    fprintf(log,
+                            "GAME_CSS_VITA_START raw=%08x hsd_button=%08x hsd_trigger=%08x state_before=%08x state_after=%08x accepted=%d\n",
+                            (unsigned)pad.buttons, (unsigned)hsd_button,
+                            (unsigned)hsd_trigger, (unsigned)before,
+                            (unsigned)after, accepted);
+                    fflush(log);
+                }
+            }
+        }
+        if (log && (frames % 120u) == 0u) {
+            u32 state = mnCharSel_VitaDebugState();
+            fprintf(log,
+                    "GAME_CSS_STATE frame=%u state=%08x hsd_button=%08x hsd_trigger=%08x "
+                    "pending=%u ckind=%d capture_sig=%08x\n",
+                    frames, (unsigned)state,
+                    (unsigned)HSD_PadCopyStatus[0].button,
+                    (unsigned)HSD_PadCopyStatus[0].trigger,
+                    (unsigned)css->pending_scene_change,
+                    (int)css->vs.start.players[gm_801677F0()].ckind,
+                    (unsigned)mv_gx_capture_frame_signature());
+            fflush(log);
+        }
     }
 
+    if (log) { fprintf(log, "GAME_CSS_ONEXIT_BEGIN mode=%d\n", mode); fflush(log); }
     mnCharSel_Scene_OnExit(NULL);
+    if (log) { fprintf(log, "GAME_CSS_ONEXIT_PASS mode=%d pending=%u\n", mode, (unsigned)css->pending_scene_change); fflush(log); }
+    if (log) { fprintf(log, "GAME_1P_CSS_STATE_EXIT_BEGIN mode=%d state=%u\n", mode, (unsigned)gm_GetCurrentSceneIndex()); fflush(log); }
     if (route)
         route->css_exit(&css_state);
     else if (mode == GM_CLASSIC)
         gmClassic_801B3E44(&css_state);
     else
         gm_801B4350(&css_state);
+    if (log) { fprintf(log, "GAME_1P_CSS_STATE_EXIT_PASS mode=%d state=%u\n", mode, (unsigned)gm_GetCurrentSceneIndex()); fflush(log); }
 
     s8 ckind = ChKind_None; u8 stocks = 0, color = 0, nametag = GM_NAMETAG_NONE, cpu_level = 0;
     gm_801B0730(css, &ckind, &stocks, &color, &nametag, &cpu_level);
@@ -327,6 +440,15 @@ int mv_onep_mode_run(FILE *log, int mode)
     mv_css_vita_set_log(NULL);
 
     if (result) return result;
+    if (css->pending_scene_change == CSSPendingSceneChange_2) {
+        if (log) {
+            fprintf(log,
+                    "GAME_CSS_BACK_RETURN mode=%d destination=GM_MENU source=mncharsel_original\n",
+                    mode);
+            fflush(log);
+        }
+        return GM_MENU;
+    }
 #ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
     if (!route && (mode == GM_CLASSIC || mode == GM_ADVENTURE)) {
         if (log) {
@@ -337,7 +459,15 @@ int mv_onep_mode_run(FILE *log, int mode)
                     (unsigned)gm_GetCurrentSceneIndex());
             fflush(log);
         }
+        if (mv_retail_runtime_begin(log) != 0) {
+            if (log) {
+                fprintf(log, "VITA_RETAIL_RUNTIME_BEGIN_FAIL mode=%d\n", mode);
+                fflush(log);
+            }
+            return -7;
+        }
         int next_mode = mv_gm_vita_continue_mode(mode);
+        mv_retail_runtime_end();
         if (log) {
             fprintf(log,
                     "GAME_1P_RETAIL_CONTINUE_RETURN mode=%s(%d) next_mode=%d source=gm_1A3F.c\n",
@@ -349,60 +479,29 @@ int mv_onep_mode_run(FILE *log, int mode)
         return next_mode;
     }
 #endif
-    if (css->pending_scene_change == CSSPendingSceneChange_2) return 1;
     if (route) {
         int sss_result = run_route_sss(log, route, mode);
         if (sss_result != 0) return sss_result;
-
-        GameModeState vs_state = {0};
-        vs_state.id = route->vs_state_id;
-        vs_state.info.scene_kind = route->vs_scene_kind;
-        vs_state.info.enter_data = route->vs_enter_data;
-        vs_state.info.exit_data = route->vs_exit_data;
-
-        /* Match the retail gm_801A4014 ordering: preload the new state first,
-         * then run the mode-state on_enter, then initialize the GameScene and
-         * finally enter GS_VS/GS_TRAINING. */
-        lbDvd_80018CF4(lbDvdPreload_3);
-        mv_scene_vita_sis_init(0x4800);
-        gm_SetGameModeStateId(vs_state.id);
-        route->vs_enter(&vs_state);
-        StartMeleeData *start = (StartMeleeData *)route->vs_enter_data;
-        if (log) {
-            fprintf(log,
-                    "GAME_MODE_MATCH_PREPARED mode=%s(%d) state=%u scene=%u stkind=%u source=original_vs_state_onenter\n",
-                    route->name, mode, (unsigned)vs_state.id,
-                    (unsigned)vs_state.info.scene_kind,
-                    (unsigned)start->rules.stkind);
-            fflush(log);
-        }
-
 #ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
-        mv_scene_vita_objects_init();
-        gm_801A3E88();
-        mv_scene_vita_reset();
-        lb_80014534();
-        if (route->vs_scene_kind == GS_TRAINING)
-            gm_Scene_Training_OnEnter(route->vs_enter_data);
-        else
-            gm_Scene_Vs_OnEnter(route->vs_enter_data);
         if (log) {
             fprintf(log,
-                    "GAMEPLAY_SCENE_ENTER_PASS mode=%s(%d) scene=%s stkind=%u source=retail_gmvs\n",
-                    route->name, mode,
-                    route->vs_scene_kind == GS_TRAINING ? "GS_TRAINING" : "GS_VS",
-                    (unsigned)start->rules.stkind);
+                    "GAME_MODE_RETAIL_CONTINUE_BEGIN mode=%s(%d) state=%u source=original_GameMode_state_machine\n",
+                    route->name, mode, (unsigned)gm_GetCurrentSceneIndex());
             fflush(log);
         }
-#else
+        if (mv_retail_runtime_begin(log) != 0)
+            return -7;
+        int next_mode = mv_gm_vita_continue_mode(mode);
+        mv_retail_runtime_end();
         if (log) {
             fprintf(log,
-                    "GAMEPLAY_SCENE_FRONTIER_READY mode=%s(%d) scene=%s stkind=%u full_link=disabled source=original_vs_state_onenter\n",
-                    route->name, mode,
-                    route->vs_scene_kind == GS_TRAINING ? "GS_TRAINING" : "GS_VS",
-                    (unsigned)start->rules.stkind);
+                    "GAME_MODE_RETAIL_CONTINUE_RETURN mode=%s(%d) next_mode=%d\n",
+                    route->name, mode, next_mode);
             fflush(log);
         }
+        if (next_mode < 0 || next_mode >= GM_COUNT)
+            return -6;
+        return next_mode;
 #endif
         return 0;
     }

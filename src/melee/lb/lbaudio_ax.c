@@ -27,6 +27,9 @@
 #include <sysdolphin/baselib/gobjuserdata.h>
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/synth.h>
+#ifdef MELEE_VITA_PLATFORM
+#include "gc_runtime_vita.h"
+#endif
 
 #ifdef MELEE_VITA_AUDIO_BOOT_PROBE
 extern void mv_audio_boot_record(u32 bank_base, u32 bank_common,
@@ -1555,12 +1558,6 @@ static int lbAudioAx_StartSfxLoad(int slot)
     int result;
 
     strcpy(&cur_ssm_file[ssm_stem_pos], ssm_files[slot]);
-#ifdef MELEE_VITA_PLATFORM
-    /* Vita DevCom completes DVD requests synchronously. Seed the entry id
-     * before HSD_SynthSFXLoad() so its completion callback can find this slot
-     * even when it runs before HSD_SynthSFXLoad() returns. */
-    lbl_80433A64[slot] = DVDConvertPathToEntrynum(cur_ssm_file);
-#endif
     result = HSD_SynthSFXLoad(cur_ssm_file, 2, fn_80026C04, 0);
     lbl_80433A64[slot] = result;
     return result;
@@ -1931,11 +1928,49 @@ static int fn_80027488(void)
     return 0;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+int lbAudioAx_VitaWaitForLoadsBounded(unsigned max_pumps)
+{
+    unsigned pumps = 0;
+    int needs_more = fn_80027488();
+    while (needs_more == 1 && pumps < max_pumps) {
+        /* One scheduling boundary is enough to dispatch at most one deferred
+         * DVD/ARQ completion.  Keep the original state machine, but never let
+         * a broken audio bank prevent a visual scene from entering forever. */
+        /* Vita models DVD/ARQ callbacks as deferred host completions.  The
+         * retail callback alone cannot make those queues advance, so service
+         * one host completion at each bounded scheduling boundary too. */
+        mv_gc_async_pump();
+        lb_800195D0();
+        ++pumps;
+        if (HSD_SynthSFXGetPendingLoadCount() == 0)
+            needs_more = fn_80027488();
+    }
+    {
+        int pending = HSD_SynthSFXGetPendingLoadCount();
+        OSReport("SFX_LOAD_BOUNDED pumps=%u pending=%d needs_more=%d\n",
+                 pumps, pending, needs_more);
+        return pending > 0 || needs_more == 1;
+    }
+}
+#endif
+
 void lbAudioAx_80027648(void)
 {
+#ifdef MELEE_VITA_PLATFORM
+    /* GameCube can block here because DVD/ARQ interrupts keep progressing in
+     * parallel.  Vita emulates those completions cooperatively; an unbounded
+     * wait can therefore deadlock a scene transition with no crash/coredump.
+     * Make the shared wait both productive and bounded on Vita. */
+    if (lbAudioAx_VitaWaitForLoadsBounded(1024)) {
+        OSReport("SFX_WAIT_DEFERRED pending=%d\n",
+                 HSD_SynthSFXGetPendingLoadCount());
+    }
+#else
     while (fn_80027488() == 1) {
         HSD_SynthSFXWaitForLoadCompletion(lb_800195D0);
     }
+#endif
 }
 
 void lbAudioAx_8002785C(void)

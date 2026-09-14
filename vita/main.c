@@ -12,21 +12,27 @@
 #include "menu_boot_vita.h"
 #include "onep_boot_vita.h"
 #include <melee/gm/forward.h>
+#include <melee/gm/gm_1A36.h>
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/initialize.h>
+
+/* Extended-memory builds reserve a large newlib heap up front. ATTRIBUTE2=12 in
+ * param.sfo exposes the expanded user-memory budget on compatible Vita systems. */
+unsigned int _newlib_heap_size_user = 256U * 1024U * 1024U;
 
 _Static_assert(sizeof(void*) == 4, "GameCube data needs 32-bit pointers");
 _Static_assert(sizeof(u32) == 4 && sizeof(s32) == 4, "Dolphin ABI");
 _Static_assert(sizeof(f32) == 4, "Dolphin float ABI");
 
-/* Partial scene integration; original assets do not imply a complete game loop. */
+/* Original HSD/GameMode runtime with Vita asset conversion and vitaGL replay. */
 int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.56\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v3.97\n"); fflush(log); }
+    if (log) { fprintf(log, "GC_ASYNC_INIT pending=%u mode=deferred_completion\n", mv_gc_async_pending()); fflush(log); }
     if (log) { fprintf(log, "MELEE_VITA_UPSTREAM_BASE 480b04454\n"); fflush(log); }
-    if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=partial menu=mnMain_native\n"); fflush(log); }
+    if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=original_GameMode menu=mnMain_native\n"); fflush(log); }
     mv_runtime_set_log(log);
 
     /* vitaGL owns the one GXM context for movie -> title -> menu.  Initialize
@@ -142,7 +148,7 @@ int main(void)
                 "AUDIO_PREFIX_PASS source=lbaudio_ax.c ar_base=%08lx ar_size=%lu "
                 "arq_chunk=%lu ai_rate_code=%lu bank_base=%lu bank_common=%lu "
                 "bank_priority=%lu bank_total=%lu aram_dma=roundtrip_pass "
-                "output=not_started stop=before_audio_aux_banks\n",
+                "output=VitaAudioOut_AX_DSP_ADPCM stop=before_audio_aux_banks\n",
                 (unsigned long)audio_stats[MV_AUDIO_AR_BASE],
                 (unsigned long)audio_stats[MV_AUDIO_AR_SIZE],
                 (unsigned long)audio_stats[MV_AUDIO_ARQ_CHUNK],
@@ -164,7 +170,7 @@ int main(void)
             fprintf(log,
                     "AX_SYNTH_INIT_PASS source=axdriver.c/synth.c voices=%lu allocated=%lu "
                     "aux_a=%lu aux_b=%lu mode=%lu max_dsp_cycles=%lu "
-                    "output=not_started stop=before_audio_aux_banks\n",
+                    "output=VitaAudioOut_AX_DSP_ADPCM stop=before_audio_aux_banks\n",
                     (unsigned long)ax_stats[0], (unsigned long)ax_stats[1],
                     (unsigned long)ax_stats[2], (unsigned long)ax_stats[3],
                     (unsigned long)ax_stats[4], (unsigned long)ax_stats[5]);
@@ -241,6 +247,26 @@ int main(void)
         return sceKernelExitProcess(1);
     }
 
+    /* The retail entry point initializes every major mode once before the
+     * first mode is run. Keep the same ownership here instead of lazily
+     * resetting individual modes when a menu happens to reach them. */
+    gm_801A3EF4();
+    if (log) {
+        fprintf(log,
+                "GAME_MODE_TABLE_INIT_PASS source=gm_801A3EF4 lifecycle=retail_global_once\n");
+        fflush(log);
+    }
+
+    /* Keep the Vita output thread out of the original boot probes. AX/HSD
+     * initialization and the initial SFX banks are now fully established, so
+     * hardware playback can begin without racing the setup code or its log. */
+    mv_ax_audio_enable_hardware();
+    if (log) {
+        fprintf(log,
+                "VITA_AUDIO_HW_ENABLE_REQUEST rate=48000 mixer=AX_DSP_ADPCM_RESAMPLED "
+                "stage=post_gmmain_final_init\n");
+        fflush(log);
+    }
 
     if (log) {
         fprintf(log,
@@ -291,10 +317,7 @@ int main(void)
                 break;
             }
 #ifdef MELEE_VITA_FULL_GAMEPLAY_SCENE
-            if (completed_mode == GM_CLASSIC || completed_mode == GM_ADVENTURE)
-                pending_mode = onep_result;
-            else
-                pending_mode = GM_MENU;
+            pending_mode = onep_result;
 #else
             pending_mode = GM_MENU;
 #endif

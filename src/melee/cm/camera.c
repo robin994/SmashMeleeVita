@@ -917,12 +917,11 @@ void Camera_ApplyQuake(CameraBounds* bounds, CameraTransformState* state)
     f32 input_x;
     f32 input_y;
     f32 depth_ratio;
-    struct CameraStaticData {
-        CameraModeCallbacks callbacks;
-        HSD_WObjDesc interest;
-        HSD_WObjDesc eyepos;
-        HSD_CameraDescPerspective desc;
-    }* data = (struct CameraStaticData*) &cm_803BCB18;
+    /* The original binary placed cm_803BCB18/3C/50/64 consecutively and
+     * some decompilation used a synthetic aggregate rooted at cm_803BCB18.
+     * That placement is not a C ABI contract: on Vita the callback table is
+     * in a different section hundreds of KiB away from cm_803BCB64. Use the
+     * actual camera descriptor object instead of reconstructing linker layout. */
 
     input_x = game_camera.quake_offset.x * game_camera.quake_scale;
     input_y = game_camera.quake_offset.y * game_camera.quake_scale;
@@ -939,12 +938,12 @@ void Camera_ApplyQuake(CameraBounds* bounds, CameraTransformState* state)
     half_view_height =
         bounds->z_pos * tanf(0.5f * (0.017453292f * state->fov));
     viewport_x_scale =
-        data->desc.aspect *
+        cm_803BCB64.aspect *
         (half_view_height /
-         (0.5f * (f32) (data->desc.viewport.xmax - data->desc.viewport.xmin)));
+         (0.5f * (f32) (cm_803BCB64.viewport.xmax - cm_803BCB64.viewport.xmin)));
     viewport_y_scale =
         half_view_height /
-        (0.5f * (f32) (data->desc.viewport.ymax - data->desc.viewport.ymin));
+        (0.5f * (f32) (cm_803BCB64.viewport.ymax - cm_803BCB64.viewport.ymin));
     depth_factor_y = Stage_GetCamZoomRate();
     depth_factor_x = Stage_GetCamMaxDepth() - depth_factor_y;
 
@@ -961,6 +960,20 @@ void Camera_ApplyQuake(CameraBounds* bounds, CameraTransformState* state)
         (depth_ratio * (cm_803BCCA0.x60 - cm_803BCCA0.x58)) + cm_803BCCA0.x58;
     Camera_80030DE4(depth_factor_x * (input_x * viewport_x_scale),
                     depth_factor_y * (input_y * viewport_y_scale));
+#ifdef MELEE_VITA_PLATFORM
+    {
+        static int logged_quake_layout;
+        if (!logged_quake_layout) {
+            logged_quake_layout = 1;
+            OSReport("VITA_CAMERA_QUAKE_LAYOUT_PASS aspect=%f viewport=%d,%d,%d,%d input=%f,%f scale=%f,%f translation=%f,%f\n",
+                     cm_803BCB64.aspect, cm_803BCB64.viewport.xmin,
+                     cm_803BCB64.viewport.xmax, cm_803BCB64.viewport.ymin,
+                     cm_803BCB64.viewport.ymax, input_x, input_y,
+                     viewport_x_scale, viewport_y_scale,
+                     game_camera.translation.x, game_camera.translation.y);
+        }
+    }
+#endif
     game_camera.quake_offset.x = 0.0f;
     game_camera.quake_offset.y = 0.0f;
 }
@@ -1344,6 +1357,61 @@ void Camera_8002AF68(HSD_CObj* cobj, CameraTransformState* transform)
     Vec3 vec;
     float eye_y_bound;
     u8 _2[4];
+
+#ifdef MELEE_VITA_PLATFORM
+    /* A non-finite gameplay camera used to poison the CObj view matrix and,
+     * consequently, every world PNMTX.  Keep the last valid CObj state instead
+     * of replacing it with NaNs.  The CObj is born from the valid static
+     * camera descriptor, so this is a fail-closed state transition, not a
+     * synthetic renderer matrix. */
+    {
+        float dx = transform->interest.x - transform->position.x;
+        float dy = transform->interest.y - transform->position.y;
+        float dz = transform->interest.z - transform->position.z;
+        int transform_finite = isfinite(transform->fov) &&
+                               isfinite(transform->interest.x) &&
+                               isfinite(transform->interest.y) &&
+                               isfinite(transform->interest.z) &&
+                               isfinite(transform->position.x) &&
+                               isfinite(transform->position.y) &&
+                               isfinite(transform->position.z);
+        int translation_finite = isfinite(game_camera.translation.x) &&
+                                 isfinite(game_camera.translation.y);
+        int finite = transform_finite && translation_finite;
+        int degenerate = transform_finite &&
+                         (dx * dx + dy * dy + dz * dz < 1.0e-8f);
+        if (!finite || degenerate) {
+            static int logged_invalid_camera;
+            if (!logged_invalid_camera) {
+                logged_invalid_camera = 1;
+                OSReport("VITA_CAMERA_TRANSFORM_INVALID mode=%d finite=%d transform_finite=%d translation_finite=%d degenerate=%d fov=%f interest=%f,%f,%f position=%f,%f,%f translation=%f,%f stage=%d cam_zoom=%f cam_depth=%f cam_track=%f cam_smooth=%f\n",
+                         game_camera.mode, finite, transform_finite,
+                         translation_finite, degenerate, transform->fov,
+                         transform->interest.x, transform->interest.y,
+                         transform->interest.z, transform->position.x,
+                         transform->position.y, transform->position.z,
+                         game_camera.translation.x, game_camera.translation.y,
+                         stage_info.grkind, Stage_GetCamZoomRate(),
+                         Stage_GetCamMaxDepth(), Stage_GetCamTrackRatio(),
+                         Stage_GetCamTrackSmooth());
+                unsigned subject_index = 0;
+                for (CmSubject* subject = cm_804D6468; subject != NULL;
+                     subject = subject->prev, ++subject_index) {
+                    OSReport("VITA_CAMERA_SUBJECT index=%u state=%d force=%u pos=%f,%f,%f ext_h=%f,%f ext_v=%f,%f,%f target_h=%f,%f target_v=%f,%f,%f bone=%f,%f,%f\n",
+                             subject_index, subject->state, subject->force_inactive,
+                             subject->pos.x, subject->pos.y, subject->pos.z,
+                             subject->ext.h.x, subject->ext.h.y,
+                             subject->ext.v.x, subject->ext.v.y, subject->ext.v.z,
+                             subject->target_ext.h.x, subject->target_ext.h.y,
+                             subject->target_ext.v.x, subject->target_ext.v.y,
+                             subject->target_ext.v.z, subject->bone_pos.x,
+                             subject->bone_pos.y, subject->bone_pos.z);
+                }
+            }
+            return;
+        }
+    }
+#endif
 
     HSD_CObjSetFov(cobj, transform->fov);
 
