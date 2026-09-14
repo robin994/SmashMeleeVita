@@ -571,6 +571,12 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
     unsigned hsd_multitex_selected = 0;
     unsigned hsd_multitex_submitted = 0;
     unsigned texture_prepare_failures = 0;
+    const int material_probe = !r->submit_logged && r->log != NULL;
+    unsigned probe_tex0 = 0, probe_tex1 = 0, probe_tex2 = 0;
+    unsigned probe_raster_commands = 0, probe_raster_vertices = 0;
+    unsigned probe_raster_black = 0, probe_raster_red = 0, probe_raster_other = 0;
+    unsigned probe_draw_black = 0, probe_draw_red = 0, probe_draw_other = 0;
+    unsigned probe_tev0 = 0, probe_tev1 = 0, probe_tev2 = 0, probe_tev3plus = 0;
 
     for (unsigned i = 0; i < count; ++i) {
         const MvGxCaptureCommand *c = cmd + i;
@@ -580,6 +586,40 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
             m->pe_z_func > 7 || m->pe_src_factor > 7 || m->pe_dst_factor > 7 ||
             c->cull_mode == 3)
             continue;
+
+        if (material_probe) {
+            if (m->texture_count == 0) ++probe_tex0;
+            else if (m->texture_count == 1) ++probe_tex1;
+            else ++probe_tex2;
+            if (m->tev_stage_count == 0) ++probe_tev0;
+            else if (m->tev_stage_count == 1) ++probe_tev1;
+            else if (m->tev_stage_count == 2) ++probe_tev2;
+            else ++probe_tev3plus;
+
+            uint32_t draw_color = m->texture_count ? material_draw_color(m) : m->material_rgba;
+            unsigned dr = (draw_color >> 24) & 0xffu;
+            unsigned dg = (draw_color >> 16) & 0xffu;
+            unsigned db = (draw_color >> 8) & 0xffu;
+            if (dr < 8u && dg < 8u && db < 8u) ++probe_draw_black;
+            else if (dr > dg + 32u && dr > db + 32u) ++probe_draw_red;
+            else ++probe_draw_other;
+
+            if (mv_gx_material_uses_raster0(m)) {
+                ++probe_raster_commands;
+                for (uint32_t vi = 0; vi < c->vertex_count; ++vi) {
+                    const MvGxCaptureVertex *pv = verts + c->first_vertex + vi;
+                    if (!(pv->present & (1u << MV_GX_VA_CLR0))) continue;
+                    uint32_t vc = pv->color0;
+                    unsigned vr = (vc >> 24) & 0xffu;
+                    unsigned vg = (vc >> 16) & 0xffu;
+                    unsigned vb = (vc >> 8) & 0xffu;
+                    ++probe_raster_vertices;
+                    if (vr < 8u && vg < 8u && vb < 8u) ++probe_raster_black;
+                    else if (vr > vg + 32u && vr > vb + 32u) ++probe_raster_red;
+                    else ++probe_raster_other;
+                }
+            }
+        }
 
         captured_viewport(c);
         captured_projection(c);
@@ -679,6 +719,42 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
                 "VITAGL_REPLAY_CAPTURED_SUBMIT commands=%u total=%u hsd_multitex=%u hsd_multitex_selected=%u texture_prepare_failures=%u gl_error=%x camera=per-command\n",
                 submitted, count, hsd_multitex_submitted, hsd_multitex_selected,
                 texture_prepare_failures, glGetError());
+        fprintf(r->log,
+                "VITAGL_MATERIAL_SUMMARY submitted=%u tex0=%u tex1=%u tex2plus=%u raster_commands=%u raster_vertices=%u raster_black=%u raster_red=%u raster_other=%u draw_black=%u draw_red=%u draw_other=%u tev0=%u tev1=%u tev2=%u tev3plus=%u\n",
+                submitted, probe_tex0, probe_tex1, probe_tex2, probe_raster_commands,
+                probe_raster_vertices, probe_raster_black, probe_raster_red,
+                probe_raster_other, probe_draw_black, probe_draw_red,
+                probe_draw_other, probe_tev0, probe_tev1, probe_tev2, probe_tev3plus);
+
+        unsigned samples = 0;
+        for (unsigned i = 0; i < count && samples < 12u; ++i) {
+            const MvGxCaptureCommand *c = cmd + i;
+            const MvGxMaterialState *m = &c->material;
+            if (!c->projection_valid || !supported(c, 1) ||
+                c->first_vertex > nverts || c->vertex_count > nverts - c->first_vertex ||
+                m->pe_z_func > 7 || m->pe_src_factor > 7 || m->pe_dst_factor > 7 ||
+                c->cull_mode == 3)
+                continue;
+            uint32_t draw_color = m->texture_count ? material_draw_color(m) : m->material_rgba;
+            uint32_t clr0 = 0;
+            unsigned clr0_present = 0;
+            if (c->vertex_count) {
+                const MvGxCaptureVertex *v = verts + c->first_vertex;
+                clr0 = v->color0;
+                clr0_present = (v->present & (1u << MV_GX_VA_CLR0)) != 0;
+            }
+            fprintf(r->log,
+                    "VITAGL_MATERIAL cmd=%u tri=%u tex=%u raster=%u material=%08x draw=%08x clr0=%08x clr0_present=%u tev=%u order0=%u cin0=%u,%u,%u,%u ain0=%u,%u,%u,%u unsupported=%08x\n",
+                    i, c->triangle_count, m->texture_count,
+                    mv_gx_material_uses_raster0(m), m->material_rgba, draw_color,
+                    clr0, clr0_present, m->tev_stage_count, m->tev_order_color[0],
+                    m->tev_color_in[0][0], m->tev_color_in[0][1],
+                    m->tev_color_in[0][2], m->tev_color_in[0][3],
+                    m->tev_alpha_in[0][0], m->tev_alpha_in[0][1],
+                    m->tev_alpha_in[0][2], m->tev_alpha_in[0][3],
+                    m->unsupported);
+            ++samples;
+        }
         fflush(r->log);
         r->submit_logged = 1;
     }

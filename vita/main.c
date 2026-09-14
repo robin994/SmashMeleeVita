@@ -29,7 +29,7 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.07-unlit-raster-color\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.08-visible-material-probe\n"); fflush(log); }
     if (log) { fprintf(log, "GC_ASYNC_INIT pending=%u mode=deferred_completion\n", mv_gc_async_pending()); fflush(log); }
     if (log) { fprintf(log, "MELEE_VITA_UPSTREAM_BASE b5a78406a\n"); fflush(log); }
     if(log) { fprintf(log,"RENDER_BACKEND name=" MV_RENDER_NAME " scene_loop=original_GameMode menu=mnMain_native\n"); fflush(log); }

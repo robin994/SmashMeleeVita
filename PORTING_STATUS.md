@@ -2154,12 +2154,11 @@ The physical v4.03 run remains black after the first visible gameplay frame even
 
 v4.04 keeps the normal/light/channel evaluation and telemetry but no longer writes the incomplete XF lighting result back into captured CLR0. Retail replay therefore returns to the raw vertex/material raster color path that produced visible Castle geometry in v4.00, while all later fixes remain in place: gameplay winding conversion, TLUT0/CI multitexture handling, depth/frame setup, ARM32 non-finite barriers, and the non-invasive frame-tail diagnostics. Runtime marker is `MELEE_VITA_GAME_BOOT v4.04-visible-raster-baseline`; APP_VER is 01.14. This is an intentional visibility baseline, not the final lighting implementation: the XF result stays diagnostic-only until the GX channel/TEV model is complete enough to replace the raster source without blacking the frame.
 
-## v4.07 - unlit XF raster color bridge (real Vita)
+## v4.08 - visible baseline + non-invasive material probe (real Vita)
 
-- The v4.06 hardware run confirms the compatible vitaGL lock fixed the full-black regression: real stage geometry is now visible on PS Vita.
-- The remaining pervasive red/pink tint is downstream of geometry/projection: runtime capture remains healthy (capture_result=0, gl_error=0, hundreds of textures prepared).
-- Gameplay telemetry shows roughly 11k channel-evaluated vertices per sampled frame but only ~456 genuinely lit vertices. The old bridge evaluated the GX/XF raster channel and then discarded that result, allowing raw CLR0 or stale TEVREG0 state to tint materials.
-- `finalize_vertex_xf()` now writes the exact post-XF raster color into captured CLR0 for active unlit channels. Genuinely lit channels retain the conservative v4.04 fallback until the incomplete Vita light model is made authoritative, avoiding the prior black-material regression.
-- Castle ARM multitexture regression still passes with both texture units, two captured TEV stages, and a valid captured CLR0 sample (0x999988ff).
-- The later JObj rotation NaNs remain a separate ARM32 transform/animation issue and are not treated by this renderer-color patch.
-- Runtime marker: `MELEE_VITA_GAME_BOOT v4.07-unlit-raster-color`; VPK version 01.17.
+- The physical v4.07 run regressed to a black gameplay frame while GX capture/replay remained healthy (capture_result=0, gl_error=0). The regression is isolated to the v4.07 write-back of post-XF color into captured CLR0.
+- The v4.07 CLR0 write-back is fully removed. Rendering therefore returns to the exact v4.06 visible color path and keeps the same compatible vitaGL library lock.
+- No new material, TEV, lighting, texture, projection, culling, depth, blend, or framebuffer behavior is introduced in this build.
+- First-frame replay now emits VITAGL_MATERIAL_SUMMARY plus up to 12 VITAGL_MATERIAL samples. The probe classifies texture count, TEV stage count, RASC usage, raw CLR0 color distribution, material draw-color distribution, and the first captured TEV inputs without changing GL state or vertex data.
+- This separates two hypotheses for the red/pink v4.06 image: red already present in captured raster/material input versus a later fixed-function texture-combiner approximation.
+- Runtime marker: MELEE_VITA_GAME_BOOT v4.08-visible-material-probe; VPK version 01.18.
