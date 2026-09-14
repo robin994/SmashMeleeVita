@@ -584,6 +584,9 @@ static void captured_viewport(const MvGxCaptureCommand *c)
 void mv_gx_replay_draw_captured(MvGxReplay *r)
 {
     if (!r || !r->ready) return;
+#ifdef MELEE_VITA_GXM_DEBUG
+    glPushGroupMarker(0, "MeleeGXReplay");
+#endif
     uint32_t count, nverts;
     const MvGxCaptureCommand *cmd = mv_gx_capture_commands(&count);
     const MvGxCaptureVertex *verts = mv_gx_capture_vertices(&nverts);
@@ -735,6 +738,9 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         if (hsd_two) ++hsd_multitex_submitted;
     }
 
+#ifdef MELEE_VITA_GXM_DEBUG
+    glPopGroupMarker();
+#endif
     r->submitted_commands = submitted;
     if (!r->submit_logged && r->log) {
         fprintf(r->log,

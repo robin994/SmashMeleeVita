@@ -194,8 +194,14 @@ void mv_retail_runtime_present_frame(int pass)
     if (retail.frame == 0u) mv_retail_log_clip_probe();
     mv_retail_log_tail_commands(retail.frame + 1u);
 
+#ifdef MELEE_VITA_GXM_DEBUG
+    glPushGroupMarker(0, "MeleeGameplayFrame");
+#endif
     mv_render_begin();
     mv_gx_replay_draw_captured(&retail.replay);
+#ifdef MELEE_VITA_GXM_DEBUG
+    glPopGroupMarker();
+#endif
     mv_render_present();
 
     ++retail.frame;
