@@ -129,6 +129,7 @@ HSD_Archive* HSD_SisLib_803A945C(char*);
 void HSD_SisLib_803A84BC(HSD_GObj*, int);
 #ifdef MELEE_VITA_PLATFORM
 int HSD_SisLib_VitaCaptureAll(void);
+u16 HSD_SisLib_VitaEncodeU8_8(f32 value);
 #endif
 s32 HSD_SisLib_803A7F0C(HSD_Text*, s32);
 void HSD_SisLib_803A8134(void*, HSD_Text*, f32*, f32*);

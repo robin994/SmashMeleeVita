@@ -220,6 +220,25 @@ s32 HSD_SisLib_803A67EC(u8* data, u8* string)
     return out_idx;
 }
 
+#ifdef MELEE_VITA_PLATFORM
+__attribute__((noinline)) u16 HSD_SisLib_VitaEncodeU8_8(f32 value)
+{
+    /* The SIS stream stores scale as unsigned 8.8 fixed point. Casting
+     * 256.0f directly to u8 is outside the destination range on ARM and may
+     * saturate instead of wrapping to the retail low byte. Convert once to
+     * an integer of sufficient width, then split the bytes explicitly. */
+    s32 fixed = (s32) (value * 256.0F);
+    return (u16) fixed;
+}
+
+static inline void sis_write_u8_8(u8* dst, f32 value)
+{
+    u16 fixed = HSD_SisLib_VitaEncodeU8_8(value);
+    dst[0] = (u8) (fixed >> 8);
+    dst[1] = (u8) fixed;
+}
+#endif
+
 int HSD_SisLib_803A6B98(HSD_Text* text, float x, float y, const char* fmt, ...)
 {
     u8 buffer[128];
@@ -283,10 +302,17 @@ int HSD_SisLib_803A6B98(HSD_Text* text, float x, float y, const char* fmt, ...)
     *(*cur)++ = text->text_color.g;
     *(*cur)++ = text->text_color.b;
     *(*cur)++ = 0xE;
+#ifdef MELEE_VITA_PLATFORM
+    sis_write_u8_8(*cur, text->x34.x);
+    *cur += 2;
+    sis_write_u8_8(*cur, text->x34.y);
+    *cur += 2;
+#else
     *(*cur)++ = (u8) (s32) text->x34.x;
     *(*cur)++ = (u8) (s32) (256.0F * text->x34.x);
     *(*cur)++ = (u8) (s32) text->x34.y;
     *(*cur)++ = (u8) (s32) (256.0F * text->x34.y);
+#endif
     for (; copied_bytes < encoded_len; copied_bytes++) {
         *(*cur)++ = encoded[copied_bytes];
     }
@@ -473,10 +499,16 @@ void HSD_SisLib_803A7548(HSD_Text* text, int entry_idx, float scale_x,
     u8* scale_ptr;
     if (entry != NULL) {
         scale_ptr = entry + 9;
+#ifdef MELEE_VITA_PLATFORM
+        ++scale_ptr;
+        sis_write_u8_8(scale_ptr, scale_x);
+        sis_write_u8_8(scale_ptr + 2, scale_y);
+#else
         *++scale_ptr = (u8) scale_x;
         scale_ptr[1] = (u8) (256.0F * scale_x);
         scale_ptr[2] = (u8) scale_y;
         scale_ptr[3] = (u8) (256.0F * scale_y);
+#endif
     }
 }
 

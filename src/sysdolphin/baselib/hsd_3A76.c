@@ -37,6 +37,15 @@ static inline s16 sis_stream_s16(const void *ptr)
 }
 
 #ifdef MELEE_VITA_PLATFORM
+static inline u32 sis_stream_native_u32(const void *ptr)
+{
+    /* Opcode 8/9 targets have already been relocated by HSD_ArchiveParse, so
+     * they are native little-endian pointers on Vita, but the field itself
+     * can be unaligned inside the bytecode stream. */
+    const u8 *p = ptr;
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+}
+
 /* SIS state-stack entries are encoded in GameCube byte order by
  * HSD_SisLib_803A7684().  Reading them through native ARM scalar pointers is
  * both endian-wrong and potentially unaligned. */
@@ -363,7 +372,11 @@ loop_3:
         HSD_SisLib_803A7684(text, (u8*) cursor, 0x85U);
         /* fallthrough */
     case 8:
+#ifdef MELEE_VITA_PLATFORM
+        cursor = (u8*) (s32) sis_stream_native_u32((u8*) cursor + 1) - 1;
+#else
         cursor = (u8*) *(s32*) ((u8*) cursor + 1) - 1;
+#endif
         goto block_33;
     case 14:
         HSD_SisLib_803A7684(text, (u8*) cursor, 0x83U);
@@ -789,7 +802,11 @@ void HSD_SisLib_803A84BC(HSD_GObj* gobj, int pass)
                             HSD_SisLib_803A7684(text, sis_cursor, 5U);
                             /* fallthrough */
                         case 8:
+#ifdef MELEE_VITA_PLATFORM
+                            sis_cursor = (u8*) (s32) sis_stream_native_u32(sis_cursor + 1) - 1;
+#else
                             sis_cursor = (u8*) *(s32*) (sis_cursor + 1) - 1;
+#endif
                             break;
                         case 10:
                             if (((u32) text->alloc_data == 0U) || (saved_kerning == 0)) {
