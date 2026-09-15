@@ -1,4 +1,39 @@
-# Porting status - 2026-09-15, v4.17 Hyrule Temple GX winding
+# Porting status - 2026-09-15, v4.19 Kirby copy archive nativeization
+
+## 2026-09-15 — v4.19: nativeize compact Kirby copy archives before match startup
+
+The physical v4.18 run did not reach the new fighter FObj guard. Match startup stopped immediately after
+Kirby's fighter creation with `VITA_GAMEPLAY_DAT_INVALID kind=ftDataKirbyCopyMario ... off=00000130`.
+The generic gameplay-DAT dispatcher classified every public symbol beginning with `ftData` as a full
+`FighterData` root. `PlKbCpMr.dat` is not FighterData: its `ftDataKirbyCopyMario` root is the compact
+`Kirby_Unk` structure, where +0 is the hat JObj, +4 is `model_num=1`, +8 is the visibility table and +0xC
+is Mario's copied-fireball Article. Treating +4 as the second FighterData pointer therefore failed closed
+on the perfectly valid scalar value 1.
+
+v4.19 adds an explicit source-typed converter for the complete retail `PlKbCp*.dat` family. Normal hat
+roots nativeize their JObj/FtPartsDesc and only the Article slots proven by `ftKb_SpecialN_800F16D0`.
+Donkey, Falco, GameWatch, Mewtwo and Purin use the alternate `LOAD_HAT` overlay: FtPartsDesc followed by
+the costume TObj count/table, parts mask and optional extra HSD joint. Unknown character-specific slots
+remain untouched rather than being guessed. Item Articles reuse the existing typed Item/HSD state
+conversion path.
+
+The linked-ARM regression covers all 25 retail Kirby-copy archives, converts 28 source-proven Articles and
+successfully loads/removes 48 resulting HSD roots. Shared regressions remain green: ItCo 106/106 roots,
+fighter x48 75/75, fighter costumes 125/125, plus the complete gameplay-DAT static audit. The v4.18
+`VITA_FOBJ_NONFINITE` guard remains enabled so the next hardware run can continue the Mario Landing NaN
+investigation once match startup passes Kirby copy-data preparation.
+
+Runtime marker: `MELEE_VITA_GAME_BOOT v4.19-kirby-copy`; APP_VER 01.29. Hardware artifact:
+`build/SmashMeleeVita-v4.19-kirby-copy.vpk`, SHA-256
+`778dfdfad8a359afa4ce9d74cb6d203f4e617517dc965cd01fc73b0f78416718`.
+
+## 2026-09-15 — v4.18: guard non-finite fighter FObj output
+
+v4.18 instruments `FObjUpdateAnim()` at the point immediately before an animation value is written into
+an HSD object. Non-finite IEEE-754 output is logged with interpolation mode, track state and raw float bits
+and is not allowed to poison the JObj hierarchy; Mario also logs a one-shot part-to-JObj pointer map. The
+physical v4.18 run exposed the independent Kirby-copy startup bug above before any FObj probe fired, so
+these diagnostics intentionally remain active in v4.19.
 
 ## 2026-09-15 — v4.17: restore GX clockwise gameplay winding on vitaGL
 

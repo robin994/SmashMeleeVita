@@ -1799,6 +1799,217 @@ static void itco_convert(MvDat* dat, uint32_t root, const char* filename)
              (unsigned) dynamics_count, (unsigned) source_count);
 }
 
+typedef enum KirbyCopyRootLayout {
+    KIRBY_COPY_HAT = 0,
+    KIRBY_COPY_COSTUME = 1,
+} KirbyCopyRootLayout;
+
+typedef struct KirbyCopySchema {
+    const char* root_name;
+    KirbyCopyRootLayout layout;
+    uint32_t article_mask;
+} KirbyCopySchema;
+
+static const KirbyCopySchema* kirby_copy_schema(const char* root_name)
+{
+    /* These roots are not FighterData despite their ftData prefix.  They are
+     * the compact structures loaded into ft_80459B88 by Kirby's copy loader.
+     * article_mask is source-derived from ftKb_SpecialN_800F16D0(): bit N
+     * marks root+0x0C+N*4 as an Article pointer.  Do not infer any of the
+     * remaining hat_dynamics slots: several are character-specific data. */
+    static const KirbyCopySchema schema[] = {
+        { "ftDataKirbyCopyMario",     KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyFox",       KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyCaptain",   KIRBY_COPY_HAT,        0x00u },
+        { "ftDataKirbyCopyDonkey",    KIRBY_COPY_COSTUME, 0x00u },
+        { "ftDataKirbyCopyKoopa",     KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyLink",      KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopySeak",      KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyNess",      KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyPeach",     KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyPopo",      KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyPikachu",   KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopySamus",     KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyYoshi",     KIRBY_COPY_HAT,        0x20u },
+        { "ftDataKirbyCopyPurin",     KIRBY_COPY_COSTUME, 0x00u },
+        { "ftDataKirbyCopyMewtwo",    KIRBY_COPY_COSTUME, 0x08u },
+        { "ftDataKirbyCopyLuigi",     KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyMars",      KIRBY_COPY_HAT,        0x00u },
+        { "ftDataKirbyCopyZelda",     KIRBY_COPY_HAT,        0x00u },
+        { "ftDataKirbyCopyClink",     KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyDrmario",   KIRBY_COPY_HAT,        0x01u },
+        { "ftDataKirbyCopyFalco",     KIRBY_COPY_COSTUME, 0x18u },
+        { "ftDataKirbyCopyPichu",     KIRBY_COPY_HAT,        0x03u },
+        { "ftDataKirbyCopyGamewatch", KIRBY_COPY_COSTUME, 0x60u },
+        { "ftDataKirbyCopyGanon",     KIRBY_COPY_HAT,        0x00u },
+        { "ftDataKirbyCopyEmblem",    KIRBY_COPY_HAT,        0x00u },
+    };
+    for (size_t i = 0; i < sizeof(schema) / sizeof(schema[0]); ++i) {
+        if (strcmp(root_name, schema[i].root_name) == 0) return &schema[i];
+    }
+    return NULL;
+}
+
+static void kirby_copy_convert(MvDat* dat, const char* root_name,
+                               uint32_t root, const char* filename)
+{
+    const KirbyCopySchema* schema = kirby_copy_schema(root_name);
+    if (schema == NULL) {
+        gp_fail(root_name, "unknown Kirby copy root schema", root);
+    }
+
+    uint32_t joint_roots[128] = { 0 };
+    uint32_t anim_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t matanim_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t shape_roots[MV_ITEM_STATE_ROOT_CAP] = { 0 };
+    uint32_t seen_articles[128] = { 0 };
+    uint32_t seen_attrs[128] = { 0 };
+    uint32_t seen_hurts[64] = { 0 };
+    uint32_t seen_models[128] = { 0 };
+    uint32_t seen_dynamics[16] = { 0 };
+    uint32_t seen_sources[32] = { 0 };
+    uint32_t state_tables[256] = { 0 };
+    MvItemStateRawResult item_states = { 0 };
+    size_t joint_root_count = 0, anim_root_count = 0;
+    size_t matanim_root_count = 0, shape_root_count = 0;
+    size_t article_count = 0, attr_count = 0, hurt_count = 0;
+    size_t model_count = 0, dynamics_count = 0, source_count = 0;
+    size_t state_table_count = 0;
+
+    if (schema->layout == KIRBY_COPY_HAT) {
+        uint32_t joint = 0, vis = 0;
+        uint32_t model_num = mv_be32(gp_span(dat, root + 4, 4, root_name,
+                                              "Kirby hat model_num"));
+        if (gp_pointer(dat, root + 0, &joint, root_name,
+                       "Kirby hat joint") != 1 ||
+            gp_pointer(dat, root + 8, &vis, root_name,
+                       "Kirby hat visibility") != 1 ||
+            model_num == 0 || model_num > 11)
+        {
+            gp_fail(root_name, "Kirby hat descriptor", root);
+        }
+        fighter_convert_visibility(dat, model_num, vis, root_name, filename);
+        gp_swap32(dat, root + 4, root_name, "Kirby hat model_num");
+        (void) gp_mark_unique(joint_roots, &joint_root_count, 128, joint,
+                              root_name, "Kirby copy joint set overflow");
+    } else {
+        /* Donkey/Falco/GameWatch/Mewtwo/Purin use the layout consumed by
+         * LOAD_HAT: FtPartsDesc at +0, then the ftData_x8_x8 costume-texture
+         * count/table at +8, a parts mask at +0x10, and an optional extra
+         * HSD joint at +0x14. */
+        uint32_t vis = 0, tobj_table = 0, extra_joint = 0;
+        uint32_t model_num = mv_be32(gp_span(dat, root, 4, root_name,
+                                              "Kirby copy model_num"));
+        uint32_t tobj_count = mv_be32(gp_span(dat, root + 8, 4, root_name,
+                                               "Kirby copy tobj count"));
+        if (model_num == 0 || model_num > 11 || tobj_count > 5 ||
+            gp_pointer(dat, root + 4, &vis, root_name,
+                       "Kirby copy visibility") != 1 ||
+            gp_pointer(dat, root + 0x0C, &tobj_table, root_name,
+                       "Kirby copy tobj table") != 1)
+        {
+            gp_fail(root_name, "Kirby costume descriptor", root);
+        }
+        fighter_convert_visibility(dat, model_num, vis, root_name, filename);
+
+        size_t table_span = gp_target_span(dat, tobj_table);
+        if (table_span == 0 || table_span > 6 * sizeof(uint32_t) ||
+            (table_span & 3) != 0)
+        {
+            gp_fail(root_name, "Kirby costume tobj pointer table", tobj_table);
+        }
+        uint32_t seen_tobj_indices[6] = { 0 };
+        size_t seen_tobj_count = 0;
+        for (size_t i = 0; i < table_span / 4; ++i) {
+            uint32_t indices = 0;
+            int ir = gp_pointer(dat, tobj_table + (uint32_t) i * 4, &indices,
+                                root_name, "Kirby costume tobj indices");
+            if (ir != 1 ||
+                !gp_mark_unique(seen_tobj_indices, &seen_tobj_count, 6,
+                                indices, root_name,
+                                "Kirby costume tobj index overflow"))
+                continue;
+            (void) gp_span(dat, indices, (size_t) tobj_count * 2, root_name,
+                           "Kirby costume tobj index array");
+            for (uint32_t j = 0; j < tobj_count; ++j)
+                gp_swap16(dat, indices + j * 2, root_name,
+                          "Kirby costume tobj index");
+        }
+
+        /* LOAD_HAT/ftKb_SpecialN_800EF040 consumes +0x10 as a bit mask. */
+        gp_swap32(dat, root + 0x10, root_name, "Kirby copy parts mask");
+        int jr = gp_pointer(dat, root + 0x14, &extra_joint, root_name,
+                            "Kirby copy extra joint");
+        if (jr == 1)
+            (void) gp_mark_unique(joint_roots, &joint_root_count, 128,
+                                  extra_joint, root_name,
+                                  "Kirby copy joint set overflow");
+
+        gp_swap32(dat, root, root_name, "Kirby copy model_num");
+        gp_swap32(dat, root + 8, root_name, "Kirby copy tobj count");
+    }
+
+    for (uint32_t i = 0; i < 32; ++i) {
+        if ((schema->article_mask & (1u << i)) == 0) continue;
+        uint32_t article = 0;
+        uint32_t field = root + 0x0Cu + i * 4u;
+        if (gp_pointer(dat, field, &article, root_name,
+                       "Kirby copy Article") != 1)
+        {
+            gp_fail(root_name, "Kirby copy Article missing", field);
+        }
+        if (gp_mark_unique(seen_articles, &article_count, 128, article,
+                           root_name, "Kirby copy Article set overflow"))
+        {
+            itco_convert_article(dat, article, seen_attrs, &attr_count,
+                                 seen_hurts, &hurt_count, seen_models,
+                                 &model_count, seen_dynamics, &dynamics_count,
+                                 seen_sources, &source_count, joint_roots,
+                                 &joint_root_count, state_tables,
+                                 &state_table_count);
+        }
+    }
+
+    if (state_table_count != 0) {
+        mv_item_state_tables_prepare_raw((void*) (uintptr_t) dat->file,
+                                         dat->file_size, state_tables,
+                                         state_table_count, &item_states,
+                                         root_name);
+        for (size_t i = 0; i < item_states.anim_count; ++i)
+            (void) gp_mark_unique(anim_roots, &anim_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP,
+                                  item_states.anim_roots[i], root_name,
+                                  "Kirby copy anim root overflow");
+        for (size_t i = 0; i < item_states.matanim_count; ++i)
+            (void) gp_mark_unique(matanim_roots, &matanim_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP,
+                                  item_states.matanim_roots[i], root_name,
+                                  "Kirby copy matanim root overflow");
+        for (size_t i = 0; i < item_states.shape_count; ++i)
+            (void) gp_mark_unique(shape_roots, &shape_root_count,
+                                  MV_ITEM_STATE_ROOT_CAP,
+                                  item_states.shape_roots[i], root_name,
+                                  "Kirby copy shape root overflow");
+    }
+
+    if (joint_root_count != 0 || anim_root_count != 0 ||
+        matanim_root_count != 0 || shape_root_count != 0)
+    {
+        mv_hsd_graph_set_prepare_raw(
+            (void*) (uintptr_t) dat->file, dat->file_size,
+            joint_roots, joint_root_count, anim_roots, anim_root_count,
+            matanim_roots, matanim_root_count, shape_roots, shape_root_count,
+            filename, "KirbyCopy");
+    }
+
+    OSReport("VITA_KIRBY_COPY_NATIVE_PASS file=%s root=%s layout=%u articles=%u attrs=%u models=%u joint_roots=%u state_tables=%u item_cmds=%u\n",
+             filename != NULL ? filename : "?", root_name,
+             (unsigned) schema->layout, (unsigned) article_count,
+             (unsigned) attr_count, (unsigned) model_count,
+             (unsigned) joint_root_count, (unsigned) state_table_count,
+             item_states.command_count);
+}
+
 void mv_fighter_figatree_prepare_raw(void* bytes, size_t size,
                                      const char* symbol)
 {
@@ -1904,7 +2115,10 @@ void mv_gameplay_archive_prepare_raw(void* bytes, size_t size,
         return;
     }
     if (r > 0) {
-        fighter_convert(&dat, name, root, filename);
+        if (strncmp(name, "ftDataKirbyCopy", strlen("ftDataKirbyCopy")) == 0)
+            kirby_copy_convert(&dat, name, root, filename);
+        else
+            fighter_convert(&dat, name, root, filename);
         mv_dat_close(&dat);
         return;
     }
