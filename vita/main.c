@@ -29,7 +29,7 @@ int main(void)
 {
     sceIoMkdir("ux0:data/SmashMeleeVita", 0777);
     FILE* log = fopen("ux0:data/SmashMeleeVita/runtime.log", "w");
-    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.20-onett-konst\n"); fflush(log); }
+    if (log) { fprintf(log, "MELEE_VITA_GAME_BOOT v4.22-venom-callback\n"); fflush(log); }
 #ifdef MELEE_VITA_GXM_DEBUG
     if (log) { fprintf(log, "VITAGL_DIAGNOSTICS log_errors=1 profiling=1 debugger=1 razor=0 cpu_tracer=0\n"); fflush(log); }
 #endif

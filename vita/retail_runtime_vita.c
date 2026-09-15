@@ -14,6 +14,7 @@ typedef struct {
     MvGxReplay replay;
     FILE *log;
     uint32_t heap_generation;
+    uint32_t clip_probe_generation;
     unsigned frame;
     int active;
     int capture_started;
@@ -191,7 +192,11 @@ void mv_retail_runtime_present_frame(int pass)
     memset(&stats, 0, sizeof(stats));
     int capture_result = mv_gx_capture_stats(&stats);
 
-    if (retail.frame == 0u) mv_retail_log_clip_probe();
+    if (retail.frame == 0u ||
+        retail.clip_probe_generation != retail.heap_generation) {
+        mv_retail_log_clip_probe();
+        retail.clip_probe_generation = retail.heap_generation;
+    }
     mv_retail_log_tail_commands(retail.frame + 1u);
 
 #ifdef MELEE_VITA_GXM_DEBUG

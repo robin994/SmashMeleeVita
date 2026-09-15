@@ -560,9 +560,17 @@ Ground_GObj* grVenom_80203EAC(int gobj_id)
 {
     Ground_GObj* gobj;
     Ground* gp;
+#ifdef MELEE_VITA_PLATFORM
+    /* The original DOL places grVe_StageCallbacks at a fixed offset from
+     * grVe_803E5348. The Vita linker is free to reorder globals, so deriving
+     * the callback table from that layout can turn data words into function
+     * pointers (observed as a BLX to 0x20 for map 4). */
+    StageCallbacks* callbacks = &grVe_StageCallbacks[gobj_id];
+#else
     grVe_Data* base = &grVe_803E5348;
     StageCallbacks* callbacks =
         &((StageCallbacks*) ((char*) base + 0x44))[gobj_id];
+#endif
 
     gobj = Ground_GetStageGObj(gobj_id);
 

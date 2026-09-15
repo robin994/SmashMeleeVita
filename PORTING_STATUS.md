@@ -1,3 +1,23 @@
+# Porting status - 2026-09-15, v4.22 Venom callback-table layout fix
+
+## 2026-09-15 — v4.22: stop deriving Venom callbacks from GameCube global layout
+
+A hardware v4.21 core dump on Venom (`stkind=99`) reported a prefetch abort at `PC=0x20`.
+The saved LR resolves to `grVenom_80203EAC`, at the indirect `blx` of the stage `on_init`
+callback. For map 4 the computed callback pointer was exactly `0x00000020`. The decomp used
+`&grVe_803E5348 + 0x44` to recover `grVe_StageCallbacks`, relying on the original DOL's fixed
+global ordering. In the Vita ELF the symbols are independently linked (`grVe_StageCallbacks`
+precedes `grVe_803E5348`), so that arithmetic reads unrelated data as function pointers.
+
+On Vita, `grVenom_80203EAC` now indexes `grVe_StageCallbacks` directly. The original offset-based
+expression remains under the non-Vita path for matching builds. A new regression validates the
+linked ARM table, including map 4 and all non-null callback targets. The v4.21 heap-generation
+clip probe is retained so the first gameplay frame is still diagnosed after stage transitions.
+
+Release marker: `MELEE_VITA_GAME_BOOT v4.22-venom-callback`; APP_VER is 01.32.
+Hardware artifact: `build/SmashMeleeVita-v4.22-venom-callback.vpk`, SHA-256
+`5cc432198b9bf0a8c9c1e3ef346e9b39a653b6c8aa59aaea95c29d60f69ad3f0`.
+
 # Porting status - 2026-09-15, v4.20 Onett generated KONST TEV
 
 ## 2026-09-15 — v4.20: preserve generated RASC/TEX KONST interpolation on Onett
