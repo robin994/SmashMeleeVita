@@ -925,6 +925,24 @@ void ftAnim_8006FE48(Fighter_GObj* fighter_gobj)
 void ftAnim_8006FE9C(Fighter* fp, Fighter_Part start, float t, float t_inv)
 {
     int i;
+#ifdef MELEE_VITA_PLATFORM
+    static bool mario_part_map_logged;
+    if (!mario_part_map_logged && fp->kind == Ft_Kind_Mario) {
+        mario_part_map_logged = true;
+        for (i = 0; i < ftPartsTable[fp->kind]->parts_num; ++i) {
+            OSReport("VITA_FIGHTER_PART_MAP kind=%d part=%d flags=%u%u%u%u%u%u live=%p blend=%p\n",
+                     (int) fp->kind, i,
+                     (unsigned) fp->parts[i].flags_b0,
+                     (unsigned) fp->parts[i].flags_b1,
+                     (unsigned) fp->parts[i].flags_b2,
+                     (unsigned) fp->parts[i].flags_b3,
+                     (unsigned) fp->parts[i].flags_b4,
+                     (unsigned) fp->parts[i].flags_b5,
+                     (void*) fp->parts[i].joint,
+                     (void*) fp->parts[i].x4_jobj2);
+        }
+    }
+#endif
     for (i = start; i < ftPartsTable[fp->kind]->parts_num; i++) {
         if (fp->parts[i].flags_b1 && !fp->parts[i].flags_b0 &&
             !fp->parts[i].flags_b5)

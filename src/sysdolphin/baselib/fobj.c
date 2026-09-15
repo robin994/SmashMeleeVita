@@ -5,6 +5,22 @@
 #include "debug.h"
 #include "spline.h"
 
+#ifdef MELEE_VITA_PLATFORM
+#include <dolphin/os.h>
+
+static u32 vita_fobj_float_bits(f32 value)
+{
+    u32 bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static bool vita_fobj_nonfinite(f32 value)
+{
+    return (vita_fobj_float_bits(value) & 0x7F800000u) == 0x7F800000u;
+}
+#endif
+
 HSD_ObjAllocData fobj_alloc_data;
 
 HSD_ObjAllocData* HSD_FObjGetAllocData(void)
@@ -382,8 +398,60 @@ void FObjUpdateAnim(HSD_FObj* fobj, void* obj, HSD_ObjUpdateFunc obj_update)
         }
         break;
     default:
+#ifdef MELEE_VITA_PLATFORM
+        {
+            static unsigned invalid_interp_logs;
+            if (invalid_interp_logs < 24) {
+                ++invalid_interp_logs;
+                OSReport("VITA_FOBJ_INVALID_INTERP fobj=%p obj=%p obj_type=%u state=%u op=%u interp=%u flags=%02x time=%08x fterm=%u ad=%u/%u start=%d frac=%02x/%02x\n",
+                         (void*) fobj, obj, (unsigned) fobj->obj_type,
+                         (unsigned) HSD_FObjGetState(fobj),
+                         (unsigned) fobj->op, (unsigned) fobj->op_intrp,
+                         (unsigned) fobj->flags,
+                         (unsigned) vita_fobj_float_bits(fobj->time),
+                         (unsigned) fobj->fterm,
+                         (unsigned) (fobj->ad - fobj->ad_head),
+                         (unsigned) fobj->length, (int) fobj->startframe,
+                         (unsigned) fobj->frac_value,
+                         (unsigned) fobj->frac_slope);
+            }
+        }
+        /* No interpolation mode means there is no value to publish.  Calling
+         * obj_update with an uninitialized HSD_ObjData is undefined and on
+         * ARM can turn stale stack bits into a JObj rotation. */
+        return;
+#else
         break;
+#endif
     }
+#ifdef MELEE_VITA_PLATFORM
+    if (vita_fobj_nonfinite(fobjdata.fv)) {
+        static unsigned nonfinite_logs;
+        if (nonfinite_logs < 48) {
+            ++nonfinite_logs;
+            OSReport("VITA_FOBJ_NONFINITE fobj=%p obj=%p obj_type=%u state=%u op=%u interp=%u flags=%02x value=%08x time=%08x fterm=%u p0=%08x p1=%08x d0=%08x d1=%08x ad=%u/%u start=%d frac=%02x/%02x\n",
+                     (void*) fobj, obj, (unsigned) fobj->obj_type,
+                     (unsigned) HSD_FObjGetState(fobj),
+                     (unsigned) fobj->op, (unsigned) fobj->op_intrp,
+                     (unsigned) fobj->flags,
+                     (unsigned) vita_fobj_float_bits(fobjdata.fv),
+                     (unsigned) vita_fobj_float_bits(fobj->time),
+                     (unsigned) fobj->fterm,
+                     (unsigned) vita_fobj_float_bits(fobj->p0),
+                     (unsigned) vita_fobj_float_bits(fobj->p1),
+                     (unsigned) vita_fobj_float_bits(fobj->d0),
+                     (unsigned) vita_fobj_float_bits(fobj->d1),
+                     (unsigned) (fobj->ad - fobj->ad_head),
+                     (unsigned) fobj->length, (int) fobj->startframe,
+                     (unsigned) fobj->frac_value,
+                     (unsigned) fobj->frac_slope);
+        }
+        /* Preserve the previous finite SRT component instead of poisoning the
+         * JObj and every child matrix.  The log above retains the full track
+         * state needed to fix the producer rather than hiding the fault. */
+        return;
+    }
+#endif
     obj_update(obj, fobj->obj_type, &fobjdata);
 }
 
