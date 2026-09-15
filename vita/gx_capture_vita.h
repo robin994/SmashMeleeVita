@@ -264,8 +264,11 @@ int mv_gx_material_uses_raster1(const MvGxMaterialState *material);
 /* Exact one-texture HSD graph used heavily by Yoshi's Island. Return 1 for
  * RGB=RASC*TEX0, A=RASA*TEXA; 2 for the same RGB with A=RASA. */
 int mv_gx_material_single_tev_rasc_tex(const MvGxMaterialState *material);
+/* KONST interpolation mode: 1 preserves RASA, 2 interpolates RASA/TEXA
+ * with KAlpha just like RGB interpolates RASC/TEXC with KColor. */
 int mv_gx_material_single_tev_rasc_tex_konst(const MvGxMaterialState *material);
 uint32_t mv_gx_material_kcolor_rgba(const MvGxMaterialState *material, unsigned stage);
+uint8_t mv_gx_material_kalpha_u8(const MvGxMaterialState *material, unsigned stage);
 /* Resolve a texture/post-texture matrix previously loaded through
  * GXLoadTexMtxImm into the 2D affine form used by the replay. */
 int mv_gx_capture_get_tex_mtx(uint32_t id, float out[2][3]);

@@ -394,16 +394,18 @@ static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two,
         }
         return;
     }
-    if (mv_gx_material_single_tev_rasc_tex_konst(m)) {
-        /* GX TEV: D + A*(1-C) + B*C with
-         * A=RASC, B=TEXC, C=KONST, D=ZERO. OpenGL INTERPOLATE is
-         * Arg0*Arg2 + Arg1*(1-Arg2), so route TEXC/RASC/KONST directly. */
+    int konst_mode = mv_gx_material_single_tev_rasc_tex_konst(m);
+    if (konst_mode) {
+        /* GX TEV: D + A*(1-C) + B*C with A=RASC, B=TEXC,
+         * C=KColor and D=ZERO. Mode 2 uses the same interpolation for alpha
+         * with RASA/TEXA/KAlpha. GL exposes one constant RGBA register, so
+         * preserve the independent GX color/alpha selectors in RGB/A. */
         uint32_t packed = mv_gx_material_kcolor_rgba(m, 0);
         GLfloat k[4] = {
             ((packed >> 24) & 0xffu) / 255.0f,
             ((packed >> 16) & 0xffu) / 255.0f,
             ((packed >> 8) & 0xffu) / 255.0f,
-            (packed & 0xffu) / 255.0f,
+            mv_gx_material_kalpha_u8(m, 0) / 255.0f,
         };
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
         glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
@@ -412,8 +414,16 @@ static void setup_texture0_env(const MvGxMaterialState *m, int hsd_two,
         glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_RGB, GL_CONSTANT);
         glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_COLOR);
         glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, k);
-        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
-        glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+        if (konst_mode == 2) {
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_INTERPOLATE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_TEXTURE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC1_ALPHA, GL_PRIMARY_COLOR);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC2_ALPHA, GL_CONSTANT);
+            glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_ALPHA, GL_SRC_ALPHA);
+        } else {
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SRC0_ALPHA, GL_PRIMARY_COLOR);
+        }
         return;
     }
     if (!hsd_two && !hsd_alpha_blend) {

@@ -30,4 +30,12 @@ assert arm.call("mv_gx_material_kcolor_rgba", state, 0) == 0x808080FF
 
 arm.call("GXSetTevKColorSel", 0, 4)  # fixed 1/2
 assert arm.call("mv_gx_material_kcolor_rgba", state, 0) == 0x7F7F7FFF
-print("PASS TEV KONST ARM: generated RASC/TEXC interpolation captures K selector and register")
+
+# Onett uses the same RGB interpolation with alpha = RASA*(1-KA)+TEXA*KA.
+# K1_A=0x80 proves KAlpha is captured independently from the RGB selector.
+arm.call("GXSetTevAlphaIn", 0, 5, 4, 6, 7)
+arm.call("GXSetTevKColor", 1, 0x80C08040)
+arm.call("GXSetTevKAlphaSel", 0, 0x1D)  # K1_A
+assert arm.call("mv_gx_material_single_tev_rasc_tex_konst", state) == 2
+assert arm.call("mv_gx_material_kalpha_u8", state, 0) == 0x80
+print("PASS TEV KONST ARM: RGB and alpha RASC/TEX interpolation preserve independent K selectors")

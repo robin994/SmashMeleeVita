@@ -1,4 +1,26 @@
-# Porting status - 2026-09-15, v4.19 Kirby copy archive nativeization
+# Porting status - 2026-09-15, v4.20 Onett generated KONST TEV
+
+## 2026-09-15 — v4.20: preserve generated RASC/TEX KONST interpolation on Onett
+
+The physical v4.19 run reaches Onett gameplay with stable stage geometry and zero texture-upload failures,
+but most large surfaces are tinted flat green/red. Runtime telemetry shows 1191/1234 draws submitted,
+all 1191 submitted draws textured, and `texture_prepare_failures=0`. The first stage materials use the
+generated one-stage TEV graph `RASC*(1-K)+TEXC*K`; their K selector resolves to white, so retail RGB
+collapses to the unmodified texture sample. Alpha uses the matching `RASA*(1-KA)+TEXA*KA` graph.
+
+v4.19 only recognized the older direct-RASA alpha variant. The Onett form therefore fell through to the
+legacy texture baker, where `material_rgba` (for the first observed materials `0x20574798`) could be
+folded into otherwise correct texture pixels, matching the hardware's green cast. v4.20 extends the exact
+KONST matcher with an explicit alpha-interpolation mode, captures KAlpha independently from KColor and
+uses fixed-function `GL_INTERPOLATE` for both RGB and alpha. No generic TEV fallback is widened.
+
+The ARM KONST regression now checks independent KColor/KAlpha selectors and the Onett alpha form.
+Yoshi's Island single-texture TEV, Hyrule Temple winding, Corneria diffuse/specular, GX channel1 and
+Icicle Mountain multitexture regressions remain green. Runtime marker is
+`MELEE_VITA_GAME_BOOT v4.20-onett-konst`; APP_VER is 01.30. Hardware artifact:
+`build/SmashMeleeVita-v4.20-onett-konst.vpk`, SHA-256
+`fa74c8e6f09378a7903f8359346e714ec80d8bf27d34ee42f8aaac26d7950df1`.
+
 
 ## 2026-09-15 — v4.19: nativeize compact Kirby copy archives before match startup
 
