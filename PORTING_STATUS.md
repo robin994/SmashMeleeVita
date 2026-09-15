@@ -1,4 +1,50 @@
-# Porting status - 2026-09-14, v4.15 Yoshi Island texture/alpha replay
+# Porting status - 2026-09-15, v4.17 Hyrule Temple GX winding
+
+## 2026-09-15 — v4.17: restore GX clockwise gameplay winding on vitaGL
+
+The physical v4.16 run reaches recognizable Hyrule Temple geometry and textures, but the scene is still
+visibly open/fragmented and the skybox is black. The runtime proves this is no longer an asset-upload or
+TEV-selection failure: the full gameplay frame submits 914/946 commands with zero texture preparation
+failures and zero GL errors, while the first material sequence matches the real `GrSh.dat` sky/background
+map command-for-command.
+
+An ARM replay of retail `GrSh.dat` isolates map 1 as the Temple sky shell. It produces exactly 26 draw
+commands, all with `GX_CULL_BACK`. After applying each captured model matrix, all 224 non-degenerate
+triangles point outward from the shell and none point inward. This is correct for GX because its
+front-facing screen-space winding is clockwise. The streaming vitaGL replay had changed those draws to
+`glFrontFace(GL_CCW)` under the assumption that GX's Y-down viewport required a winding conversion.
+That assumption was wrong for vitaGL: its display-backed `glViewport()` already programs a negative Y
+scale internally. The replay therefore flipped the winding twice, making the outside of the shell the GL
+front face and causing back-face culling to discard the surfaces when viewed from inside; the same error
+can make ordinary stage walls look open from the gameplay camera.
+
+v4.17 keeps `GL_CW` for captured gameplay, matching the already-stable non-streaming/UI path. The new
+`stage-shrine-sky-check` loads the real Temple sky through the ARM HSD runtime, verifies 26 commands,
+`GX_CULL_BACK` on every command, finite transformed vertices, and the exact 224 outward / 0 inward
+triangle result. `gx-projection-check` now explicitly rejects a second CCW conversion in the captured
+path. Runtime marker is `MELEE_VITA_GAME_BOOT v4.17-shrine-winding`; APP_VER is 01.27.
+
+Hardware artifact: `build/SmashMeleeVita-v4.17-shrine-winding.vpk`, SHA-256
+`51fed995cd91106e2b27476a033adb1f170d0328a61d877bb7d66b44082cf76e`.
+
+## 2026-09-15 — v4.16: nativeize stage-specific Item Articles before HSD load
+
+The post-loading Great Bay crash was not a vitaGL failure. Great Bay's stage `itemdata` table supplies the
+Tingle Article, but the stage archive path only nativeized the item kind and left Article metadata and its
+HSD model graph in GameCube byte order. On ARM the retail PObj bytes `a0 01` (`POBJ_ENVELOPE`, flags
+`0xA001`) were read as `0x01A0` (`POBJ_SKIN`), and `n_display=25` was read as 6400. The SKIN path then
+interpreted an envelope table as an `HSD_Joint*`, eventually producing the misleading load-only
+`JOBJ_PTCL` panic seen in the hardware core dump.
+
+v4.16 reuses the typed Article/native metadata path for stage-specific items and feeds the returned HSD
+model/animation roots into the stage archive's existing shared raw-HSD walker, preventing double swaps
+when stage and item graphs alias. Tingle's stage-specific scalar block is converted with an explicit schema
+while its relocation-managed helper pointer remains untouched. The hardware-equivalent ARM regression
+now reads kind 221, 39 bones, PObj flags `0xA001`, `n_display=25`, Tingle bounds `600/2400/-60/60`, and
+loads the complete JObj without panic. Great Bay's map roots pass, ItCo loads 106/106 HSD roots, fighter
+x48 loads 75/75 roots, and the complete retail stage raw audit passes 76/76 archives with zero failures.
+
+Runtime marker was `MELEE_VITA_GAME_BOOT v4.16-stage-item`.
 
 ## 2026-09-14 — v4.15: restore Yoshi's Island alpha-tested textured layers and exact single-texture TEV
 

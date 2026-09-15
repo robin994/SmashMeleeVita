@@ -11,10 +11,12 @@ legacy = src.split("void mv_gx_replay_draw(MvGxReplay *r,const MvCamera *cam)", 
 captured = src.split("void mv_gx_replay_draw_captured(MvGxReplay *r)", 1)[1]
 if "glFrontFace(GL_CW)" not in legacy:
     raise SystemExit("FAIL GX culling: legacy UI replay must retain its known-good GL_CW baseline")
-if "glFrontFace(GL_CCW)" not in captured:
-    raise SystemExit("FAIL GX culling: captured gameplay GX CW/Y-down must become GL CCW/Y-up")
+if "glFrontFace(GL_CW)" not in captured:
+    raise SystemExit("FAIL GX culling: captured gameplay must preserve GX clockwise front faces")
+if "glFrontFace(GL_CCW)" in captured:
+    raise SystemExit("FAIL GX culling: gameplay must not double-flip vitaGL's negative-Y viewport")
 for gx, expected in [(-1.0, -1.0), (-0.5, 0.0), (0.0, 1.0)]:
     got = 2.0 * gx + 1.0
     if abs(got - expected) > 1e-7:
         raise SystemExit(f"FAIL GX projection math: {gx} -> {got}, expected {expected}")
-print("PASS GX/vitaGL projection: UI winding isolated; captured gameplay GX CW/Y-down maps to GL CCW/Y-up")
+print("PASS GX/vitaGL projection: GX clockwise winding preserved across vitaGL's negative-Y display viewport")

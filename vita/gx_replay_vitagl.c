@@ -799,9 +799,12 @@ void mv_gx_replay_draw_captured(MvGxReplay *r)
         glColorMask(m->pe_color_update, m->pe_color_update,
                     m->pe_color_update, m->pe_alpha_update);
         apply_alpha_compare(m);
-        /* See the non-streaming path above: GX CW in Y-down window space is
-         * OpenGL CCW after the viewport convention change. */
-        glFrontFace(GL_CCW);
+        /* GX and vitaGL both rasterize display-backed viewports with a
+         * negative Y scale. GX defines clockwise screen-space triangles as
+         * front-facing; vitaGL already performs the Y flip internally in
+         * glViewport(), so converting CW to CCW here flips culling a second
+         * time. Preserve the retail GX winding for gameplay as well. */
+        glFrontFace(GL_CW);
         if (c->cull_mode) {
             glEnable(GL_CULL_FACE);
             glCullFace(c->cull_mode == 1 ? GL_FRONT : GL_BACK);
