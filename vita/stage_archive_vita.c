@@ -22,6 +22,7 @@
 #include "hsd_anim_native.h"
 #include "hsd_matanim_native.h"
 #include "hsd_native.h"
+#include "stage_item_native.h"
 
 typedef struct StageJointMapEntry {
     void* joint;
@@ -2935,6 +2936,45 @@ void mv_stage_archive_prepare_raw(void* bytes, size_t size, const char* filename
         if (roots[i] != UINT32_MAX) {
             stage_hsd_raw_joint(&ctx, roots[i]);
         }
+    }
+
+    /* Stage-specific Articles (Tingle on Great Bay is the retail crash case)
+     * live under the independent itemdata public root, not below map_head.
+     * Convert their Item metadata first, then feed every HSD model/animation
+     * root through this same ctx so shared stage/item graphs are visited once. */
+    uint32_t itemdata_offset = 0;
+    int stage_item_result =
+        stage_hsd_find_public(&dat, "itemdata", &itemdata_offset);
+    MvStageItemRawResult stage_items = { 0 };
+    if (stage_item_result > 0) {
+        if (mv_stage_itemdata_prepare_raw(bytes, size, itemdata_offset, filename,
+                                          &stage_items) != 0)
+        {
+            free(ctx.seen);
+            free(roots);
+            mv_dat_close(&dat);
+            HSD_Panic(__FILE__, __LINE__, "stage item raw nativeization failed");
+        }
+        for (size_t i = 0; i < stage_items.joint_count; ++i) {
+            stage_hsd_raw_joint(&ctx, stage_items.joint_roots[i]);
+        }
+        for (size_t i = 0; i < stage_items.states.anim_count; ++i) {
+            stage_hsd_raw_anim_joint(&ctx, stage_items.states.anim_roots[i]);
+        }
+        for (size_t i = 0; i < stage_items.states.matanim_count; ++i) {
+            stage_hsd_raw_matanim_joint(&ctx, stage_items.states.matanim_roots[i]);
+        }
+        for (size_t i = 0; i < stage_items.states.shape_count; ++i) {
+            stage_hsd_raw_shape_joint(&ctx, stage_items.states.shape_roots[i]);
+        }
+        OSReport("VITA_STAGE_ITEM_HSD_RAW_NATIVE_PASS file=%s items=%u articles=%u models=%u joints=%u anim=%u matanim=%u shape=%u specials=%u\n",
+                 filename != NULL ? filename : "?", stage_items.item_count,
+                 stage_items.article_count, stage_items.model_count,
+                 (unsigned) stage_items.joint_count,
+                 (unsigned) stage_items.states.anim_count,
+                 (unsigned) stage_items.states.matanim_count,
+                 (unsigned) stage_items.states.shape_count,
+                 stage_items.special_count);
     }
 
     /* quake_model_set is an independent DynamicModelDesc public. It is not a

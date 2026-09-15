@@ -63,6 +63,35 @@ maps = struct.unpack("<I", arm.uc.mem_read(map_head + 8, 4))[0]
 count = struct.unpack("<I", arm.uc.mem_read(map_head + 12, 4))[0]
 assert count == 10
 
+# v4.16 regression: Great Bay's Tingle model is not a map_head root. It lives
+# under itemdata -> Article -> ItemModelDesc and used to remain in PPC endian,
+# turning an ENVELOPE PObj (0xA001/25) into a false SKIN (0x01A0/6400). The
+# resulting lazy shared-skin load hit jobj.c's particle-tree panic on hardware.
+item_sym = arm.alloc(len("itemdata") + 1)
+arm.uc.mem_write(item_sym, b"itemdata\0")
+itemdata = arm.call("HSD_ArchiveGetPublicAddress", archive, item_sym)
+assert itemdata
+item_entry = struct.unpack("<I", arm.uc.mem_read(itemdata, 4))[0]
+kind, article = struct.unpack("<II", arm.uc.mem_read(item_entry, 8))
+assert kind == 221, kind
+model = struct.unpack("<I", arm.uc.mem_read(article + 0x10, 4))[0]
+joint, bone_count, attach_id = struct.unpack("<III", arm.uc.mem_read(model, 12))
+assert joint and bone_count == 39 and attach_id == 0, (
+    hex(joint), bone_count, attach_id)
+special = struct.unpack("<I", arm.uc.mem_read(article + 4, 4))[0]
+x4, x8 = struct.unpack("<ii", arm.uc.mem_read(special + 4, 8))
+xc, x10 = struct.unpack("<ff", arm.uc.mem_read(special + 0x0C, 8))
+assert (x4, x8) == (600, 2400)
+assert abs(xc + 60.0) < 1.0e-5 and abs(x10 - 60.0) < 1.0e-5
+item_jobj = arm.call("HSD_JObjLoadJoint", joint)
+assert item_jobj
+arm.call("HSD_JObjRemoveAll", item_jobj)
+print(
+    f"PASS GrGb stage item: Tingle kind={kind} bones={bone_count} "
+    f"attrs={x4}/{x8}/{xc:g}/{x10:g} joint=0x{joint:08x}",
+    flush=True,
+)
+
 # v3.74 regression: a retail shared-skin may reference a valid Joint whose
 # descriptor has not been loaded into the HSD ID table yet. Force that exact
 # state with a real Great Bay root and require PObj resolution to lazy-load it.

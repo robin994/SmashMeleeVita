@@ -1,5 +1,6 @@
 #include <dolphin/os.h>
 #include <sysdolphin/baselib/debug.h>
+#include <melee/it/forward.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,6 +11,7 @@
 #include "hsd_data.h"
 #include "fighter_command_native.h"
 #include "item_state_native.h"
+#include "stage_item_native.h"
 
 extern void mv_hsd_joint_graph_prepare_raw(void* bytes, size_t size,
                                            uint32_t root_offset,
@@ -1303,6 +1305,158 @@ static float itco_read_be_float(MvDat* dat, uint32_t off, const char* detail)
     float value;
     memcpy(&value, &bits, sizeof(value));
     return value;
+}
+
+/* Retail stage Article data uses the same core Item metadata as ItCo, but the
+ * stage-specific specialAttributes block is item-kind specific. Great Bay and
+ * GrTe both serialize Tingle's block with a relocation-managed helper pointer
+ * at +0 followed by host scalars through +0x50 and two byte fields at +0x54.
+ * Keep the pointer untouched for HSD_ArchiveParse and convert only the scalar
+ * payload consumed by ittincle.c. */
+static void itco_convert_stage_tingle_special(MvDat* dat, uint32_t off)
+{
+    uint32_t helper = 0;
+    if (gp_pointer(dat, off, &helper, "StageItem",
+                   "Tingle special helper") != 1)
+    {
+        gp_fail("StageItem", "Tingle special helper missing", off);
+    }
+    (void) gp_span(dat, off, 0x56, "StageItem", "Tingle specialAttributes");
+
+    const uint32_t int_offsets[] = { 0x04, 0x08, 0x28, 0x2C, 0x30, 0x3C, 0x40 };
+    for (size_t i = 0; i < sizeof(int_offsets) / sizeof(int_offsets[0]); ++i) {
+        int32_t value = (int32_t) mv_be32(
+            gp_span(dat, off + int_offsets[i], 4, "StageItem", "Tingle int"));
+        if (value < -1000000 || value > 1000000) {
+            gp_fail("StageItem", "Tingle integer scalar", off + int_offsets[i]);
+        }
+    }
+    const uint32_t float_offsets[] = {
+        0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24,
+        0x34, 0x38, 0x44, 0x48, 0x4C, 0x50,
+    };
+    for (size_t i = 0; i < sizeof(float_offsets) / sizeof(float_offsets[0]); ++i) {
+        float value = itco_read_be_float(dat, off + float_offsets[i],
+                                         "Tingle float");
+        if (!isfinite(value) || fabsf(value) > 1000000.0f) {
+            gp_fail("StageItem", "Tingle float scalar", off + float_offsets[i]);
+        }
+    }
+
+    for (uint32_t o = 4; o <= 0x50; o += 4) {
+        gp_swap32(dat, off + o, "StageItem", "Tingle special scalar");
+    }
+    /* +0x54/+0x55 are serialized s8 fields and need no endian conversion. */
+}
+
+int mv_stage_itemdata_prepare_raw(void* bytes, size_t size,
+                                  uint32_t itemdata_root,
+                                  const char* filename,
+                                  MvStageItemRawResult* out)
+{
+    MvDat dat;
+    uint32_t seen_articles[128] = { 0 };
+    uint32_t seen_attrs[128] = { 0 };
+    uint32_t seen_hurts[64] = { 0 };
+    uint32_t seen_models[128] = { 0 };
+    uint32_t seen_dynamics[16] = { 0 };
+    uint32_t seen_sources[32] = { 0 };
+    uint32_t seen_special[128] = { 0 };
+    uint32_t state_tables[256] = { 0 };
+    size_t article_count = 0, attr_count = 0, hurt_count = 0;
+    size_t model_count = 0, dynamics_count = 0, source_count = 0;
+    size_t special_count = 0, state_table_count = 0;
+    int terminated = 0;
+
+    if (out == NULL || bytes == NULL || size == 0) {
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    if (mv_dat_open(&dat, bytes, size) != 0) {
+        gp_fail("StageItem", "DAT parse", itemdata_root);
+    }
+
+    for (uint32_t i = 0; i < 64; ++i) {
+        uint32_t entry = 0;
+        int er = gp_pointer(&dat, itemdata_root + i * 4, &entry,
+                            "StageItem", "itemdata entry");
+        if (er == 0) {
+            terminated = 1;
+            break;
+        }
+        if (er != 1) {
+            gp_fail("StageItem", "itemdata entry missing", itemdata_root + i * 4);
+        }
+
+        uint8_t* record = gp_span(&dat, entry, 8, "StageItem", "GroundItemData");
+        uint32_t kind = mv_be32(record);
+        if (kind < It_Kind_Old_Kuri || kind > It_Kind_Kyasarin_Egg) {
+            OSReport("VITA_STAGE_ITEM_RAW_INVALID index=%u entry=%08x kind=%u\n",
+                     i, entry, kind);
+            gp_fail("StageItem", "item kind", entry);
+        }
+        gp_swap32(&dat, entry, "StageItem", "item kind");
+
+        uint32_t article = 0;
+        if (gp_pointer(&dat, entry + 4, &article, "StageItem",
+                       "Article") != 1)
+        {
+            gp_fail("StageItem", "Article missing", entry + 4);
+        }
+        ++out->item_count;
+
+        if (!gp_mark_unique(seen_articles, &article_count, 128, article,
+                            "StageItem", "Article set overflow"))
+        {
+            continue;
+        }
+
+        uint32_t special = 0;
+        int sr = gp_pointer(&dat, article + 4, &special, "StageItem",
+                            "specialAttributes");
+        itco_convert_article(&dat, article, seen_attrs, &attr_count,
+                             seen_hurts, &hurt_count, seen_models, &model_count,
+                             seen_dynamics, &dynamics_count, seen_sources,
+                             &source_count, out->joint_roots, &out->joint_count,
+                             state_tables, &state_table_count);
+
+        if (kind == It_Kind_Tincle && sr == 1 &&
+            gp_mark_unique(seen_special, &special_count, 128, special,
+                           "StageItem", "special set overflow"))
+        {
+            itco_convert_stage_tingle_special(&dat, special);
+        }
+    }
+
+    if (!terminated) {
+        mv_dat_close(&dat);
+        gp_fail("StageItem", "itemdata table unterminated", itemdata_root);
+    }
+
+    out->article_count = (uint32_t) article_count;
+    out->attr_count = (uint32_t) attr_count;
+    out->hurt_count = (uint32_t) hurt_count;
+    out->model_count = (uint32_t) model_count;
+    out->dynamics_count = (uint32_t) dynamics_count;
+    out->special_count = (uint32_t) special_count;
+    mv_dat_close(&dat);
+
+    if (state_table_count != 0) {
+        mv_item_state_tables_prepare_raw(bytes, size, state_tables,
+                                         state_table_count, &out->states,
+                                         filename != NULL ? filename : "StageItem");
+    }
+
+    OSReport("VITA_STAGE_ITEM_RAW_NATIVE_PASS file=%s items=%u articles=%u attrs=%u hurts=%u models=%u joints=%u state_tables=%u state_descs=%u scripts=%u anim=%u matanim=%u shape=%u dynamics=%u specials=%u\n",
+             filename != NULL ? filename : "?", out->item_count,
+             out->article_count, out->attr_count, out->hurt_count,
+             out->model_count, (unsigned) out->joint_count,
+             out->states.table_count, out->states.desc_count,
+             out->states.script_root_count, (unsigned) out->states.anim_count,
+             (unsigned) out->states.matanim_count,
+             (unsigned) out->states.shape_count, out->dynamics_count,
+             out->special_count);
+    return 0;
 }
 
 /* It_Kind_Foods (common-item table index 18) uses a bespoke packed special
